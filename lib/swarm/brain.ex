@@ -93,8 +93,7 @@ defmodule Swarm.Brain do
     {"GuardTower", 1, 11, :front},
     {"TechLab", 1, 13, :base},
     {"Barracks", 2, 15, :base},
-    {"GuardTower", 2, 17, :front},
-    {"ResourceDepot", 2, 19, :ore}
+    {"GuardTower", 2, 17, :front}
   ]
 
   @needs_barracks ["GuardTower", "TechLab"]
@@ -103,6 +102,8 @@ defmodule Swarm.Brain do
   # more workers than `@workers_per_deposit` per nearby deposit. Short for `@short_for_ticks` in a
   # row, a Resource Depot goes by the closest other ore, ahead of the build order.
   @low_home_ore 1500
+  # Where we lost a building, no new depot for this long: it was a contested spot.
+  @avoid_lost_ticks 300
   @workers_per_deposit 3
   @short_for_ticks 30
 
@@ -128,8 +129,20 @@ defmodule Swarm.Brain do
   # `pending` is the building we ordered and are waiting to see: %{type, builder, at, had}.
   # `helpers` is building id => {worker id, tick} for workers sent to finish abandoned sites.
   # `ore_short_since` is the tick home has been short of ore since, or nil.
-  def new_memory,
-    do: %{wave: nil, next_wave: 1, enemies: %{}, pending: nil, helpers: %{}, ore_short_since: nil}
+  # `buildings` is our building id => where it stands; `lost` is spot => tick, for buildings that
+  # went missing (destroyed) in the last `@avoid_lost_ticks`.
+  def new_memory do
+    %{
+      wave: nil,
+      next_wave: 1,
+      enemies: %{},
+      pending: nil,
+      helpers: %{},
+      ore_short_since: nil,
+      buildings: %{},
+      lost: %{}
+    }
+  end
 
   @spec plan(View.t(), map(), [String.t()]) :: {strategy(), [map()], map()}
   def plan(%View{} = v, memory, terrain) do
@@ -138,6 +151,7 @@ defmodule Swarm.Brain do
     memory = %{memory | enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
+    memory = remember_losses(memory, v)
 
     {commands, memory, _ore} =
       {[], memory, v.ore}
@@ -461,7 +475,7 @@ defmodule Swarm.Brain do
 
   defp next_build(%View{} = v, terrain, mem) do
     case expansion(v, terrain, mem) do
-      nil -> from_build_order(v, terrain) || extra(v, terrain)
+      nil -> from_build_order(v, terrain, Map.keys(mem.lost)) || extra(v, terrain)
       site -> {"ResourceDepot", site}
     end
   end
@@ -471,7 +485,20 @@ defmodule Swarm.Brain do
     building_one? = Enum.any?(View.buildings_of(v, "ResourceDepot"), &(not &1["completed"]))
     short_long_enough? = mem.ore_short_since != nil and v.tick - mem.ore_short_since >= @short_for_ticks
 
-    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion)
+    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion, Map.keys(mem.lost))
+  end
+
+  # A building of ours that was there last tick and isn't now was destroyed: remember the spot.
+  defp remember_losses(memory, v) do
+    now = Map.new(v.my_buildings, &{&1["id"], View.pos(&1)})
+    gone = memory.buildings |> Map.drop(Map.keys(now)) |> Map.values()
+
+    lost =
+      memory.lost
+      |> Map.merge(Map.new(gone, &{&1, v.tick}))
+      |> Map.reject(fn {_spot, at} -> v.tick - at > @avoid_lost_ticks end)
+
+    %{memory | buildings: now, lost: lost}
   end
 
   # Since when home has been short of ore (see `@low_home_ore`), or nil if it isn't.
@@ -494,7 +521,7 @@ defmodule Swarm.Brain do
       else: acc
   end
 
-  defp from_build_order(v, terrain) do
+  defp from_build_order(v, terrain, avoid) do
     workers = length(View.units_of(v, "Worker"))
 
     @build_order
@@ -507,7 +534,7 @@ defmodule Swarm.Brain do
         gated? and not rich?(v) -> {:halt, nil}
         # Rich, a depot still waits for its workers; the rest of the order goes on.
         gated? and type == "ResourceDepot" -> {:cont, nil}
-        site = site(terrain, v, where) -> {:halt, {type, site}}
+        site = site(terrain, v, where, avoid) -> {:halt, {type, site}}
         true -> {:cont, nil}
       end
     end)
@@ -627,8 +654,13 @@ defmodule Swarm.Brain do
     so its miners walk less. Nil if every deposit already has a drop-off close by.
   - `:expansion`: next to the closest ore that is too far from every drop-off to mine. Nil if
     there is none in sight.
+
+  Depots (`:ore`, `:expansion`) only go by ore on our side, closer to our Command Center than to
+  any enemy's start, and not within 4 tiles of a spot in `avoid` (where we lost a building).
   """
-  def site(terrain, %View{cc: cc} = v, :base) do
+  def site(terrain, view, where, avoid \\ [])
+
+  def site(terrain, %View{cc: cc} = v, :base, _avoid) do
     {mx, my} = center(v)
 
     best_site(terrain, v, View.pos(cc), 3..6, fn {x, y} = tile, d ->
@@ -638,7 +670,7 @@ defmodule Swarm.Brain do
     end)
   end
 
-  def site(terrain, %View{cc: cc} = v, :front) do
+  def site(terrain, %View{cc: cc} = v, :front, _avoid) do
     {mx, my} = center(v)
 
     # Straight-line distance: with the game's distance, a whole row of tiles is equally far from
@@ -646,27 +678,39 @@ defmodule Swarm.Brain do
     best_site(terrain, v, View.pos(cc), 4..8, fn {x, y}, _d -> (x - mx) ** 2 + (y - my) ** 2 end)
   end
 
-  def site(terrain, %View{cc: cc} = v, :ore) do
+  def site(terrain, %View{cc: cc} = v, :ore, avoid) do
     drop_offs = Enum.map([cc | View.buildings_of(v, "ResourceDepot")], &View.pos/1)
     from_drop_off = fn d -> drop_offs |> Enum.map(&View.dist(&1, View.pos(d))) |> Enum.min() end
 
     target =
       v.deposits
       |> Enum.filter(&(View.dist(View.pos(&1), View.pos(cc)) <= 15 and from_drop_off.(&1) >= 4))
+      |> Enum.filter(&safe_ore?(v, &1, avoid))
       |> Enum.max_by(from_drop_off, fn -> nil end)
 
     if target, do: by_field(terrain, v, target)
   end
 
-  def site(terrain, %View{cc: cc} = v, :expansion) do
+  def site(terrain, %View{cc: cc} = v, :expansion, avoid) do
     near = View.near_deposits(v)
 
     target =
       v.deposits
       |> Enum.reject(&(&1 in near))
+      |> Enum.filter(&safe_ore?(v, &1, avoid))
       |> Enum.min_by(&{View.dist(View.pos(&1), View.pos(cc)), &1["id"]}, fn -> nil end)
 
     if target, do: by_field(terrain, v, target)
+  end
+
+  # Ore worth a depot: on our side (closer to our Command Center than to any enemy's start, so
+  # never a contested deposit between two players), and not where we just lost a building.
+  defp safe_ore?(%View{cc: cc} = v, deposit, avoid) do
+    pos = View.pos(deposit)
+    ours = View.dist(pos, View.pos(cc))
+
+    Enum.all?(v.enemy_starts, &(ours < View.dist(pos, &1))) and
+      not Enum.any?(avoid, &(View.dist(&1, pos) <= 4))
   end
 
   # Close to the whole field around `target`; on our side of it when that's a tie.

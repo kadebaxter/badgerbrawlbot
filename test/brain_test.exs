@@ -96,6 +96,57 @@ defmodule Swarm.BrainTest do
     assert memory.ore_short_since == nil
   end
 
+  test "the build order has one Resource Depot; more only when home runs short" do
+    buildings = [
+      building(2, "Barracks", 11, 7),
+      building(3, "ResourceDepot", 4, 11),
+      building(5, "GuardTower", 12, 12),
+      building(6, "TechLab", 7, 12),
+      building(7, "Barracks", 12, 3),
+      building(8, "GuardTower", 14, 9)
+    ]
+
+    home = for {id, x, y} <- [{4, 2, 7}, {40, 2, 9}, {41, 3, 5}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 900}
+    {_, commands, _} = plan(units: workers(9) ++ soldiers(7), buildings: buildings, deposits: home, ore: 400)
+    refute Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
+  end
+
+  describe "where a new depot goes" do
+    # Us at (7, 7); enemies at (7, 50) and (56, 56).
+    defp two_enemies(state) do
+      Map.update!(state, "players", fn [me, them] ->
+        [me, them, %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 50}}]
+      end)
+    end
+
+    defp ore(id, x, y), do: %{"id" => id, "x" => x, "y" => y, "remaining" => 900}
+
+    test "never ore closer to an enemy than to us, even if it's the closest" do
+      # (7, 29) is 22 from us but 21 from the enemy at (7, 50): contested. (30, 8) is ours.
+      v = View.new(two_enemies(state(deposits: [ore(30, 7, 29), ore(31, 30, 8)])))
+      {x, y} = Brain.site(terrain(), v, :expansion)
+      assert View.dist({x, y}, {30, 8}) in 2..3
+    end
+
+    test "not where we just lost a building" do
+      v = View.new(two_enemies(state(deposits: [ore(31, 30, 8), ore(32, 20, 20)])))
+      {x, y} = Brain.site(terrain(), v, :expansion, [{20, 21}])
+      assert View.dist({x, y}, {30, 8}) in 2..3
+    end
+
+    test "a building of ours that disappears is remembered as lost, for a while" do
+      depot = building(50, "ResourceDepot", 29, 24)
+      {_, _, memory} = plan(buildings: [depot], tick: 500)
+      assert memory.buildings[50] == {29, 24}
+
+      {_, _, memory} = plan([tick: 501], memory)
+      assert memory.lost == %{{29, 24} => 501}
+
+      assert {_, _, %{lost: lost}} = plan([tick: 900], memory)
+      assert lost == %{}
+    end
+  end
+
   test "the 500 ore we start with isn't rich" do
     {_, commands, _} = plan(units: workers(5), ore: 500)
     refute Enum.any?(commands, &(&1["type"] == "Build"))

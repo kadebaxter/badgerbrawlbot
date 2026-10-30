@@ -227,14 +227,16 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower toward the enemy (11) → TechLab (13)
-   → 2nd Barracks (15) → 2nd Guard Tower (17) → 2nd Depot (19). The ore for the next building is
+   → 2nd Barracks (15) → 2nd Guard Tower (17). The ore for the next building is
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
    Harvesting1, Weapons1, Armor1, then tier 2. Barracks train Soldiers and Archers with the rest.
    Miners about to be hit run to the rally point. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
    workers on it, else the shortest. When home has been short of ore for 30 ticks in a row (under
    1,500 left within reach of a drop-off, or more than 3 workers per nearby deposit), a Resource
-   Depot goes by the closest other ore, ahead of the build order. Below an army floor (6 fighters,
+   Depot goes by the closest other ore, ahead of the build order. Depots only go by ore on our
+   side (closer to our Command Center than to any enemy start, so never a contested deposit
+   between players) and not within 4 tiles of where we lost a building in the last 300 ticks. Below an army floor (6 fighters,
    plus 1 per 100 ticks) the Barracks train before anything is built or researched.
    With 500+ ore on hand once the first Barracks is up ("rich"): the build order stops waiting
    for workers, except for depots; once it is done,
