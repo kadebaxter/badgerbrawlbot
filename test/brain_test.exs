@@ -53,7 +53,7 @@ defmodule Swarm.BrainTest do
   end
 
   test "puts the Resource Depot by the ore, on our side of it" do
-    {_, [cmd | _], _} = plan(units: workers(9), buildings: [building(2, "Barracks", 11, 7)], ore: 100)
+    {_, [cmd | _], _} = plan(units: workers(9) ++ soldiers(7), buildings: [building(2, "Barracks", 11, 7)], ore: 100)
     assert %{"type" => "Build", "buildingType" => "ResourceDepot", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {2, 7}) in 2..3
     assert View.dist({x, y}, {7, 7}) < View.dist({x, y}, {0, 7})
@@ -61,7 +61,7 @@ defmodule Swarm.BrainTest do
 
   test "puts the Guard Tower between our base and the enemy" do
     buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
-    {_, [cmd | _], _} = plan(units: workers(11), buildings: buildings, ore: 125)
+    {_, [cmd | _], _} = plan(units: workers(11) ++ soldiers(7), buildings: buildings, ore: 125)
     assert %{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {56, 56}) < View.dist({7, 7}, {56, 56})
   end
@@ -70,9 +70,43 @@ defmodule Swarm.BrainTest do
     far = for {id, x, y} <- [{30, 30, 30}, {31, 31, 30}, {32, 30, 31}, {33, 50, 50}],
               do: %{"id" => id, "x" => x, "y" => y, "remaining" => 900}
 
-    {_, [cmd | _], _} = plan(units: workers(5), deposits: far, ore: 100)
-    assert %{"type" => "Build", "buildingType" => "ResourceDepot", "x" => x, "y" => y} = cmd
+    # Short of ore from tick 100, but not for long enough yet.
+    {_, commands, memory} = plan(units: workers(5), deposits: far, ore: 100, tick: 100)
+    assert memory.ore_short_since == 100
+    refute Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
+
+    {_, commands, _} = plan([units: workers(5), deposits: far, ore: 100, tick: 130], memory)
+    assert %{"x" => x, "y" => y} = Enum.find(commands, &(&1["buildingType"] == "ResourceDepot"))
     assert View.dist({x, y}, {30, 30}) in 2..3
+  end
+
+  test "a new Resource Depot once home is crowded, even with ore left" do
+    home = for {id, x, y} <- [{4, 2, 7}, {5, 2, 9}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 5000}
+    far = [%{"id" => 30, "x" => 30, "y" => 30, "remaining" => 900}]
+
+    # Ten workers on two deposits: more than three each. (That first tick also orders the
+    # Barracks; forget it, so this is only about the depot.)
+    {_, _, memory} = plan(units: workers(10), deposits: home ++ far, ore: 200, tick: 100)
+    assert memory.ore_short_since == 100
+    {_, commands, _} = plan([units: workers(10), deposits: home ++ far, ore: 200, tick: 130], %{memory | pending: nil})
+    assert Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
+
+    # Six on two is fine.
+    {_, _, memory} = plan(units: workers(6), deposits: home ++ far, ore: 200, tick: 100)
+    assert memory.ore_short_since == nil
+  end
+
+  test "the 500 ore we start with isn't rich" do
+    {_, commands, _} = plan(units: workers(5), ore: 500)
+    refute Enum.any?(commands, &(&1["type"] == "Build"))
+  end
+
+  test "below the army floor, the Barracks train before anything is built" do
+    {_, [first | _] = commands, _} =
+      plan(units: workers(10), buildings: [building(2, "Barracks", 11, 7)], ore: 250, tick: 300)
+
+    assert %{"type" => "Produce", "unitType" => "Soldier"} = first
+    assert Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
   end
 
   test "no new Resource Depot while there is enough ore close by" do
@@ -120,7 +154,7 @@ defmodule Swarm.BrainTest do
     miner = unit(50, "Worker", 30, 30, activity: "Gathering", target_id: 6)
     buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), tower]
 
-    {_, commands, _} = plan(units: [miner | builders], buildings: buildings, ore: 150)
+    {_, commands, _} = plan(units: [miner | builders] ++ soldiers(7), buildings: buildings, ore: 150)
     assert [%{"type" => "Build", "buildingType" => "TechLab", "unitIds" => [50]}] =
              Enum.filter(commands, &(&1["type"] == "Build"))
   end
@@ -342,9 +376,9 @@ defmodule Swarm.BrainTest do
       assert builds(commands) == []
     end
 
-    test "doesn't wait for workers in the build order" do
+    test "doesn't wait for workers in the build order, except for depots" do
       {_, commands, _} = plan(units: workers(8), buildings: [building(2, "Barracks", 11, 7)], ore: 1000)
-      assert [%{"buildingType" => "ResourceDepot"}] = builds(commands)
+      assert [%{"buildingType" => "GuardTower"}] = builds(commands)
     end
 
     test "the SiegeWorkshop comes once SiegeEngineering is researched" do

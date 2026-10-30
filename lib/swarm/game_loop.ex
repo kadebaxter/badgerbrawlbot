@@ -29,7 +29,19 @@ defmodule Swarm.GameLoop do
   def init(nil) do
     send(self(), :start)
     {:ok,
-     %{client: nil, match_id: nil, terrain: nil, state: nil, memory: nil, recent: %{}, idle: false, waiting: false, mode: nil}}
+     %{
+       client: nil,
+       match_id: nil,
+       terrain: nil,
+       state: nil,
+       memory: nil,
+       recent: %{},
+       idle: false,
+       waiting: false,
+       mode: nil,
+       # Logged as a decision once our first tick commits: only then do we really lead.
+       announce: nil
+     }}
   end
 
   @impl true
@@ -191,10 +203,17 @@ defmodule Swarm.GameLoop do
     send(self(), :tick)
 
     how = if memory, do: "took over match #{match_id} at tick #{state["tick"]}", else: "started match #{match_id}"
-    Decisions.log(:leader, state["tick"], "#{node()} #{how}")
 
     {:noreply,
-     %{st | match_id: match_id, terrain: terrain, state: state, memory: memory || Brain.new_memory(), idle: false}}
+     %{
+       st
+       | match_id: match_id,
+         terrain: terrain,
+         state: state,
+         memory: memory || Brain.new_memory(),
+         idle: false,
+         announce: "#{node()} #{how}"
+     }}
   end
 
   defp tick(view, st) do
@@ -231,6 +250,8 @@ defmodule Swarm.GameLoop do
         Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands)
         send(self(), :poll)
 
+        if st.announce, do: Decisions.log(:leader, view.tick, st.announce)
+
         for {kind, text} <- Decisions.from_tick(view, strategy, commands, st.mode),
             do: Decisions.log(kind, view.tick, text)
 
@@ -243,7 +264,7 @@ defmodule Swarm.GameLoop do
           seconds: (System.monotonic_time(:millisecond) - started) / 1000
         })
 
-        {:noreply, %{st | memory: memory, recent: recent, mode: strategy.mode}}
+        {:noreply, %{st | memory: memory, recent: recent, mode: strategy.mode, announce: nil}}
 
       other ->
         Logger.warning("Lost leadership before tick #{view.tick} (#{inspect(other)}); not sending orders")

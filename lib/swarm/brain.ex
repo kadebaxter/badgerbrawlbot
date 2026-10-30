@@ -63,9 +63,15 @@ defmodule Swarm.Brain do
     "Trebuchet" => 350
   }
 
-  # Ore on hand that counts as rich: then the build order stops waiting for workers, more gets
-  # built (`@extras`), each building gets two builders, and Barracks queue up to five.
+  # Ore on hand that counts as rich, once the first Barracks is up (the 500 we start with doesn't
+  # count): then the build order stops waiting for workers (except for depots), more gets built
+  # (`@extras`), each building gets two builders, and Barracks queue up to five.
   @rich 500
+
+  # The fewest fighters to have before ore goes to anything else: this many, plus one per
+  # `@army_floor_ticks` ticks. Below it, the Barracks train first.
+  @army_floor 6
+  @army_floor_ticks 100
 
   # Built once the build order is done and only while rich, one at a time, in this order.
   @extras [
@@ -93,9 +99,12 @@ defmodule Swarm.Brain do
 
   @needs_barracks ["GuardTower", "TechLab"]
 
-  # Fewer deposits than this near our drop-offs: put a Resource Depot by the closest other ore,
-  # ahead of the build order.
-  @min_near_deposits 3
+  # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore`, or there are
+  # more workers than `@workers_per_deposit` per nearby deposit. Short for `@short_for_ticks` in a
+  # row, a Resource Depot goes by the closest other ore, ahead of the build order.
+  @low_home_ore 1500
+  @workers_per_deposit 3
+  @short_for_ticks 30
 
   # Each tier 2 comes after its tier 1, and a TechLab researches one at a time.
   @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2"]
@@ -118,7 +127,9 @@ defmodule Swarm.Brain do
   # `enemies` is enemy fighter id => how it looked when last seen (with "seen", the tick).
   # `pending` is the building we ordered and are waiting to see: %{type, builder, at, had}.
   # `helpers` is building id => {worker id, tick} for workers sent to finish abandoned sites.
-  def new_memory, do: %{wave: nil, next_wave: 1, enemies: %{}, pending: nil, helpers: %{}}
+  # `ore_short_since` is the tick home has been short of ore since, or nil.
+  def new_memory,
+    do: %{wave: nil, next_wave: 1, enemies: %{}, pending: nil, helpers: %{}, ore_short_since: nil}
 
   @spec plan(View.t(), map(), [String.t()]) :: {strategy(), [map()], map()}
   def plan(%View{} = v, memory, terrain) do
@@ -126,11 +137,12 @@ defmodule Swarm.Brain do
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
     memory = %{memory | enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
-    memory = %{memory | pending: still_pending(memory.pending, v)}
+    memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
 
     {commands, memory, _ore} =
       {[], memory, v.ore}
       |> finish_sites(v)
+      |> army_floor(v)
       |> build(v, terrain)
       |> train_workers(v)
       |> research(v)
@@ -402,7 +414,7 @@ defmodule Swarm.Brain do
     do: {cmds, mem, ore - @costs[type]}
 
   defp build({cmds, mem, ore} = acc, v, terrain) do
-    case next_build(v, terrain) do
+    case next_build(v, terrain, mem) do
       nil -> acc
       {type, site} -> if ore >= @costs[type], do: order(acc, v, type, site), else: {cmds, mem, ore - @costs[type]}
     end
@@ -423,7 +435,7 @@ defmodule Swarm.Brain do
     end
   end
 
-  defp rich?(v), do: v.ore >= @rich
+  defp rich?(v), do: v.ore >= @rich and Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"])
 
   # Workers we can pull off mining: not building, not on their way to a site, and not already
   # sent somewhere by us. Taking a builder would leave its building unfinished.
@@ -445,20 +457,41 @@ defmodule Swarm.Brain do
   # A new drop-off if our ore is running out, else the first building we are short of, once we
   # have the workers and prerequisites for it. One we can't find room for is skipped so it
   # doesn't hold up the rest.
-  defp next_build(%View{cc: nil}, _terrain), do: nil
+  defp next_build(%View{cc: nil}, _terrain, _mem), do: nil
 
-  defp next_build(%View{} = v, terrain) do
-    case expansion(v, terrain) do
+  defp next_build(%View{} = v, terrain, mem) do
+    case expansion(v, terrain, mem) do
       nil -> from_build_order(v, terrain) || extra(v, terrain)
       site -> {"ResourceDepot", site}
     end
   end
 
-  defp expansion(v, terrain) do
+  # Home has been short of ore for a while: a depot by the closest other ore.
+  defp expansion(v, terrain, mem) do
     building_one? = Enum.any?(View.buildings_of(v, "ResourceDepot"), &(not &1["completed"]))
+    short_long_enough? = mem.ore_short_since != nil and v.tick - mem.ore_short_since >= @short_for_ticks
 
-    if length(View.near_deposits(v)) < @min_near_deposits and not building_one?,
-      do: site(terrain, v, :expansion)
+    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion)
+  end
+
+  # Since when home has been short of ore (see `@low_home_ore`), or nil if it isn't.
+  defp short_since(_memory, %View{cc: nil}), do: nil
+
+  defp short_since(memory, v) do
+    near = View.near_deposits(v)
+    ore_left = Enum.sum_by(near, &(&1["remaining"] || 0))
+    workers = length(View.units_of(v, "Worker"))
+
+    if ore_left < @low_home_ore or workers > @workers_per_deposit * length(near),
+      do: memory.ore_short_since || v.tick,
+      else: nil
+  end
+
+  # Below the floor, the Barracks train before anything is built or researched.
+  defp army_floor(acc, v) do
+    if length(Roles.fighters(v)) < @army_floor + div(v.tick, @army_floor_ticks),
+      do: train_army(acc, v),
+      else: acc
   end
 
   defp from_build_order(v, terrain) do
@@ -467,8 +500,13 @@ defmodule Swarm.Brain do
     @build_order
     |> Enum.filter(fn {type, wanted, _, _} -> count(v, type) < wanted end)
     |> Enum.reduce_while(nil, fn {type, _wanted, min_workers, where}, nil ->
+      gated? = workers < min_workers
+
       cond do
-        (workers < min_workers and not rich?(v)) or not prerequisites?(v, type) -> {:halt, nil}
+        not prerequisites?(v, type) -> {:halt, nil}
+        gated? and not rich?(v) -> {:halt, nil}
+        # Rich, a depot still waits for its workers; the rest of the order goes on.
+        gated? and type == "ResourceDepot" -> {:cont, nil}
         site = site(terrain, v, where) -> {:halt, {type, site}}
         true -> {:cont, nil}
       end
