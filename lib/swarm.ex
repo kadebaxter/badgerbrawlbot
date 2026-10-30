@@ -74,7 +74,9 @@ defmodule Swarm do
   bots in `bots:`, and other people's bots, which join by its id or by `name:` (3–32 letters,
   digits, `-` or `_`). The leader logs the id and how to join. Refused while we play something.
   """
-  def host(seats, opts \\ []) when seats in 2..16 do
+  def host(seats, opts \\ [])
+
+  def host(seats, opts) when seats in 2..16 do
     bots = Keyword.get(opts, :bots, [])
     name = Keyword.get(opts, :name)
 
