@@ -13,9 +13,7 @@ kubectl -n netrts create secret generic swarm \
   --from-literal=api-key="$NETRTS_API_KEY" \
   --from-literal=cookie="$(openssl rand -hex 32)"
 
-# Lets the cluster pull the private image: a GitHub token with read:packages.
-kubectl -n netrts create secret docker-registry ghcr \
-  --docker-server=ghcr.io --docker-username=<github user> --docker-password=<token>
+# The image on GHCR is public, so pulling it needs no secret.
 
 kubectl apply -f k8s/service.yaml -f k8s/statefulset.yaml
 ```

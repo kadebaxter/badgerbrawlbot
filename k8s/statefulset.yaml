@@ -26,8 +26,6 @@ spec:
                 matchLabels:
                   app: swarm
               topologyKey: kubernetes.io/hostname
-      imagePullSecrets:
-        - name: ghcr
       terminationGracePeriodSeconds: 10
       containers:
         - name: swarm
