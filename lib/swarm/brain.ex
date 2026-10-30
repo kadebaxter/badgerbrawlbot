@@ -88,6 +88,13 @@ defmodule Swarm.Brain do
   # this many fighters (and the build order to be done).
   @trebuchets 2
   @siege_after_fighters 15
+  # With that army, this many in all: 2 stay home, the rest go out with waves.
+  @trebuchets_with_army 4
+  # Trebuchets needed at the rally point to go out with a wave.
+  @siege_group 2
+  # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
+  @staging_distance 9
+  @siege_wait 60
 
   # {building, how many we want, workers we need first, where it goes}, built one at a time.
   @build_order [
@@ -185,7 +192,7 @@ defmodule Swarm.Brain do
     attacked? = threat != nil or Roles.help_wanted(v) != []
     owner = opponent(v, memory)
     target = target_of(v, owner)
-    {wave, next_wave, why} = wave(v, memory, rally, attacked?, owner)
+    {wave, next_wave, why} = wave(v, memory, rally, attacked?, owner, target)
 
     mode =
       cond do
@@ -222,11 +229,11 @@ defmodule Swarm.Brain do
     |> Map.reject(fn {_id, e} -> v.tick - e["seen"] > @forget_after end)
   end
 
-  defp wave(v, memory, rally, attacked?, owner) do
+  defp wave(v, memory, rally, attacked?, owner, target) do
     cond do
       all_in?(v) -> all_in(v, memory, owner)
       memory.wave -> keep_wave(v, memory)
-      true -> launch(v, memory, rally, attacked?, owner)
+      true -> launch(v, memory, rally, attacked?, owner, target)
     end
   end
 
@@ -264,9 +271,25 @@ defmodule Swarm.Brain do
         {nil, memory.next_wave, [{:wave_recalled, why}]}
 
       true ->
-        {%{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave, []}
+        release(v, %{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave)
     end
   end
+
+  # A wave holding at its staging point goes in once its Trebuchets are there (or gone), or after
+  # `@siege_wait` ticks in case they are stuck.
+  defp release(v, %{released: false} = wave, next_wave) do
+    siege = Enum.filter(v.my_units, &(&1["type"] == "Trebuchet" and &1["id"] in wave.members))
+    there? = Enum.all?(siege, &(View.dist(View.pos(&1), wave.staging) <= @staged_radius))
+
+    if there? or v.tick - wave.at >= @siege_wait do
+      why = "wave #{wave.id}: #{length(siege)} trebuchet(s) in place, going in"
+      {%{wave | released: true}, next_wave, [{:wave_released, why}]}
+    else
+      {wave, next_wave, []}
+    end
+  end
+
+  defp release(_v, wave, next_wave), do: {wave, next_wave, []}
 
   # The strength of what the wave is facing if it is more than the wave's own, else nil.
   defp outmatched(v, alive) do
@@ -283,7 +306,7 @@ defmodule Swarm.Brain do
 
   # With no base under attack, send the attackers waiting at the rally point once they are
   # strong enough. Knowing nothing about the enemy yet, wait for `@first_wave` of them.
-  defp launch(v, memory, rally, attacked?, owner) do
+  defp launch(v, memory, rally, attacked?, owner, target) do
     roles = Roles.home_roles(v, nil)
 
     staged =
@@ -292,9 +315,20 @@ defmodule Swarm.Brain do
           View.dist(View.pos(u), rally) <= @staged_radius,
           do: u
 
+    # Trebuchets waiting at the rally point go too, if there are enough of them.
+    home_siege = Roles.home_siege(v)
+
+    siege =
+      for u <- View.units_of(v, "Trebuchet"),
+          u["id"] not in home_siege,
+          View.dist(View.pos(u), rally) <= @staged_radius,
+          do: u
+
+    siege = if length(siege) >= @siege_group, do: siege, else: []
+
     scouted? = memory.enemies != %{} or v.enemy_buildings != [] or v.remembered != []
 
-    ours = Roles.strength(staged)
+    ours = Roles.strength(staged ++ siege)
     theirs = enemy_strength(v, memory, owner)
 
     ready? =
@@ -303,12 +337,25 @@ defmodule Swarm.Brain do
         else: length(staged) >= @first_wave
 
     if not attacked? and ready? do
+      with_siege = if siege == [], do: "", else: " and #{length(siege)} trebuchets"
+
       why =
         if scouted?,
-          do: "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers, strength #{round(ours)} vs #{round(theirs)} known",
-          else: "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers, nothing scouted yet"
+          do:
+            "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, " <>
+              "strength #{round(ours)} vs #{round(theirs)} known",
+          else: "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, nothing scouted yet"
 
-      wave = %{id: memory.next_wave, members: staged |> Enum.map(& &1["id"]) |> Enum.sort(), owner: owner}
+      wave = %{
+        id: memory.next_wave,
+        members: (staged ++ siege) |> Enum.map(& &1["id"]) |> Enum.sort(),
+        owner: owner,
+        # With siege, everyone holds short of the target until it arrives.
+        staging: if(siege != [], do: staging(v, target, rally)),
+        released: siege == [],
+        at: v.tick
+      }
+
       {wave, memory.next_wave + 1, [{:wave_launched, why}]}
     else
       {nil, memory.next_wave, []}
@@ -363,6 +410,13 @@ defmodule Swarm.Brain do
       _ -> theirs |> Enum.map(&View.pos/1) |> Enum.min_by(&View.dist(&1, from))
     end
   end
+
+  # `@staging_distance` short of the target, on our side of it, kept on the map.
+  defp staging(v, {tx, ty}, {rx, ry}) do
+    {clamp(tx + @staging_distance * sign(rx - tx), v.map_width), clamp(ty + @staging_distance * sign(ry - ty), v.map_height)}
+  end
+
+  defp clamp(n, size), do: n |> max(0) |> min(size - 1)
 
   # Where guards stand: behind the Guard Tower closest to the enemy, else the rally point.
   defp post(v, rally, enemy) do
@@ -668,9 +722,10 @@ defmodule Swarm.Brain do
     queued = for w <- workshops, p <- w["production"], p["unitType"] == "Trebuchet", do: p
     free = Enum.find(workshops, &(length(&1["production"]) < 2))
     cost = @costs["Trebuchet"]
+    wanted = if siege_time?(v), do: @trebuchets_with_army, else: @trebuchets
 
     cond do
-      free == nil or length(View.units_of(v, "Trebuchet")) + length(queued) >= @trebuchets ->
+      free == nil or length(View.units_of(v, "Trebuchet")) + length(queued) >= wanted ->
         acc
 
       ore >= cost ->

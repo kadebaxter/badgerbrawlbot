@@ -408,6 +408,34 @@ defmodule Swarm.BrainTest do
       assert {%{target: {30, 30}}, _, _} = plan(units: soldiers(6), buildings: buildings)
     end
 
+    test "two Trebuchets at the rally point go with the wave; it holds short of the target for them" do
+      # 301 and 302 are the oldest: they stay home. 303 and 304 go.
+      trebs = for i <- 1..4, do: unit(300 + i, "Trebuchet", 10, 10)
+      {s, _, memory} = plan(units: trebs ++ soldiers(20))
+      assert %{wave: %{staging: {47, 47}, released: false, members: members}} = s
+      assert 303 in members and 304 in members
+      refute 301 in members or 302 in members
+      assert [{:wave_launched, "wave 1 at player 1: 15 attackers and 2 trebuchets, nothing scouted yet"}] = s.why
+
+      # Not there yet: still holding.
+      assert {%{wave: %{released: false}}, _, _} = plan([units: trebs ++ soldiers(20), tick: 110], memory)
+
+      # There: the wave goes in.
+      arrived = Enum.map(trebs, fn t -> if t["id"] in [303, 304], do: %{t | "x" => 47, "y" => 47}, else: t end)
+      assert {%{wave: %{released: true}, why: [{:wave_released, _}]}, _, _} =
+               plan([units: arrived ++ soldiers(20), tick: 120], memory)
+
+      # Or stuck: it goes in after 60 ticks anyway.
+      assert {%{wave: %{released: true}}, _, _} = plan([units: trebs ++ soldiers(20), tick: 160], memory)
+    end
+
+    test "one Trebuchet at the rally point isn't enough: the wave goes without it" do
+      trebs = for i <- 1..3, do: unit(300 + i, "Trebuchet", 10, 10)
+      {s, _, _} = plan(units: trebs ++ soldiers(20))
+      assert %{wave: %{released: true, members: members}} = s
+      refute 303 in members
+    end
+
     test "never fewer than eight in a wave" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(1)}
       assert {%{wave: nil}, _, _} = plan([units: soldiers(10)], weak)
@@ -539,6 +567,21 @@ defmodule Swarm.BrainTest do
       shop = building(10, "SiegeWorkshop", 3, 10)
       {_, commands, _} = plan(units: workers(20), buildings: [shop | built()], ore: 300)
       assert Enum.any?(commands, &(&1["unitType"] == "Soldier"))
+    end
+
+    test "with an army of fifteen, four Trebuchets: two to keep home, two to send" do
+      shop = building(10, "SiegeWorkshop", 3, 10)
+      trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 9, 9)
+      scouts = [unit(310, "Scout", 40, 40), unit(311, "Scout", 20, 40)]
+      lab = Map.put(building(6, "TechLab", 7, 12), "research", %{"upgrade" => "Harvesting2"})
+      buildings = [shop, lab | Enum.reject(built(), &(&1["id"] == 6))]
+
+      {_, commands, _} = plan(units: trebs ++ scouts ++ workers(20) ++ soldiers(15), buildings: buildings, ore: 400)
+      assert Enum.any?(commands, &(&1["unitType"] == "Trebuchet"))
+
+      four = for i <- 1..4, do: unit(300 + i, "Trebuchet", 9, 9)
+      {_, commands, _} = plan(units: four ++ scouts ++ workers(20) ++ soldiers(15), buildings: buildings, ore: 400)
+      refute Enum.any?(commands, &(&1["unitType"] == "Trebuchet"))
     end
 
     test "Barracks queue up to five" do

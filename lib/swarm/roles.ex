@@ -15,8 +15,9 @@ defmodule Swarm.Roles do
   - `:attacker`: everyone else at home; waits at the rally point for the next wave, and goes to
     help wherever a base or our workers are attacked
 
-  Scouts are none of these (`:scout`): they explore and never fight on purpose. Nor are our
-  Trebuchets (`:siege`): they hold the base from the guard post.
+  Scouts are none of these (`:scout`): they explore and never fight on purpose. Our Trebuchets
+  are their own: the `@home_siege` oldest hold the base from the guard post (`:siege`); the rest
+  (`:siege_out`) wait at the rally point and go out with a wave (`:wave`).
 
   It also decides who fights whom (`target/3`), the same way on every node.
   """
@@ -24,6 +25,8 @@ defmodule Swarm.Roles do
   alias Swarm.View
 
   @min_guards 3
+  # Trebuchets that always stay home.
+  @home_siege 2
   # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
   @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
@@ -58,24 +61,28 @@ defmodule Swarm.Roles do
   }
 
   # `all_in` is set on the end-of-match push that takes every fighter.
-  # `owner` is the opponent (player slot) it is after.
+  # `owner` is the opponent (player slot) it is after. A wave with Trebuchets holds at `staging`
+  # until `released` (set when they arrive); `at` is the tick it launched.
   @type wave ::
           %{
             required(:id) => pos_integer(),
             required(:members) => [integer()],
             optional(:owner) => non_neg_integer() | nil,
-            optional(:all_in) => true
+            optional(:all_in) => true,
+            optional(:staging) => View.pos() | nil,
+            optional(:released) => boolean(),
+            optional(:at) => non_neg_integer()
           }
           | nil
   @type threat :: %{pos: {integer, integer}, size: non_neg_integer()} | nil
 
-  @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege
+  @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege | :siege_out
 
   @spec role(View.t(), wave(), integer()) :: role()
   def role(%View{} = v, wave, id) do
     cond do
       match?(%{"type" => "Scout"}, View.my_unit(v, id)) -> :scout
-      match?(%{"type" => "Trebuchet"}, View.my_unit(v, id)) -> :siege
+      match?(%{"type" => "Trebuchet"}, View.my_unit(v, id)) -> siege_role(v, wave, id)
       id in members(wave) -> :wave
       true -> Map.get(home_roles(v, wave), id, :attacker)
     end
@@ -120,6 +127,19 @@ defmodule Swarm.Roles do
 
     escorts = for {o, group} <- groups, u <- group, do: {u["id"], {:escort, o}}
     Map.new(Enum.map(guards, &{&1["id"], :guard}) ++ escorts ++ Enum.map(attackers, &{&1["id"], :attacker}))
+  end
+
+  defp siege_role(v, wave, id) do
+    cond do
+      id in members(wave) -> :wave
+      id in home_siege(v) -> :siege
+      true -> :siege_out
+    end
+  end
+
+  @doc "The Trebuchets that stay home: the `@home_siege` oldest (they were there first)."
+  def home_siege(%View{} = v) do
+    v |> View.units_of("Trebuchet") |> Enum.map(& &1["id"]) |> Enum.sort() |> Enum.take(@home_siege)
   end
 
   @doc "Ids of the guards."
@@ -272,8 +292,9 @@ defmodule Swarm.Roles do
   and at most `@melee_slots` melee ones. A fighter left without one hits towers, then workers,
   then other buildings.
 
-  Fighters at home only go after enemies inside one of our bases (or already within their own
-  range), so they can't be lured away. Wave members fight anything.
+  Fighters at home only go after enemies inside one of our bases or by our workers, so they
+  can't be lured away, and fight back against any enemy fighter that can hit them. They never
+  stay to hit a building outside: a recalled wave walks home. Wave members fight anything.
   """
   def target(%View{} = v, wave, unit) do
     case Map.get(assignments(v, wave), unit["id"]) do
@@ -293,7 +314,7 @@ defmodule Swarm.Roles do
           e <- enemies,
           d = View.dist(View.pos(o), View.pos(e)),
           d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius),
-          may_chase?(v, wave, o, e) do
+          may_chase?(v, wave, o, e) or fight_back?(e, o) do
         can_hit_us = if d in Map.get(stats(e), :min_range, 0)..stats(e).range//1, do: 0, else: 1
         siege = if e["type"] == "Trebuchet", do: 0, else: 1
         already_on_it = if o["targetId"] == e["id"], do: 0, else: 1
@@ -342,15 +363,22 @@ defmodule Swarm.Roles do
   end
 
   # The leash: away from our bases and our workers only the wave chases, except after a
-  # Trebuchet shelling our buildings.
+  # Trebuchet shelling our buildings. (Fighting back is separate: see `fight_back?/2`.)
   defp may_chase?(%View{cc: nil}, _wave, _ours, _enemy), do: true
 
   defp may_chase?(%View{} = v, wave, ours, enemy) do
     ours["id"] in members(wave) or
       Enum.any?(bases(v), &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
       Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(enemy)) <= @worker_cover)) or
-      siege_on_us?(v, enemy) or
-      View.dist(View.pos(enemy), View.pos(ours)) <= stats(ours).range
+      siege_on_us?(v, enemy)
+  end
+
+  # An enemy fighter in range either way (it can hit us, or we can hit it where we stand): anyone
+  # may fight it, leash or not. Only fighters: a building next to a unit walking home is no
+  # reason to stay.
+  defp fight_back?(enemy, ours) do
+    d = View.dist(View.pos(enemy), View.pos(ours))
+    d in Map.get(stats(enemy), :min_range, 0)..stats(enemy).range//1 or d <= stats(ours).range
   end
 
   # The enemy's research is hidden, but without a TechLab they can't have Armor upgrades.

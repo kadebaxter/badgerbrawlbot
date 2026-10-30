@@ -183,10 +183,28 @@ defmodule Swarm.RolesTest do
 
     test "fighters at home don't chase an enemy out of the base; the wave does" do
       ours = unit(201, "Soldier", 20, 20)
-      outside = unit(900, "Archer", 24, 24, owner: 1)
+      outside = unit(900, "Soldier", 24, 24, owner: 1)
       v = View.new(state(units: [ours, outside]))
       assert Roles.target(v, nil, ours) == nil
       assert %{"id" => 900} = Roles.target(v, %{id: 1, members: [201]}, ours)
+    end
+
+    test "but they fight back against an enemy that can hit them" do
+      ours = unit(201, "Soldier", 20, 20)
+      archer = unit(900, "Archer", 24, 24, owner: 1)
+      assert %{"id" => 900} = Roles.target(View.new(state(units: [ours, archer])), nil, ours)
+    end
+
+    test "out of the base, a building next to a unit going home doesn't keep it there" do
+      # A recalled wave: no longer members, standing by the enemy's Command Center.
+      ours = unit(201, "Soldier", 53, 34)
+      cc = building(78, "CommandCenter", 54, 35, 2)
+      assert Roles.target(View.new(state(units: [ours], buildings: [cc])), nil, ours) == nil
+
+      # An enemy soldier hitting it: it fights back.
+      soldier = unit(900, "Soldier", 52, 34, owner: 1)
+      v = View.new(state(units: [ours, soldier], buildings: [cc]))
+      assert %{"id" => 900} = Roles.target(v, nil, ours)
     end
 
     test "an enemy fighter comes before a building" do

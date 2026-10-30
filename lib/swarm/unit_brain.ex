@@ -42,6 +42,8 @@ defmodule Swarm.UnitBrain do
   @kite_step 3
   @kite_home 2
   @melee ["Soldier", "Scout"]
+  # A Trebuchet can't hit anything this close: it steps back instead.
+  @siege_blind_spot 3
 
   # Where a unit steps to get off a tile: sideways first, then diagonally.
   @steps [{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}]
@@ -59,6 +61,8 @@ defmodule Swarm.UnitBrain do
   @neighbor_area 16
   # Spots near the enemy's buildings count as this many ticks older: check them more often.
   @enemy_base_bonus 200
+  # ... but only for spots not seen for this long.
+  @recheck_ticks 100
 
   def new_memory, do: %{intent: nil}
 
@@ -90,7 +94,7 @@ defmodule Swarm.UnitBrain do
 
   defp act(%{"type" => "Worker"} = unit, v, strategy, memory), do: {worker(unit, v, strategy), memory}
   defp act(%{"type" => "Scout"} = unit, v, _strategy, memory), do: scout(unit, v, memory)
-  defp act(%{"type" => "Trebuchet"} = unit, _v, strategy, memory), do: siege(unit, strategy, memory)
+  defp act(%{"type" => "Trebuchet"} = unit, v, strategy, memory), do: siege(unit, v, strategy, memory)
   defp act(unit, v, strategy, memory), do: fighter(unit, v, strategy, memory)
 
   # A miner about to be hit runs toward help. Once it is safe and idle it goes back to mining,
@@ -194,6 +198,7 @@ defmodule Swarm.UnitBrain do
       back = unit["type"] == "Archer" && kite(unit, v, s) -> {:move, back}
       enemy = Roles.target(v, s.wave, unit) -> {:attack, enemy["id"]}
       role == :wave and Roles.turn_back?(v, s) -> {:attack_move, s.threat.pos}
+      role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       s.threat -> {:attack_move, s.threat.pos}
@@ -206,16 +211,17 @@ defmodule Swarm.UnitBrain do
   # Where an archer steps back to, or nil to stand and shoot. Of the steps that take it farther
   # from the closest enemy soldier or scout, the one closest to the rally point: so it backs off
   # toward home, around an enemy in the way, and never just into a corner.
-  defp kite(unit, v, s) do
+  # Everything but workers, for a Trebuchet: it can't hit anything inside 3 tiles.
+  defp kite(unit, v, s, types \\ @melee, near \\ @kite_distance, near_outnumbered \\ @kite_distance_outnumbered) do
     here = View.pos(unit)
-    melee = Enum.filter(v.enemy_units, &(&1["type"] in @melee))
+    melee = Enum.filter(v.enemy_units, &(if types == :fighters, do: &1["type"] != "Worker", else: &1["type"] in types))
     home = s.rally
 
     with [_ | _] <- melee,
          true <- home != nil and View.dist(here, home) > @kite_home,
          closest = Enum.min_by(melee, &View.dist(View.pos(&1), here)),
          now = View.dist(View.pos(closest), here),
-         true <- now <= if(outnumbered?(v, here), do: @kite_distance_outnumbered, else: @kite_distance) do
+         true <- now <= if(outnumbered?(v, here), do: near_outnumbered, else: near) do
       {x, y} = here
 
       for({dx, dy} <- @steps, do: {x + dx * @kite_step, y + dy * @kite_step})
@@ -254,13 +260,31 @@ defmodule Swarm.UnitBrain do
   # A Trebuchet holds the guard post (behind the front tower) and lets the game aim it: an idle
   # one fires by itself, at enemies standing still first, like a wave stopped at our tower. With
   # no base left it joins the attack.
-  defp siege(unit, s, memory) do
-    intent = if s.post, do: {:move, s.post}, else: {:attack_move, s.target}
+  # Home Trebuchets hold the guard post. The others wait at the rally point for a wave; with
+  # one, they go to its staging point, then attack-move to the target (the game fires them at
+  # whatever they reach), stepping back from anything inside their blind spot.
+  defp siege(unit, v, s, memory) do
+    role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
+
+    intent =
+      cond do
+        s.rally == nil -> {:attack_move, s.target}
+        role == :siege -> {:move, s.post}
+        role == :siege_out -> {:move, s.rally}
+        back = kite(unit, v, s, :fighters, @siege_blind_spot, @siege_blind_spot) -> {:move, back}
+        Roles.turn_back?(v, s) -> {:attack_move, s.threat.pos}
+        holding?(s) -> {:move, s.wave.staging}
+        true -> {:attack_move, s.target}
+      end
 
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
   end
+
+  # The wave waits at its staging point for its Trebuchets.
+  defp holding?(%{wave: %{released: false, staging: {_, _}}}), do: true
+  defp holding?(_strategy), do: false
 
   defp scout(unit, v, memory) do
     here = View.pos(unit)
@@ -335,13 +359,24 @@ defmodule Swarm.UnitBrain do
 
   defp grid(v), do: for(x <- 8..(v.map_width - 1)//16, y <- 8..(v.map_height - 1)//16, do: {x, y})
 
-  # The spot seen longest ago (never seen first); closest on a tie.
+  # The spot seen longest ago (never seen first); closest on a tie. Never one the scout can see
+  # from where it is: it would "arrive" at once and stand there. Spots by the enemy count as older,
+  # so they get checked more often, but only once they haven't been seen for `@recheck_ticks`:
+  # otherwise a spot just seen there beats everything else and the scout parks on it.
   defp next_spot(v, spots, seen, here) do
     enemy = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1) ++ v.enemy_starts
 
-    Enum.min_by(spots, fn spot ->
-      bonus = if Enum.any?(enemy, &(View.dist(&1, spot) <= 12)), do: @enemy_base_bonus, else: 0
-      {Map.get(seen, spot, -1000) - bonus, View.dist(spot, here), spot}
+    candidates =
+      case Enum.reject(spots, &(View.dist(&1, here) <= @scout_sight)) do
+        [] -> spots
+        away -> away
+      end
+
+    Enum.min_by(candidates, fn spot ->
+      at = Map.get(seen, spot, -1000)
+      stale? = v.tick - at >= @recheck_ticks
+      bonus = if stale? and Enum.any?(enemy, &(View.dist(&1, spot) <= 12)), do: @enemy_base_bonus, else: 0
+      {at - bonus, View.dist(spot, here), spot}
     end)
   end
 

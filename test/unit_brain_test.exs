@@ -237,6 +237,38 @@ defmodule Swarm.UnitBrainTest do
     end
   end
 
+  describe "Trebuchets on the attack" do
+    @holding %{@attack | wave: %{id: 1, members: [2, 303], staging: {47, 47}, released: false}}
+    @going %{@holding | wave: %{@holding.wave | released: true}}
+
+    defp treb_view(units),
+      do: View.new(state(units: [unit(301, "Trebuchet", 9, 9), unit(302, "Trebuchet", 9, 9) | units]))
+
+    test "the wave holds at the staging point until its siege is there" do
+      v = treb_view([unit(2, "Soldier", 20, 20), unit(303, "Trebuchet", 20, 20)])
+      assert {%{"type" => "Attack", "x" => 47, "y" => 47}, _} = UnitBrain.decide(2, v, @holding)
+      assert {%{"type" => "Move", "x" => 47, "y" => 47}, _} = UnitBrain.decide(303, v, @holding)
+
+      assert {%{"type" => "Attack", "x" => 56, "y" => 56}, _} = UnitBrain.decide(2, v, @going)
+      assert {%{"type" => "Attack", "x" => 56, "y" => 56}, _} = UnitBrain.decide(303, v, @going)
+    end
+
+    test "a Trebuchet not in a wave, and not one of the two oldest, waits at the rally point" do
+      v = treb_view([unit(303, "Trebuchet", 20, 20)])
+      assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(303, v, @gather)
+      # The two oldest hold the guard post.
+      v = View.new(state(units: [unit(301, "Trebuchet", 20, 20), unit(302, "Trebuchet", 9, 9), unit(303, "Trebuchet", 20, 20)]))
+      assert {%{"type" => "Move", "x" => 9, "y" => 9}, _} = UnitBrain.decide(301, v, @gather)
+    end
+
+    test "out there, it steps back from anything inside its blind spot" do
+      enemy = unit(900, "Soldier", 42, 40, owner: 1)
+      v = treb_view([unit(303, "Trebuchet", 40, 40), enemy])
+      assert {%{"type" => "Move", "x" => x, "y" => y}, _} = UnitBrain.decide(303, v, @going)
+      assert View.dist({x, y}, {42, 40}) > 2
+    end
+  end
+
   describe "shells" do
     defp under_fire(unit, shells) do
       shells = for {x, y} <- shells, do: %{"owner" => 1, "x" => x, "y" => y, "firedTick" => 99, "landsTick" => 102}
@@ -337,6 +369,16 @@ defmodule Swarm.UnitBrainTest do
       v = four_scouts([unit(5, "Scout", 54, 7)])
       assert {%{"x" => x, "y" => y}, _} = UnitBrain.decide(5, v, @gather)
       assert View.dist({x, y}, {56, 7}) <= 16 or {x, y} == {31, 7}
+    end
+
+    test "a scout at a spot it can see doesn't stay there, however close to the enemy" do
+      # Everything else seen 50 ticks ago; it stands by the neighbor's start, seen now. That
+      # spot used to win on the enemy bonus, so the scout "arrived" and stood still.
+      v = four_scouts([unit(5, "Scout", 55, 8)])
+      seen = Map.new([{56, 40}, {40, 8}, {31, 7}, {40, 24}, {56, 24}], &{&1, 50})
+      {cmd, _} = UnitBrain.decide(5, v, @gather, %{intent: nil, seen: seen})
+      assert %{"type" => "Move", "x" => x, "y" => y} = cmd
+      assert View.dist({x, y}, {55, 8}) > 6
     end
 
     test "with one scout, a neighbor comes first" do

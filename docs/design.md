@@ -214,8 +214,9 @@ and a unit already on an enemy stays on it. An enemy takes attackers until their
 (`max(1, damage + Weapons - armor)`) covers its current HP, with at most 8 melee attackers. Enemy
 armor is assumed +1 once we have seen an enemy TechLab, since their research is hidden. Units
 left over hit towers, then workers, then other buildings. Fighters at home only go after
-enemies inside a base (within 10 of the Command Center or an outpost), within 5 of one of our
-workers, or already in their own range; the
+enemies inside a base (within 10 of the Command Center or an outpost) or within 5 of one of our
+workers, and fight back against any enemy fighter in range either way (never a building, so a
+recalled wave walks home); the
 wave fights anything.
 
 Siege: an enemy Trebuchet (range 3–7, outranges towers) is fought before anything that can't hit
@@ -246,8 +247,11 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    extras follow (a 3rd and 4th Barracks, up to 5 Guard Towers); each building gets two
    builders; Barracks queue up to 5. Siege waits for a defensive army: at 15 fighters, with the
    build order done, SiegeEngineering is researched and a SiegeWorkshop built. It keeps 2
-   Trebuchets, which hold the guard post and let the game aim them (idle ones fire by themselves,
-   at enemies standing still first).
+   Trebuchets (4 once the army is 15): the 2 oldest hold the guard post and let the game aim them
+   (idle ones fire by themselves, at enemies standing still first); the others wait at the rally
+   point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of
+   its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
+   back from anything inside their 3-tile blind spot.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
    point; only those go, so units trained later wait for the next wave instead of trickling out.
    The members are kept in the replicated memory, so a new leader knows who is out. The wave is
