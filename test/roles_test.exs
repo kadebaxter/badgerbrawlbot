@@ -20,14 +20,21 @@ defmodule Swarm.RolesTest do
     defp depot, do: building(50, "ResourceDepot", 30, 30)
     defp miners(n), do: for(i <- 1..n, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering"))
 
-    test "an outpost with miners gets escorts after the guards: one per 3 workers, at least 2" do
+    test "an outpost with miners gets a group of five escorts, after the guards" do
       roles = Roles.home_roles(view(soldiers(10) ++ miners(6), [depot()]), nil)
       assert Enum.map(208..210, &roles[&1]) == [:guard, :guard, :guard]
-      assert roles[207] == {:escort, {30, 30}} and roles[206] == {:escort, {30, 30}}
-      assert roles[205] == :attacker
+      assert Enum.map(203..207, &roles[&1]) == List.duplicate({:escort, {30, 30}}, 5)
+      assert roles[202] == :attacker and roles[201] == :attacker
+    end
 
-      roles = Roles.home_roles(view(soldiers(10) ++ miners(7), [depot()]), nil)
-      assert Enum.count(roles, &match?({_, {:escort, _}}, &1)) == 3
+    test "fewer than three to spare: no escorts at all, they attack instead" do
+      roles = Roles.home_roles(view(soldiers(5) ++ miners(6), [depot()]), nil)
+      refute Enum.any?(roles, &match?({_, {:escort, _}}, &1))
+      assert roles[201] == :attacker and roles[202] == :attacker
+    end
+
+    test "a depot seven tiles from the Command Center is an outpost" do
+      assert Roles.outposts(view([], [building(50, "ResourceDepot", 14, 7)])) == [{14, 7}]
     end
 
     test "escorts already at the outpost keep the job when new units are trained" do
@@ -40,6 +47,14 @@ defmodule Swarm.RolesTest do
       roles = Roles.home_roles(view([unit(211, "Soldier", 10, 10) | at_outpost ++ home] ++ miners(6), [depot()]), nil)
       assert roles[201] == {:escort, {30, 30}} and roles[202] == {:escort, {30, 30}}
       assert roles[211] == :guard
+    end
+
+    test "fighters already at an outpost keep it, and the closest fill the rest of the group" do
+      at_outpost = for id <- [201, 202], do: unit(id, "Soldier", 31, 30)
+      near = for id <- [203, 204, 205], do: unit(id, "Soldier", 25, 25)
+      far = for i <- 6..12, do: unit(200 + i, "Soldier", 10, 10)
+      roles = Roles.home_roles(view(at_outpost ++ near ++ far ++ miners(6), [depot()]), nil)
+      assert Enum.map(201..205, &roles[&1]) == List.duplicate({:escort, {30, 30}}, 5)
     end
 
     test "no miners there, no escorts" do
@@ -119,9 +134,9 @@ defmodule Swarm.RolesTest do
       assert Roles.turn_back?(view(near ++ guards), s)
     end
 
-    test "not when the wave is nearly at the target", %{guards: guards, strategy: s} do
+    test "even when the wave is nearly at the target: we only attack neighbors", %{guards: guards, strategy: s} do
       far = soldiers(5) |> Enum.map(&%{&1 | "x" => 45, "y" => 45})
-      refute Roles.turn_back?(view(far ++ guards), s)
+      assert Roles.turn_back?(view(far ++ guards), s)
     end
 
     test "not when home can hold", %{guards: guards, strategy: s} do

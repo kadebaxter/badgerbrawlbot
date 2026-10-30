@@ -8,9 +8,10 @@ defmodule Swarm.Roles do
   - `:wave`: it left with the current wave (its id is in `strategy.wave.members`)
   - `:guard`: one of the newest fighters at home; holds the main base. At least `@min_guards`,
     or a quarter of the army.
-  - `{:escort, outpost}`: holds an outpost (a Resource Depot away from the main base) while
-    workers mine there. One per 3 workers there, `@min_escorts`..`@max_escorts`. Fighters
-    already there keep the job; a gap goes to the closest free fighter.
+  - `{:escort, outpost}`: holds an outpost (a Resource Depot more than `@outpost_distance` from
+    the Command Center) while workers mine there, as a group of `@escort_group` (at least
+    `@min_escort_group`, or none: one fighter alone stops nobody). Fighters already there keep
+    the job; a gap goes to the closest free fighter.
   - `:attacker`: everyone else at home; waits at the rally point for the next wave, and goes to
     help wherever a base or our workers are attacked
 
@@ -23,11 +24,14 @@ defmodule Swarm.Roles do
   alias Swarm.View
 
   @min_guards 3
+  # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
+  @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
   @worker_cover 5
-  @min_escorts 2
-  @max_escorts 5
-  @workers_per_escort 3
+  @escort_group 5
+  @min_escort_group 3
+  # A depot farther than this from the Command Center is an outpost.
+  @outpost_distance 6
   # The base is everything this close to the Command Center. Fighters at home don't chase
   # enemies out of it.
   @base_radius 10
@@ -54,7 +58,15 @@ defmodule Swarm.Roles do
   }
 
   # `all_in` is set on the end-of-match push that takes every fighter.
-  @type wave :: %{required(:id) => pos_integer(), required(:members) => [integer()], optional(:all_in) => true} | nil
+  # `owner` is the opponent (player slot) it is after.
+  @type wave ::
+          %{
+            required(:id) => pos_integer(),
+            required(:members) => [integer()],
+            optional(:owner) => non_neg_integer() | nil,
+            optional(:all_in) => true
+          }
+          | nil
   @type threat :: %{pos: {integer, integer}, size: non_neg_integer()} | nil
 
   @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege
@@ -80,28 +92,34 @@ defmodule Swarm.Roles do
   """
   def home_roles(%View{} = v, wave) do
     newest_first = &Enum.sort_by(&1, fn u -> u["id"] end, :desc)
-    needs = Map.new(outposts(v), &{&1, escorts_needed(v, &1)})
+    manned = Enum.filter(outposts(v), &(miners(v, &1) > 0))
 
-    {kept, pool} =
-      Enum.reduce(outposts(v), {[], newest_first.(home(v, wave))}, fn o, {kept, pool} ->
+    # 1. Fighters already at an outpost (with miners) stay, up to a full group.
+    {groups, pool} =
+      Enum.reduce(manned, {%{}, newest_first.(home(v, wave))}, fn o, {groups, pool} ->
         {here, away} = Enum.split_with(pool, &(View.dist(View.pos(&1), o) <= @base_radius))
-        {taken, extra} = Enum.split(here, needs[o])
-        {kept ++ Enum.map(taken, &{&1["id"], {:escort, o}}), newest_first.(away ++ extra)}
+        {taken, extra} = Enum.split(here, @escort_group)
+        {Map.put(groups, o, taken), newest_first.(away ++ extra)}
       end)
 
+    # 2. The newest of the rest guard the main base.
     {guards, pool} = Enum.split(pool, max(@min_guards, div(length(fighters(v)), 4)))
 
-    {filled, attackers} =
-      Enum.reduce(outposts(v), {[], pool}, fn o, {filled, pool} ->
-        short = needs[o] - Enum.count(kept, &(elem(&1, 1) == {:escort, o}))
+    # 3. Each group is filled up from the closest of the rest. One that can't reach
+    #    `@min_escort_group` isn't worth having: those fighters attack instead.
+    {groups, attackers} =
+      Enum.reduce(manned, {groups, pool}, fn o, {groups, pool} ->
         by_distance = Enum.sort_by(pool, &{View.dist(View.pos(&1), o), -&1["id"]})
-        {taken, rest} = Enum.split(by_distance, max(short, 0))
-        {filled ++ Enum.map(taken, &{&1["id"], {:escort, o}}), rest}
+        {taken, rest} = Enum.split(by_distance, @escort_group - length(groups[o]))
+        group = groups[o] ++ taken
+
+        if length(group) >= @min_escort_group,
+          do: {Map.put(groups, o, group), rest},
+          else: {Map.delete(groups, o), rest ++ group}
       end)
 
-    Map.new(
-      kept ++ Enum.map(guards, &{&1["id"], :guard}) ++ filled ++ Enum.map(attackers, &{&1["id"], :attacker})
-    )
+    escorts = for {o, group} <- groups, u <- group, do: {u["id"], {:escort, o}}
+    Map.new(Enum.map(guards, &{&1["id"], :guard}) ++ escorts ++ Enum.map(attackers, &{&1["id"], :attacker}))
   end
 
   @doc "Ids of the guards."
@@ -109,30 +127,35 @@ defmodule Swarm.Roles do
     for {id, :guard} <- home_roles(v, wave), into: MapSet.new(), do: id
   end
 
-  @doc "Finished Resource Depots away from the main base: each is a base of its own."
+  @doc "Finished Resource Depots away from the Command Center: each is a base of its own."
   def outposts(%View{cc: nil}), do: []
 
   def outposts(%View{cc: cc} = v) do
     for d <- View.buildings_of(v, "ResourceDepot"),
         d["completed"],
-        View.dist(View.pos(d), View.pos(cc)) > @base_radius,
+        View.dist(View.pos(d), View.pos(cc)) > @outpost_distance,
         do: View.pos(d)
+  end
+
+  @doc """
+  Our neighbors: the `@neighbors` opponents still in whose starts are nearest our Command Center
+  (the map's middle without one), nearest first, as `{start, slot}`. Waves only go after these,
+  and scouts watch them most.
+  """
+  def neighbors(%View{} = v) do
+    from = if v.cc, do: View.pos(v.cc), else: {div(v.map_width, 2), div(v.map_height, 2)}
+
+    v.start_owner
+    |> Enum.sort_by(fn {start, slot} -> {View.dist(start, from), slot} end)
+    |> Enum.take(@neighbors)
   end
 
   @doc "Every base: the Command Center and the outposts."
   def bases(%View{cc: nil} = v), do: outposts(v)
   def bases(%View{cc: cc} = v), do: [View.pos(cc) | outposts(v)]
 
-  defp escorts_needed(v, outpost) do
-    miners =
-      Enum.count(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), outpost) <= @base_radius))
-
-    if miners == 0,
-      do: 0,
-      else: miners |> div_up(@workers_per_escort) |> max(@min_escorts) |> min(@max_escorts)
-  end
-
-  defp div_up(a, b), do: div(a + b - 1, b)
+  defp miners(v, outpost),
+    do: Enum.count(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), outpost) <= @base_radius))
 
   @doc "Where an outpost's escorts stand: two tiles out from it, toward `toward` (the enemy)."
   def escort_post({x, y}, {tx, ty}), do: {x + 2 * sign(tx - x), y + 2 * sign(ty - y)}
@@ -230,15 +253,12 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Should the wave come home? Only if home can't hold on its own, and the wave (as a whole,
-  judged from its center so all members agree) is still closer to home than to the target.
+  Should the wave come home? Whenever home can't hold on its own: we only attack a neighbor, so
+  home is never far. Every member gets the same answer.
   """
-  def turn_back?(%View{} = v, %{wave: wave, threat: threat, rally: rally, target: target})
-      when wave != nil and threat != nil and rally != nil and target != nil do
-    center = wave_center(v, wave)
-
-    threat.size > home_defense(v, wave) and center != nil and
-      View.dist(center, rally) < View.dist(center, target)
+  def turn_back?(%View{} = v, %{wave: wave, threat: threat, rally: rally})
+      when wave != nil and threat != nil and rally != nil do
+    threat.size > home_defense(v, wave)
   end
 
   def turn_back?(_v, _strategy), do: false

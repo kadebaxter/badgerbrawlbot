@@ -47,6 +47,22 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Gather", "targetId" => 4} = pick(far_miner, [@home, @far], [])
     end
 
+    test "never to ore with an enemy fighter by it" do
+      enemy = unit(900, "Soldier", 2, 3, owner: 1)
+      assert %{"targetId" => 6} = pick(unit(1, "Worker", 8, 8), [@home, @home2], [enemy])
+    end
+
+    test "a miner whose ore turns unsafe moves to safe ore" do
+      enemy = unit(900, "Soldier", 2, 3, owner: 1)
+      miner = unit(1, "Worker", 8, 8, activity: "Gathering", target_id: 4)
+      assert %{"type" => "Gather", "targetId" => 6} = pick(miner, [@home, @home2], [enemy])
+    end
+
+    test "with only unsafe ore, it waits" do
+      enemy = unit(900, "Soldier", 2, 8, owner: 1)
+      assert :no_change = pick(unit(1, "Worker", 8, 8), [@home, @home2], [enemy])
+    end
+
     test "a worker mining close ore keeps at it" do
       assert :no_change = pick(unit(1, "Worker", 3, 7, activity: "Gathering", target_id: 4), [@home, @far], [])
     end
@@ -84,9 +100,13 @@ defmodule Swarm.UnitBrainTest do
     assert %{"type" => "Attack", "x" => 16, "y" => 9} = cmd(unit(2, "Soldier", 25, 25), defend)
   end
 
-  test "the wave turns back when home can't hold and it is still near" do
+  test "the wave comes home when home can't hold, wherever it is" do
     s = %{@attack | threat: %{pos: {12, 9}, size: 10}}
     assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 20, 20), s, home_soldiers(3))
+    assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 45, 45), s, home_soldiers(3))
+
+    # Home can hold (a small raid): the wave keeps going.
+    s = %{@attack | threat: %{pos: {12, 9}, size: 2}}
     assert %{"type" => "Attack", "x" => 56, "y" => 56} = cmd(unit(2, "Soldier", 45, 45), s, home_soldiers(3))
   end
 
@@ -146,9 +166,21 @@ defmodule Swarm.UnitBrainTest do
       assert {:no_change, _} = UnitBrain.decide(210, v, @gather)
     end
 
-    test "a miner about to be hit runs to the rally point" do
-      v = View.new(state(units: [unit(101, "Worker", 40, 40, activity: "Gathering"), unit(900, "Soldier", 41, 40, owner: 1)]))
-      assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(101, v, @gather)
+    test "a miner about to be hit runs to the closest help that isn't toward the enemy" do
+      miner = unit(101, "Worker", 40, 40, activity: "Gathering")
+      enemy = unit(900, "Soldier", 41, 40, owner: 1)
+
+      # Nobody near: the closest drop-off, the Command Center.
+      v = View.new(state(units: [miner, enemy]))
+      assert {%{"type" => "Move", "x" => 7, "y" => 7}, _} = UnitBrain.decide(101, v, @gather)
+
+      # One of our soldiers close by, on the far side from the enemy: there.
+      v = View.new(state(units: [miner, enemy, unit(201, "Soldier", 36, 40)]))
+      assert {%{"type" => "Move", "x" => 36, "y" => 40}, _} = UnitBrain.decide(101, v, @gather)
+
+      # Not to a soldier on the enemy's side.
+      v = View.new(state(units: [miner, enemy, unit(201, "Soldier", 44, 40)]))
+      assert {%{"type" => "Move", "x" => 7, "y" => 7}, _} = UnitBrain.decide(101, v, @gather)
     end
 
     test "a builder keeps building" do
@@ -163,6 +195,46 @@ defmodule Swarm.UnitBrainTest do
     assert Swarm.Roles.role(v, nil, 300) == :siege
     refute Map.has_key?(Swarm.Roles.home_roles(v, nil), 300)
     assert {%{"type" => "Move", "x" => 9, "y" => 9}, _} = UnitBrain.decide(300, v, @attack)
+  end
+
+  describe "archers kite" do
+    defp archer_decides(archer, others),
+      do: elem(UnitBrain.decide(archer["id"], View.new(state(units: [archer | others])), @gather), 0)
+
+    test "a soldier about to reach an archer: it steps back toward home" do
+      soldier = unit(900, "Soldier", 32, 32, owner: 1)
+      assert %{"type" => "Move", "x" => 27, "y" => 27} = archer_decides(unit(2, "Archer", 30, 30), [soldier])
+    end
+
+    test "with the soldier still out of reach, it shoots" do
+      soldier = unit(900, "Soldier", 34, 30, owner: 1)
+      assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 30, 30), [soldier])
+    end
+
+    test "outnumbered, it backs off sooner" do
+      enemies = for i <- 0..2, do: unit(900 + i, "Soldier", 33, 30 + i, owner: 1)
+      assert %{"type" => "Move"} = archer_decides(unit(2, "Archer", 30, 30), enemies)
+
+      # Same three, but five of our soldiers with it: it holds.
+      friends = for i <- 1..5, do: unit(200 + i, "Soldier", 31, 28 + i)
+      assert %{"type" => "Attack"} = archer_decides(unit(2, "Archer", 30, 30), enemies ++ friends)
+    end
+
+    test "with the enemy between it and home, it goes around, never closer" do
+      soldier = unit(900, "Soldier", 28, 28, owner: 1)
+      assert %{"type" => "Move", "x" => x, "y" => y} = archer_decides(unit(2, "Archer", 30, 30), [soldier])
+      assert View.dist({x, y}, {28, 28}) > 2
+    end
+
+    test "at home, it stands and fights" do
+      soldier = unit(900, "Soldier", 12, 11, owner: 1)
+      assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 11, 11), [soldier])
+    end
+
+    test "enemy archers don't make it run" do
+      enemy = unit(900, "Archer", 32, 30, owner: 1)
+      assert %{"type" => "Attack"} = archer_decides(unit(2, "Archer", 30, 30), [enemy])
+    end
   end
 
   describe "shells" do
@@ -238,6 +310,39 @@ defmodule Swarm.UnitBrainTest do
     {%{"x" => x5, "y" => y5}, _} = UnitBrain.decide(5, v, @gather)
     {%{"x" => x6, "y" => y6}, _} = UnitBrain.decide(6, v, @gather)
     assert Enum.sort([{x5, y5}, {x6, y6}]) == [{56, 7}, {56, 56}]
+  end
+
+  describe "scouts watch the neighbors" do
+    # Us at (7, 7). Neighbors at (56, 7) and (7, 56); across the map at (56, 56).
+    defp four_scouts(scouts) do
+      View.new(
+        Map.update!(state(units: scouts), "players", fn [me | _] ->
+          [me | for({slot, x, y} <- [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}], do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})]
+        end)
+      )
+    end
+
+    defp goal(v, id), do: UnitBrain.decide(id, v, @gather) |> elem(0) |> then(&{&1["x"], &1["y"]})
+
+    test "one scout per neighbor, and the third roams" do
+      v = four_scouts(for id <- [5, 6, 7], do: unit(id, "Scout", 10, 10))
+      assert goal(v, 5) == {56, 7}
+      assert goal(v, 6) == {7, 56}
+      # The roamer: the far player's start is fair game for it.
+      assert goal(v, 7) in [{56, 7}, {7, 56}, {56, 56}]
+    end
+
+    test "having seen the neighbor's start, its scout checks near them or the way to us" do
+      # Standing by their start: it counts as seen, so the scout picks its next spot.
+      v = four_scouts([unit(5, "Scout", 54, 7)])
+      assert {%{"x" => x, "y" => y}, _} = UnitBrain.decide(5, v, @gather)
+      assert View.dist({x, y}, {56, 7}) <= 16 or {x, y} == {31, 7}
+    end
+
+    test "with one scout, a neighbor comes first" do
+      v = four_scouts([unit(5, "Scout", 10, 10)])
+      assert goal(v, 5) == {56, 7}
+    end
   end
 
   test "a scout gives up on a spot it can't reach and picks another" do

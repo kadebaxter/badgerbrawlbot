@@ -187,13 +187,15 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 Each unit gets the state and the strategy and decides for itself only. Workers mine when idle.
 A fighter works out its role from the view (`Swarm.Roles`, the same rule on every node, so no
 messages are needed): in the current **wave**, a **guard** (the newest fighters at home, at least 3
-or a quarter of the army), an **escort** (each outpost, a Resource Depot more than 10 tiles from
-the Command Center, gets one per 3 workers mining there, 2 to 5; fighters already at the outpost
-keep the job, and a gap goes to the closest free fighter, so nobody rotates across the map), or an
+or a quarter of the army), an **escort** (each outpost, a Resource Depot more than 6 tiles from
+the Command Center with workers mining there, gets a group of 5, or none if fewer than 3 can be
+spared; fighters already at the outpost keep the job, and a gap goes to the closest free fighter,
+so nobody rotates across the map; each outpost also gets a Guard Tower), or an
 **attacker** waiting for the next wave. Then, first match wins:
 
 | Situation | Fighter does |
 |---|---|
+| Archer, an enemy soldier or scout within 2 (3 if outnumbered), away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | Something to fight within 6 tiles | Attack it (see below) |
 | In the wave, home can't hold and the wave is closer to home than the target | Attack-move to the threat |
 | In the wave | Attack-move to the target |
@@ -231,7 +233,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
    Harvesting1, Weapons1, Armor1, then tier 2. Barracks train Soldiers and Archers with the rest.
-   Miners about to be hit run to the rally point. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
+   Miners about to be hit run to the closest of our fighters or drop-offs on their side of the
+   enemy, and don't mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
    workers on it, else the shortest. When home has been short of ore for 30 ticks in a row (under
    1,500 left within reach of a drop-off, or more than 3 workers per nearby deposit), a Resource
    Depot goes by the closest other ore, ahead of the build order. Depots only go by ore on our
@@ -240,21 +243,25 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    plus 1 per 100 ticks) the Barracks train before anything is built or researched.
    With 500+ ore on hand once the first Barracks is up ("rich"): the build order stops waiting
    for workers, except for depots; once it is done,
-   extras follow (SiegeWorkshop after SiegeEngineering, a 3rd and 4th Barracks, up to 5 Guard
-   Towers); each building gets two builders; Barracks queue up to 5. A SiegeWorkshop keeps 2
+   extras follow (a 3rd and 4th Barracks, up to 5 Guard Towers); each building gets two
+   builders; Barracks queue up to 5. Siege waits for a defensive army: at 15 fighters, with the
+   build order done, SiegeEngineering is researched and a SiegeWorkshop built. It keeps 2
    Trebuchets, which hold the guard post and let the game aim them (idle ones fire by themselves,
    at enemies standing still first).
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
    point; only those go, so units trained later wait for the next wave instead of trickling out.
    The members are kept in the replicated memory, so a new leader knows who is out. The wave is
    recalled when fewer than 5 of it are left. No wave leaves while the base is under attack.
-3. **Scouting and attack decisions (done):** one Scout (replaced when it dies) visits the spot it
+3. **Scouting and attack decisions (done):** a scout per neighbor (the two nearest opponents) plus one roaming
+   scout (replaced when they die); each visits the spot of its share it
    saw longest ago, checks the enemy base most often, gets as close as is safe (enemy range + 2),
    runs when closer or taking damage, and then checks other spots before coming back. The
    leader remembers every enemy fighter seen (dropped when we kill it or after 300 ticks
    unseen) and launches a wave once the staged attackers are 1.5× the known enemy army plus
    towers, by HP × damage per tick (at least 8; 15 while we know nothing). A wave facing a
-   stronger force pulls back. In the last 300 ticks, if we are behind on score, every fighter
+   stronger force pulls back. Waves only go after the weaker (by survival score, which the server
+   reports for every player) of our two nearest opponents, never across the map; a wave sticks to
+   that opponent, and comes home whenever the base can't hold on its own. In the last 300 ticks, if we are behind on score, every fighter
    attacks; if ahead, we don't throw units away, since living units count toward the score.
 League matches: `Swarm.join(name)` commits the league to the replicated state. The leader joins
 (idempotent, so a new leader simply joins again), long-polls `state?waitForTick=0` for each round,

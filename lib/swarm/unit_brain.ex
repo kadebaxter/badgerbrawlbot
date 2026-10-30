@@ -6,6 +6,8 @@ defmodule Swarm.UnitBrain do
   Workers mine the closest ore to a drop-off that isn't crowded, never ore far from one, and
   run to the rally point when an enemy is about to hit them. A fighter first works out its role (`Swarm.Roles`), then, in order:
 
+  0. an archer with an enemy soldier or scout about to reach it: step back toward home, then
+     shoot again from range (kiting)
   1. something to fight nearby (`Swarm.Roles.target/3`: enemy fighters first, shared out so
      none is overkilled; fighters at home don't chase out of the base): attack it
   2. in the wave: attack-move to the target, or to the threat if the wave turns back
@@ -14,7 +16,9 @@ defmodule Swarm.UnitBrain do
   5. an attacker, with an outpost or our workers under attack: go help (the closest)
   6. otherwise go to its spot: guards to the post, attackers to the rally point
 
-  A scout heads for the spot (of its share of the map) it saw longest ago (the enemy base and their buildings count as
+  Scouts split up: one per neighbor (the two nearest opponents) watching around that neighbor's
+  base and the way from them to us, and one roaming the whole map. A scout heads for the spot (of
+  its share) it saw longest ago (the enemy base and their buildings count as
   older, so it keeps checking them). It gets as close as is safe, and runs once an enemy could
   reach it or it is taking damage; then it checks other spots before coming back. Its memory
   holds when it last saw each spot, where it is heading, and its HP last tick.
@@ -30,16 +34,29 @@ defmodule Swarm.UnitBrain do
 
   alias Swarm.{Roles, View}
 
+  # Archers step back once an enemy soldier or scout is this close (it reaches us next tick), or
+  # this close when the enemy is stronger around us; `@kite_step` tiles at a time. Within
+  # `@kite_home` of the rally point they stand and fight: help is there.
+  @kite_distance 2
+  @kite_distance_outnumbered 3
+  @kite_step 3
+  @kite_home 2
+  @melee ["Soldier", "Scout"]
+
   # Where a unit steps to get off a tile: sideways first, then diagonally.
   @steps [{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}]
 
   # Workers on one deposit before the next one over is better.
   @crowd 3
+  # Ore with an enemy fighter this close is unsafe to mine.
+  @unsafe_ore 5
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
   # A scout counts a spot as seen this close (its vision is 8).
   @scout_sight 6
+  # A neighbor's scout covers the grid this close to the neighbor's start.
+  @neighbor_area 16
   # Spots near the enemy's buildings count as this many ticks older: check them more often.
   @enemy_base_bonus 200
 
@@ -76,38 +93,69 @@ defmodule Swarm.UnitBrain do
   defp act(%{"type" => "Trebuchet"} = unit, _v, strategy, memory), do: siege(unit, strategy, memory)
   defp act(unit, v, strategy, memory), do: fighter(unit, v, strategy, memory)
 
-  # A miner about to be hit runs to the rally point, where help comes from. Once it is safe and
-  # idle it goes back to mining. Builders keep building.
-  defp worker(%{"activity" => activity} = unit, v, %{rally: {rx, ry}})
-       when activity in ["Idle", "Gathering", "Returning"] do
-    if in_danger?(unit, v),
-      do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => rx, "y" => ry},
-      else: worker(unit, v)
+  # A miner about to be hit runs toward help. Once it is safe and idle it goes back to mining,
+  # but not to ore with enemies by it. Builders keep building.
+  defp worker(%{"activity" => activity} = unit, v, %{rally: rally})
+       when activity in ["Idle", "Gathering", "Returning"] and rally != nil do
+    case danger(unit, v) do
+      nil ->
+        worker(unit, v)
+
+      enemy ->
+        {x, y} = refuge(unit, v, enemy) || rally
+        %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+    end
   end
 
   defp worker(unit, v, _strategy), do: worker(unit, v)
 
-  defp in_danger?(unit, v) do
-    Enum.any?(v.enemy_units, fn e ->
-      e["type"] != "Worker" and View.dist(View.pos(e), View.pos(unit)) <= Roles.range(e) + 1
-    end)
+  # The closest enemy fighter that is about to reach this worker, or nil.
+  defp danger(unit, v) do
+    here = View.pos(unit)
+
+    v.enemy_units
+    |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= Roles.range(&1) + 1))
+    |> Enum.min_by(&View.dist(View.pos(&1), here), fn -> nil end)
   end
 
-  # An idle worker picks a deposit. So does one mining a deposit too far from any drop-off,
-  # once there is a closer one.
+  # The closest of our fighters or drop-offs that is on our side of the enemy (closer to this
+  # worker than to it, so the way there doesn't go past it): help, or at least a place to drop
+  # ore. Nil if there is none.
+  defp refuge(unit, v, enemy) do
+    here = View.pos(unit)
+    there = View.pos(enemy)
+
+    (Enum.map(Roles.fighters(v), &View.pos/1) ++ View.drop_offs(v))
+    |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there)))
+    |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
+  end
+
+  # Ore with an enemy fighter this close isn't worth walking into.
+  defp unsafe?(deposit, v) do
+    Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
+  end
+
+  # An idle worker picks a deposit. So does one mining a deposit too far from any drop-off (once
+  # there is a closer one), or one with enemies by it. With only unsafe ore left, it waits.
   defp worker(unit, %View{deposits: [_ | _]} = v) do
     near = View.near_deposits(v)
+    current = Enum.find(v.deposits, &(&1["id"] == unit["targetId"]))
+    mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
 
-    far_away? =
-      unit["activity"] in ["Gathering", "Returning"] and near != [] and
-        Enum.any?(v.deposits, &(&1["id"] == unit["targetId"])) and
-        not Enum.any?(near, &(&1["id"] == unit["targetId"]))
+    move? =
+      unit["activity"] == "Idle" or
+        (mining? and near != [] and current not in near) or
+        (mining? and unsafe?(current, v))
 
-    if unit["activity"] == "Idle" or far_away? do
-      best = pick_deposit(unit, v, if(near == [], do: v.deposits, else: near))
-      %{"type" => "Gather", "unitIds" => [unit["id"]], "targetId" => best["id"]}
-    else
-      :no_change
+    choices = Enum.reject(if(near == [], do: v.deposits, else: near), &unsafe?(&1, v))
+
+    case move? && choices do
+      [_ | _] ->
+        best = pick_deposit(unit, v, choices)
+        if best["id"] == unit["targetId"], do: :no_change, else: %{"type" => "Gather", "unitIds" => [unit["id"]], "targetId" => best["id"]}
+
+      _ ->
+        :no_change
     end
   end
 
@@ -143,6 +191,7 @@ defmodule Swarm.UnitBrain do
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
 
     cond do
+      back = unit["type"] == "Archer" && kite(unit, v, s) -> {:move, back}
       enemy = Roles.target(v, s.wave, unit) -> {:attack, enemy["id"]}
       role == :wave and Roles.turn_back?(v, s) -> {:attack_move, s.threat.pos}
       role == :wave -> {:attack_move, s.target}
@@ -152,6 +201,40 @@ defmodule Swarm.UnitBrain do
       role == :guard -> {:move, s.post}
       true -> {:move, s.rally}
     end
+  end
+
+  # Where an archer steps back to, or nil to stand and shoot. Of the steps that take it farther
+  # from the closest enemy soldier or scout, the one closest to the rally point: so it backs off
+  # toward home, around an enemy in the way, and never just into a corner.
+  defp kite(unit, v, s) do
+    here = View.pos(unit)
+    melee = Enum.filter(v.enemy_units, &(&1["type"] in @melee))
+    home = s.rally
+
+    with [_ | _] <- melee,
+         true <- home != nil and View.dist(here, home) > @kite_home,
+         closest = Enum.min_by(melee, &View.dist(View.pos(&1), here)),
+         now = View.dist(View.pos(closest), here),
+         true <- now <= if(outnumbered?(v, here), do: @kite_distance_outnumbered, else: @kite_distance) do
+      {x, y} = here
+
+      for({dx, dy} <- @steps, do: {x + dx * @kite_step, y + dy * @kite_step})
+      |> Enum.filter(fn {nx, ny} = spot ->
+        nx in 0..(v.map_width - 1)//1 and ny in 0..(v.map_height - 1)//1 and
+          View.dist(spot, View.pos(closest)) > now
+      end)
+      |> Enum.min_by(&{View.dist(&1, home), &1}, fn -> nil end)
+    else
+      _ -> nil
+    end
+  end
+
+  # The enemy fighters within 6 tiles are stronger than ours there.
+  defp outnumbered?(v, here) do
+    near? = &(View.dist(View.pos(&1), here) <= 6)
+    theirs = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))
+    ours = Enum.filter(Roles.fighters(v), near?)
+    Roles.strength(theirs) > Roles.strength(ours)
   end
 
   defp escort(v, s, outpost) do
@@ -216,22 +299,41 @@ defmodule Swarm.UnitBrain do
       else: {command(unit, intent), %{memory | intent: intent}}
   end
 
-  # The enemy starts and a coarse grid over the map, shared out between the scouts by id so
-  # they don't follow each other: with three opponents, each scout gets one enemy start.
+  # Scouts share the work by id: the first watches our nearest neighbor, the next our other
+  # neighbor (`Swarm.Roles.neighbors/1`), and the rest roam the whole map. With fewer scouts than
+  # that, the neighbors are covered first.
   defp my_spots(v, unit) do
-    # Grid points right by an enemy start would just be that start again.
-    grid =
-      for x <- 8..(v.map_width - 1)//16,
-          y <- 8..(v.map_height - 1)//16,
-          not Enum.any?(v.enemy_starts, &(View.dist(&1, {x, y}) <= @scout_sight)),
-          do: {x, y}
-
     scouts = v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.sort()
-    n = length(scouts)
     me = Enum.find_index(scouts, &(&1 == unit["id"]))
 
-    for {spot, i} <- Enum.with_index(Enum.uniq(v.enemy_starts ++ grid)), rem(i, n) == me, do: spot
+    case Enum.at(Roles.neighbors(v), me) do
+      {start, slot} -> neighbor_spots(v, start, slot)
+      nil -> all_spots(v)
+    end
   end
+
+  # Around one neighbor: their start, their buildings we know of, the grid near their base, and
+  # halfway between them and us, where an attack from them would come through.
+  defp neighbor_spots(v, start, slot) do
+    buildings = for b <- v.enemy_buildings ++ v.remembered, b["owner"] == slot, do: View.pos(b)
+    near = for spot <- grid(v), View.dist(spot, start) <= @neighbor_area, do: spot
+
+    way =
+      case v.cc do
+        nil -> []
+        cc -> [{div(elem(start, 0) + elem(View.pos(cc), 0), 2), div(elem(start, 1) + elem(View.pos(cc), 1), 2)}]
+      end
+
+    Enum.uniq([start | buildings] ++ near ++ way)
+  end
+
+  # Every enemy start and the grid, minus grid points right by a start (that start again).
+  defp all_spots(v) do
+    grid = Enum.reject(grid(v), fn spot -> Enum.any?(v.enemy_starts, &(View.dist(&1, spot) <= @scout_sight)) end)
+    Enum.uniq(v.enemy_starts ++ grid)
+  end
+
+  defp grid(v), do: for(x <- 8..(v.map_width - 1)//16, y <- 8..(v.map_height - 1)//16, do: {x, y})
 
   # The spot seen longest ago (never seen first); closest on a tie.
   defp next_spot(v, spots, seen, here) do

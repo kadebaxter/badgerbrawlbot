@@ -293,13 +293,17 @@ defmodule Swarm.BrainTest do
       end)
     end
 
-    test "trains one scout once a Barracks is done" do
+    test "a scout per neighbor plus one roaming: two in a 1v1, once a Barracks is done" do
       barracks = building(2, "Barracks", 11, 7)
       {_, commands, _} = plan(units: workers(20), buildings: [barracks], ore: 1000)
       assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Scout"}, &1))
 
-      scout = unit(300, "Scout", 30, 30)
-      {_, commands, _} = plan(units: [scout | workers(20)], buildings: [barracks], ore: 1000)
+      one = [unit(300, "Scout", 30, 30)]
+      {_, commands, _} = plan(units: one ++ workers(20), buildings: [barracks], ore: 1000)
+      assert Enum.any?(commands, &(&1["unitType"] == "Scout"))
+
+      two = [unit(301, "Scout", 20, 20) | one]
+      {_, commands, _} = plan(units: two ++ workers(20), buildings: [barracks], ore: 1000)
       refute Enum.any?(commands, &(&1["unitType"] == "Scout"))
     end
 
@@ -359,10 +363,49 @@ defmodule Swarm.BrainTest do
     test "launches and recalls say why" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
       {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(12)], weak)
-      assert why == "wave 1: 9 attackers, strength 8910 vs 1980 known"
+      assert why == "wave 1 at player 1: 9 attackers, strength 8910 vs 1980 known"
 
       four_left = Enum.slice(soldiers(12), 0..3) ++ Enum.slice(soldiers(12), 9..11)
       assert {%{why: [{:wave_recalled, "wave 1: only 4 left"}]}, _, _} = plan([units: four_left], memory)
+    end
+
+    test "goes after the weaker of the two nearest opponents, never one across the map" do
+      # Us at (7, 7). Neighbors at (56, 7) and (7, 56); across the map at (56, 56).
+      four = fn survival ->
+        Map.update!(state(units: soldiers(20)), "players", fn [me | _] ->
+          [me |
+             for {slot, x, y} <- [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}] do
+               %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y},
+                 "score" => %{"survival" => survival[slot], "total" => 0}}
+             end]
+        end)
+      end
+
+      {s, _, _} = Brain.plan(View.new(four.(%{1 => 3000, 2 => 1200, 3 => 100})), nil, terrain())
+      assert %{target: {7, 56}, wave: %{owner: 2}} = s
+
+      {s, _, _} = Brain.plan(View.new(four.(%{1 => 900, 2 => 1200, 3 => 100})), nil, terrain())
+      assert %{target: {56, 7}, wave: %{owner: 1}} = s
+    end
+
+    test "a wave sticks to the opponent it went after" do
+      two = fn survival ->
+        Map.update!(state(units: soldiers(20)), "players", fn [me, them] ->
+          [me, Map.put(them, "score", %{"survival" => survival[1], "total" => 0}),
+           %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56},
+             "score" => %{"survival" => survival[2], "total" => 0}}]
+        end)
+      end
+
+      {%{wave: %{owner: 2}}, _, memory} = Brain.plan(View.new(two.(%{1 => 3000, 2 => 500})), nil, terrain())
+      # Player 1 is now the weaker; the wave out stays on player 2.
+      assert {%{target: {7, 56}, wave: %{owner: 2}}, _, _} =
+               Brain.plan(View.new(two.(%{1 => 100, 2 => 500})), memory, terrain())
+    end
+
+    test "the target is that opponent's building nearest us" do
+      buildings = [building(9, "Barracks", 40, 40, 1), building(8, "Barracks", 30, 30, 1)]
+      assert {%{target: {30, 30}}, _, _} = plan(units: soldiers(6), buildings: buildings)
     end
 
     test "never fewer than eight in a wave" do
@@ -432,10 +475,28 @@ defmodule Swarm.BrainTest do
       assert [%{"buildingType" => "GuardTower"}] = builds(commands)
     end
 
-    test "the SiegeWorkshop comes once SiegeEngineering is researched" do
-      v = View.new(put_in(state(units: workers(20), buildings: built(), ore: 1000), ["you", "upgrades"], ["SiegeEngineering"]))
-      {_, commands, _} = Brain.plan(v, nil, terrain())
+    test "the SiegeWorkshop waits for a defensive army of fifteen" do
+      researched = fn units ->
+        View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], ["SiegeEngineering"]))
+      end
+
+      {_, commands, _} = Brain.plan(researched.(workers(20) ++ soldiers(14)), nil, terrain())
+      refute Enum.any?(builds(commands), &(&1["buildingType"] == "SiegeWorkshop"))
+
+      {_, commands, _} = Brain.plan(researched.(workers(20) ++ soldiers(15)), nil, terrain())
       assert [%{"buildingType" => "SiegeWorkshop"}] = builds(commands)
+    end
+
+    test "SiegeEngineering is skipped in the research order until then" do
+      done = ["Harvesting1", "Weapons1", "Armor1"]
+      v = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], done)) end
+      research = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
+
+      {_, commands, _} = Brain.plan(v.(workers(20) ++ soldiers(10)), nil, terrain())
+      assert research.(commands) == "Harvesting2"
+
+      {_, commands, _} = Brain.plan(v.(workers(20) ++ soldiers(15)), nil, terrain())
+      assert research.(commands) == "SiegeEngineering"
     end
 
     test "a SiegeWorkshop trains Trebuchets, up to two" do
@@ -446,6 +507,38 @@ defmodule Swarm.BrainTest do
       trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 9, 9)
       {_, commands, _} = plan(units: trebs ++ workers(20), buildings: [shop | built()], ore: 1000)
       refute Enum.any?(commands, &(&1["unitType"] == "Trebuchet"))
+    end
+
+    test "an outpost gets a Guard Tower, without needing to be rich" do
+      outpost = building(20, "ResourceDepot", 30, 30)
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(30), buildings: [outpost | built()], ore: 300)
+      assert [%{"buildingType" => "GuardTower", "x" => x, "y" => y}] = builds(commands)
+      assert View.dist({x, y}, {30, 30}) in 2..4
+
+      # Once it has one, no more.
+      tower = building(21, "GuardTower", 32, 32)
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(30), buildings: [outpost, tower | built()], ore: 300)
+      assert builds(commands) == []
+    end
+
+    test "short of ore for a Trebuchet, it saves up instead of training soldiers" do
+      shop = building(10, "SiegeWorkshop", 3, 10)
+      # By now: a scout out, and the TechLab busy, so only the Trebuchet wants the ore.
+      units = [unit(300, "Scout", 40, 40), unit(301, "Scout", 20, 40) | workers(20) ++ soldiers(30)]
+      lab = Map.put(building(6, "TechLab", 7, 12), "research", %{"upgrade" => "Harvesting2"})
+      buildings = [shop, lab | Enum.reject(built(), &(&1["id"] == 6))]
+
+      {_, commands, _} = plan(units: units, buildings: buildings, ore: 300)
+      refute Enum.any?(commands, &(&1["type"] == "Produce" and &1["unitType"] in ["Trebuchet", "Soldier", "Archer"]))
+
+      {_, commands, _} = plan(units: units, buildings: buildings, ore: 360)
+      assert Enum.any?(commands, &(&1["unitType"] == "Trebuchet"))
+    end
+
+    test "but below the army floor, soldiers still come first" do
+      shop = building(10, "SiegeWorkshop", 3, 10)
+      {_, commands, _} = plan(units: workers(20), buildings: [shop | built()], ore: 300)
+      assert Enum.any?(commands, &(&1["unitType"] == "Soldier"))
     end
 
     test "Barracks queue up to five" do

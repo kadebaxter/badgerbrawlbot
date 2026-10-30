@@ -29,7 +29,9 @@ defmodule Swarm.View do
     deposits: [],
     enemy_starts: [],
     # start position => player slot, for the opponents still in
-    start_owner: %{}
+    start_owner: %{},
+    # player slot => survival score (the ore value of everything they have alive), opponents only
+    enemy_survival: %{}
   ]
 
   @type t :: %__MODULE__{}
@@ -81,6 +83,13 @@ defmodule Swarm.View do
           p["slot"] != me and not p["eliminated"],
           into: %{},
           do: {pos(p["startPosition"]), p["slot"]}
+        ),
+      enemy_survival:
+        for(
+          p <- others,
+          not p["eliminated"],
+          into: %{},
+          do: {p["slot"], get_in(p, ["score", "survival"]) || 0}
         )
     }
   end
