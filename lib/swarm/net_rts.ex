@@ -28,7 +28,11 @@ defmodule Swarm.NetRts do
 
   def match_by_name(client, name), do: request(client, :get, "/api/v1/matches/named/#{name}")
 
+  def match(client, match_id), do: request(client, :get, "/api/v1/matches/#{match_id}")
+
   def join(client, match_id), do: request(client, :post, "/api/v1/matches/#{match_id}/join")
+
+  def leave(client, match_id), do: request(client, :post, "/api/v1/matches/#{match_id}/leave")
 
   def map(client, match_id), do: request(client, :get, "/api/v1/matches/#{match_id}/map")
 

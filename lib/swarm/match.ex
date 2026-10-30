@@ -37,14 +37,84 @@ defmodule Swarm.Match do
   is how a new leader takes over. Errors are the server's codes, e.g. `MATCH_CLOSED` (a round is
   being played; try again between rounds) or `MATCH_FINISHED`.
   """
-  def join_league(client, name) do
-    with {:ok, %{"matchId" => id}} <- NetRts.match_by_name(client, name),
+  def join_league(client, name_or_id) do
+    with {:ok, id} <- resolve(client, name_or_id),
          {:ok, _match} <- NetRts.join(client, id) do
       {:ok, id}
     else
       {:error, %{code: code, message: message}} -> {:error, code, message}
       {:error, other} -> {:error, "HTTP_ERROR", inspect(other)}
     end
+  end
+
+  # A match id is used as it is; a name is looked up.
+  defp resolve(client, name_or_id) do
+    if id?(name_or_id) do
+      {:ok, name_or_id}
+    else
+      with {:ok, %{"matchId" => id}} <- NetRts.match_by_name(client, name_or_id), do: {:ok, id}
+    end
+  end
+
+  @doc "Whether `s` looks like a match id (a UUID)."
+  def id?(s), do: is_binary(s) and s =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  @doc """
+  Takes a seat in the match with this id. `{:ok, :league}` if it is a league match (played in
+  rounds: join it with `join_league/2` instead), `{:ok, :joined}` once seated (already being
+  seated counts), else the server's `{:error, code, message}`.
+  """
+  def enter(client, id) do
+    with {:ok, match} <- NetRts.match(client, id) do
+      if match["heats"] != nil do
+        {:ok, :league}
+      else
+        case NetRts.join(client, id) do
+          {:ok, _} -> {:ok, :joined}
+          {:error, %{code: "ALREADY_JOINED"}} -> {:ok, :joined}
+          {:error, %{code: code, message: message}} -> {:error, code, message}
+          {:error, other} -> {:error, "HTTP_ERROR", inspect(other)}
+        end
+      end
+    else
+      {:error, %{code: code, message: message}} -> {:error, code, message}
+      {:error, other} -> {:error, "HTTP_ERROR", inspect(other)}
+    end
+  end
+
+  @doc """
+  Creates a match with `seats` seats that starts once they are all taken: ours, the house bots
+  in `bots`, and other people's bots joining by id or by `name`. `{:ok, id}` or
+  `{:error, code, message}`.
+  """
+  def host(client, %{seats: seats} = request) do
+    case NetRts.create_match(client, host_body(request)) do
+      {:ok, %{"matchId" => id}} ->
+        open = seats - 1 - length(Map.get(request, :bots, []))
+        named = if request[:name], do: " (named #{request[:name]})", else: ""
+
+        Logger.info(
+          "Hosting match #{id}#{named}: #{seats} seats, waiting for #{open} more bot(s). " <>
+            "Others join with POST /api/v1/matches/#{id}/join#{if request[:name], do: " or by name", else: ""}. " <>
+            "Watch: #{config(:server)}/#/match/#{request[:name] || id}"
+        )
+
+        {:ok, id}
+
+      {:error, %{code: code, message: message}} ->
+        {:error, code, message}
+
+      {:error, other} ->
+        {:error, "HTTP_ERROR", inspect(other)}
+    end
+  end
+
+  @doc false
+  def host_body(request) do
+    tick_ms = Application.get_env(:swarm, :tick_ms)
+    settings = if tick_ms, do: %{tickIntervalMs: tick_ms}, else: %{}
+    body = %{maxPlayers: request.seats, houseBots: Map.get(request, :bots, []), settings: settings}
+    if request[:name], do: Map.put(body, :name, request.name), else: body
   end
 
   @doc """

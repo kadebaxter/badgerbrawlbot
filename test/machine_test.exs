@@ -61,6 +61,41 @@ defmodule Swarm.MachineTest do
     assert %{matches_wanted: 0} = run([{:play, 5}, :stop])
   end
 
+  describe "joining by id and hosting" do
+    test "a request waits for the leader; starting the match settles it" do
+      state = run([{:join_match, "m9"}])
+      assert %{join_match: "m9"} = state
+      assert %{join_match: nil, host: nil, match_id: "m9"} = run([{:match_started, "m9"}], state)
+
+      state = run([{:host, %{seats: 6, bots: [], name: "kaden-brawl"}}])
+      assert %{host: %{seats: 6}} = state
+      assert %{host: nil} = run([:request_failed], state)
+    end
+
+    test "refused while we play something, or something is already asked for" do
+      busy = run([{:match_started, "m1"}])
+      assert {_, {:error, :busy}} = Machine.apply(@meta, {:join_match, "m2"}, busy)
+      assert {_, {:error, :busy}} = Machine.apply(@meta, {:host, %{seats: 4}}, busy)
+
+      league = run([{:join_league, "season-week3"}])
+      assert {_, {:error, :busy}} = Machine.apply(@meta, {:join_match, "m2"}, league)
+
+      asked = run([{:join_match, "m2"}])
+      assert {_, {:error, :busy}} = Machine.apply(@meta, {:host, %{seats: 4}}, asked)
+    end
+
+    test "leaving before the start doesn't count as a match played" do
+      state = run([{:match_started, "m1"}, {:left, "m1"}])
+      assert %{match_id: nil, matches_played: 0} = state
+      assert run([{:left, "other"}], state) == state
+    end
+
+    test "a state saved before these existed still takes them" do
+      old = Machine.init(%{matches: 1}) |> Map.drop([:join_match, :host])
+      assert %{join_match: "m9"} = run([{:join_match, "m9"}], old)
+    end
+  end
+
   test "play asks for more matches" do
     state = run([{:match_started, "m1"}, {:match_finished, "m1"}, {:play, 2}])
     assert %{matches_played: 1, matches_wanted: 3} = state

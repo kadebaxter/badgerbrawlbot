@@ -8,6 +8,9 @@ defmodule Swarm do
       Swarm.play(3)    # three more (each call adds to the queue: see Swarm.status())
       Swarm.stop()     # no more matches after the current one
       Swarm.join("season-week3")   # play a league match, round after round, until it closes
+      Swarm.join_match("a9cb…")    # take a seat in someone's match by id, and play it
+      Swarm.host(6, name: "kaden-brawl", bots: ["rusher"])   # host a match others join
+      Swarm.leave_match()          # give up our seat in a match that hasn't started
       Swarm.leave()    # stop after the current round (back to practice)
       Swarm.client()   # a NetRts client for the configured server and key
       Swarm.enemies()  # the enemy fighters the leader remembers, per opponent
@@ -34,7 +37,7 @@ defmodule Swarm do
 
     IO.puts("""
     leader:  #{leader}
-    league:  #{shared[:league] || "none"}
+    league:  #{shared[:league] || "none"}#{pending(shared)}
     match:   #{shared[:match_id] || "none"}  (played #{shared[:matches_played]} of #{shared[:matches_wanted]})
     nodes:
     #{Enum.map_join(Units.nodes(), "\n", &"  #{&1}#{if &1 == leader, do: " ★", else: ""}  #{Map.get(per_node, &1, 0)} units")}
@@ -55,6 +58,68 @@ defmodule Swarm do
   def stop do
     {:ok, :ok, _leader} = Ra.command(:stop)
     :ok
+  end
+
+  @doc """
+  Takes a seat in the match with this id (someone else's practice match, say) and plays it once
+  it fills up. A league match id is joined round by round, like `join/1`. Refused while we play
+  something already.
+  """
+  def join_match(id) do
+    if Match.id?(id), do: request({:join_match, String.downcase(id)}), else: {:error, :not_a_match_id}
+  end
+
+  @doc """
+  Hosts a match with `seats` seats (2..16) that starts once every one is taken: ours, the house
+  bots in `bots:`, and other people's bots, which join by its id or by `name:` (3–32 letters,
+  digits, `-` or `_`). The leader logs the id and how to join. Refused while we play something.
+  """
+  def host(seats, opts \\ []) when seats in 2..16 do
+    bots = Keyword.get(opts, :bots, [])
+    name = Keyword.get(opts, :name)
+
+    cond do
+      length(bots) > seats - 1 -> {:error, :more_house_bots_than_seats}
+      name != nil and not (name =~ ~r/^[A-Za-z0-9_-]{3,32}$/) -> {:error, :bad_name}
+      true -> request({:host, %{seats: seats, bots: bots, name: name}})
+    end
+  end
+
+  def host(_seats, _opts), do: {:error, :seats_must_be_2_to_16}
+
+  @doc "Gives up our seat in the match we are waiting for (joined or hosted), before it starts."
+  def leave_match do
+    with {:ok, %{match_id: id}, _} when id != nil <- Ra.state() do
+      case NetRts.leave(client(), id) do
+        {:ok, _} -> finish_leaving(id)
+        {:error, %{code: "NOT_A_PARTICIPANT"}} -> finish_leaving(id)
+        {:error, %{code: code, message: message}} -> {:error, code, message}
+        {:error, other} -> {:error, other}
+      end
+    else
+      _ -> {:error, :not_in_a_match}
+    end
+  end
+
+  defp finish_leaving(id) do
+    {:ok, :ok, _} = Ra.command({:left, id})
+    :ok
+  end
+
+  defp request(cmd) do
+    case Ra.command(cmd) do
+      {:ok, :ok, _} -> :ok
+      {:ok, {:error, :busy}, _} -> {:error, :busy_playing_a_match}
+      other -> {:error, other}
+    end
+  end
+
+  defp pending(shared) do
+    cond do
+      shared[:join_match] -> "\n    joining: #{shared.join_match}"
+      shared[:host] -> "\n    hosting: #{shared.host.seats} seats#{if shared.host.name, do: " (#{shared.host.name})"}"
+      true -> ""
+    end
   end
 
   @doc "Stops playing the league match once the current round is over."

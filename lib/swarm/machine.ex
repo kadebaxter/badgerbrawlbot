@@ -23,13 +23,20 @@ defmodule Swarm.Machine do
       # House bots to play from now on, set by `Swarm.play/2`; nil means the configured ones.
       opponents: nil,
       # The league match we are in (its name), set by `Swarm.join/1`. It comes before practice.
-      league: nil
+      league: nil,
+      # A match to join by id (`Swarm.join_match/1`) or to host (`Swarm.host/2`), until the
+      # leader has done it. Only taken while we play nothing.
+      join_match: nil,
+      host: nil
     }
   end
 
   @impl true
-  def apply(_meta, {:match_started, id}, state),
-    do: {%{state | match_id: id, brain: nil, last_tick: 0}, :ok}
+  # Starting a match also settles a pending join or host request: that was it.
+  def apply(_meta, {:match_started, id}, state) do
+    state = %{state | match_id: id, brain: nil, last_tick: 0}
+    {Map.merge(state, %{join_match: nil, host: nil}), :ok}
+  end
 
   def apply(_meta, {:match_finished, id}, %{match_id: id} = state),
     do: {%{state | match_id: nil, matches_played: state.matches_played + 1}, :ok}
@@ -58,6 +65,22 @@ defmodule Swarm.Machine do
     {%{state | matches_wanted: state.matches_played + current}, :ok}
   end
 
+  # Join or host only while we play nothing, so we are never seated in a match nobody plays.
+  def apply(_meta, {:join_match, id}, state) do
+    if busy?(state), do: {state, {:error, :busy}}, else: {Map.put(state, :join_match, id), :ok}
+  end
+
+  def apply(_meta, {:host, request}, state) do
+    if busy?(state), do: {state, {:error, :busy}}, else: {Map.put(state, :host, request), :ok}
+  end
+
+  # The leader couldn't do it (match full, gone, a bad name...): drop the request.
+  def apply(_meta, :request_failed, state), do: {Map.merge(state, %{join_match: nil, host: nil}), :ok}
+
+  # We gave up our seat before the match started: it doesn't count as played.
+  def apply(_meta, {:left, id}, %{match_id: id} = state), do: {%{state | match_id: nil, brain: nil}, :ok}
+  def apply(_meta, {:left, _other}, state), do: {state, :ok}
+
   def apply(_meta, {:join_league, name}, state), do: {Map.put(state, :league, name), :ok}
 
   # The league is over (or we left it): no more rounds. A heat being played is finished first.
@@ -68,6 +91,11 @@ defmodule Swarm.Machine do
   end
 
   def apply(_meta, _unknown, state), do: {state, {:error, :unknown_command}}
+
+  defp busy?(state) do
+    state.match_id != nil or Map.get(state, :league) != nil or Map.get(state, :join_match) != nil or
+      Map.get(state, :host) != nil
+  end
 
   # Map.put, not %{state | ...}: a state saved by an older version has no :opponents yet.
   defp play(state, n, opponents) do

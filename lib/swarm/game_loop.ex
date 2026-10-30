@@ -121,6 +121,36 @@ defmodule Swarm.GameLoop do
     end
   end
 
+  def handle_info({:wait_start, id, memory}, st) do
+    {:ok, shared, _} = Ra.state()
+
+    if shared.match_id != id do
+      # We left it (Swarm.leave_match/0) or it was settled elsewhere: back to the start.
+      send(self(), :start)
+      {:noreply, %{st | waiting: false}}
+    else
+      case NetRts.state(st.client, id, 0) do
+        {:ok, state} ->
+          start_playing(id, memory, %{st | waiting: false}, state)
+
+        {:error, %{code: "MATCH_NOT_STARTED"}} ->
+          unless st.waiting, do: Logger.info("Waiting for match #{id} to start...")
+          send(self(), {:wait_start, id, memory})
+          {:noreply, %{st | waiting: true}}
+
+        {:error, %{code: code}} when code in ["MATCH_NOT_FOUND", "NOT_FOUND", "NOT_A_PARTICIPANT"] ->
+          # It ended without us (every node was down, say): record it and move on.
+          Logger.warning("Match #{id} is no longer live (#{code}); counting it as finished")
+          finish(%{st | match_id: id, waiting: false})
+
+        {:error, reason} ->
+          Logger.warning("Waiting for match #{id}: #{inspect(reason)}; retrying")
+          Process.send_after(self(), {:wait_start, id, memory}, 2_000)
+          {:noreply, st}
+      end
+    end
+  end
+
   # A unit that answered after the deadline.
   def handle_info({:command, _ref, _id, _cmd}, st), do: {:noreply, st}
 
@@ -135,6 +165,12 @@ defmodule Swarm.GameLoop do
       shared.match_id ->
         Logger.info("Resuming match #{shared.match_id}")
         play(shared.match_id, shared.brain, st)
+
+      id = Map.get(shared, :join_match) ->
+        join_match(id, st)
+
+      request = Map.get(shared, :host) ->
+        host(request, st)
 
       shared.matches_played < shared.matches_wanted ->
         Logger.info("Starting match #{shared.matches_played + 1} of #{shared.matches_wanted}")
@@ -186,15 +222,52 @@ defmodule Swarm.GameLoop do
     end
   end
 
-  defp play(match_id, memory, st, state \\ nil) do
-    case state || Match.wait_for_start!(st.client, match_id) do
-      :gone ->
-        # It ended without us (every node was down, say): record it and move on.
-        Logger.warning("Match #{match_id} is no longer live; counting it as finished")
-        finish(%{st | match_id: match_id})
+  # Join someone's match by id. A league match goes to the league flow (every round).
+  defp join_match(id, st) do
+    case Match.enter(st.client, id) do
+      {:ok, :joined} ->
+        Logger.info("Joined match #{id}; waiting for it to fill and start")
+        {:ok, :ok, _} = Ra.command({:match_started, id})
+        play(id, nil, st)
 
-      state ->
-        start_playing(match_id, memory, st, state)
+      {:ok, :league} ->
+        Logger.info("Match #{id} is a league match: joining it round by round")
+        Ra.command({:join_league, id})
+        Ra.command(:request_failed)
+        send(self(), :start)
+        {:noreply, st}
+
+      {:error, code, message} ->
+        Logger.error("Can't join match #{id}: #{code}: #{message}")
+        Ra.command(:request_failed)
+        send(self(), :start)
+        {:noreply, st}
+    end
+  end
+
+  # Create a match others join, and wait for every seat to be taken.
+  defp host(request, st) do
+    case Match.host(st.client, request) do
+      {:ok, id} ->
+        {:ok, :ok, _} = Ra.command({:match_started, id})
+        play(id, nil, st)
+
+      {:error, code, message} ->
+        Logger.error("Can't host a match: #{code}: #{message}")
+        Ra.command(:request_failed)
+        send(self(), :start)
+        {:noreply, st}
+    end
+  end
+
+  # With a state in hand, play; otherwise wait for the match to start, one long poll at a time
+  # (`{:wait_start, ...}`), so a long wait for players never blocks this process.
+  defp play(match_id, memory, st, state \\ nil) do
+    if state do
+      start_playing(match_id, memory, st, state)
+    else
+      send(self(), {:wait_start, match_id, memory})
+      {:noreply, st}
     end
   end
 

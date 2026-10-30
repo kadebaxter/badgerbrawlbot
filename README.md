@@ -52,3 +52,18 @@ The leader joins, waits for each round, plays the heat with a fresh brain, and w
 the admin closes the match. The league lives in the replicated state, so if the leader's node dies
 another node rejoins (joining twice is harmless) and picks up the same heat. If the admin hasn't
 created the match yet, the leader keeps looking every 10 s. The bot must be Discord-verified.
+
+## Other people's matches, and hosting
+
+```bash
+scripts/swarm.sh join-match <id>                        # take a seat in a match by its id, play it once it fills
+scripts/swarm.sh host 6 --name kaden-brawl              # host 6 seats; starts when 5 other bots have joined
+scripts/swarm.sh host 6 --name kaden-brawl rusher       # ... with one seat taken by a house rusher
+scripts/swarm.sh unhost                                 # give up our seat before it starts
+```
+
+Both go through the replicated state, so whichever node leads does them and a new leader carries
+on; both are refused while the swarm is already playing. The leader's log (`scripts/swarm.sh
+logs`) shows the hosted match's id and name, which other bots join with
+`POST /api/v1/matches/{id}/join`. A league match id given to `join-match` is played round by
+round, like `join`.

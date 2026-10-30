@@ -6,8 +6,11 @@
 #   scripts/swarm.sh status                 # leader, league, match, units per node
 #   scripts/swarm.sh enemies                # what the leader knows of the enemy armies
 #   scripts/swarm.sh stop                   # no more matches after the current one
-#   scripts/swarm.sh join season-week3      # play a league match, round after round
+#   scripts/swarm.sh join season-week3      # play a league match, round after round (name or id)
 #   scripts/swarm.sh leave                  # no more league rounds after this one
+#   scripts/swarm.sh join-match <id>        # take a seat in someone's match, play it when it fills
+#   scripts/swarm.sh host 6 [--name kaden-brawl] [house bots...]   # host a match others join
+#   scripts/swarm.sh unhost                 # give up our seat before it starts (joined or hosted)
 #   scripts/swarm.sh shell                  # an iex on a swarm node (leave with Ctrl+C, a)
 #   scripts/swarm.sh logs                   # follow the leader's log
 #
@@ -17,7 +20,7 @@ set -euo pipefail
 ns=${SWARM_NAMESPACE:-netrts}
 
 usage() {
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -57,6 +60,25 @@ case "$cmd" in
   stop) rpc 'Swarm.stop()' ;;
   join) rpc "Swarm.join(\"$(name "${1:?usage: join <league match name>}")\")" ;;
   leave) rpc 'Swarm.leave()' ;;
+  join-match)
+    id=${1:?usage: join-match <match id>}
+    [[ $id =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] ||
+      { echo "not a match id: $id" >&2; exit 1; }
+    rpc "IO.inspect(Swarm.join_match(\"$id\"))"
+    ;;
+  host)
+    seats=${1:?usage: host <seats> [--name NAME] [house bots...]}
+    [[ $seats =~ ^[0-9]+$ ]] || { echo "seats must be a number: $seats" >&2; exit 1; }
+    shift
+    opts=""
+    if [[ ${1:-} == --name ]]; then opts=", name: \"$(name "${2:?--name needs a name}")\""; shift 2; fi
+    bots=()
+    for b in "$@"; do bots+=("\"$(name "$b")\""); done
+    list=$(IFS=,; echo "${bots[*]}")
+    rpc "IO.inspect(Swarm.host($seats, bots: [$list]$opts))"
+    echo "the leader's log has the match id and how others join (scripts/swarm.sh logs)"
+    ;;
+  unhost | leave-match) rpc 'IO.inspect(Swarm.leave_match())' ;;
   shell) kubectl -n "$ns" exec -it "$(pod)" -- bin/swarm remote ;;
   logs)
     leader=$(kubectl -n "$ns" exec "$(pod)" -- bin/swarm rpc \
