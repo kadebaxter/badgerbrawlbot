@@ -1,5 +1,5 @@
-# Tests on every push and pull request; on main, also builds the image and pushes it to GHCR.
-# Nothing here touches the cluster: deploy with kubectl (see k8s/README.md).
+# The pipeline: build and test side by side; once both pass on main, build the image and push it
+# to GHCR. Nothing here touches the cluster.
 name: CI
 
 on:
@@ -8,25 +8,14 @@ on:
   pull_request:
 
 jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
   test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: "28.5"
-          elixir-version: "1.20.3"
-      - uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: mix-${{ hashFiles('mix.lock') }}
-      - run: mix deps.get
-      - run: mix test --warnings-as-errors
+    uses: ./.github/workflows/test.yml
 
   image:
-    needs: test
+    needs: [build, test]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:

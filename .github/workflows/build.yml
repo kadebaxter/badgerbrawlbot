@@ -1,0 +1,17 @@
+# Compiles the production build; a warning fails it. Called by ci.yml.
+name: Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-elixir
+        with:
+          mix-env: prod
+      - run: mix compile --warnings-as-errors

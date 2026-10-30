@@ -1,0 +1,24 @@
+# Shared by build and test: Elixir/OTP as in development, cached deps and _build, deps fetched.
+name: Set up Elixir
+description: Install Elixir and OTP, restore the mix cache, fetch dependencies
+inputs:
+  mix-env:
+    description: MIX_ENV to fetch and cache for
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: "28.5"
+        elixir-version: "1.20.3"
+    - uses: actions/cache@v4
+      with:
+        path: |
+          deps
+          _build
+        key: mix-${{ inputs.mix-env }}-${{ hashFiles('mix.lock') }}
+    - run: mix deps.get
+      shell: bash
+      env:
+        MIX_ENV: ${{ inputs.mix-env }}
