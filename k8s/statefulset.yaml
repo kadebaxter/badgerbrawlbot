@@ -1,0 +1,79 @@
+# Three BEAM nodes, one per machine, each with its own volume for its ra log. A pod that dies
+# comes back with the same name and the same volume, so its ra server restarts from its log.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: swarm
+  namespace: netrts
+spec:
+  serviceName: swarm
+  replicas: 3
+  # All at once: ra needs two of the three up to elect a leader.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: swarm
+  template:
+    metadata:
+      labels:
+        app: swarm
+    spec:
+      # One pod per machine: the point is that messages cross a real network.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: swarm
+              topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: ghcr
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: swarm
+          # Set by kubectl set image on deploy (see README.md); :latest until then.
+          image: ghcr.io/kadebaxter/badgerbrawlbot:latest
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RELEASE_DISTRIBUTION
+              value: name
+            - name: RELEASE_NODE
+              value: swarm@$(POD_NAME).swarm.netrts.svc.cluster.local
+            - name: RELEASE_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  name: swarm
+                  key: cookie
+            - name: NETRTS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: swarm
+                  key: api-key
+            - name: NETRTS_SERVER
+              value: https://netrts.snowse.io
+            - name: SWARM_PEERS
+              value: swarm@swarm-0.swarm.netrts.svc.cluster.local,swarm@swarm-1.swarm.netrts.svc.cluster.local,swarm@swarm-2.swarm.netrts.svc.cluster.local
+            # Idle on start; play from a remote shell (Swarm.play / Swarm.join).
+            - name: SWARM_MATCHES
+              value: "0"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi
