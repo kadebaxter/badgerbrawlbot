@@ -31,6 +31,10 @@ spec:
         - name: swarm
           # Set by kubectl set image on deploy (see README.md); :latest until then.
           image: ghcr.io/kadebaxter/badgerbrawlbot:latest
+          # /metrics (scraped by k8s/observability/podmonitor.yaml) and /health.
+          ports:
+            - name: metrics
+              containerPort: 9568
           env:
             - name: POD_NAME
               valueFrom:

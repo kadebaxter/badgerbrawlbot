@@ -271,6 +271,15 @@ defmodule Swarm.BrainTest do
       assert {%{target: {40, 7}, wave: %{}}, _, _} = Brain.plan(View.new(three), memory, terrain())
     end
 
+    test "launches and recalls say why" do
+      weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
+      {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(12)], weak)
+      assert why == "wave 1: 9 attackers, strength 8910 vs 1980 known"
+
+      four_left = Enum.slice(soldiers(12), 0..3) ++ Enum.slice(soldiers(12), 9..11)
+      assert {%{why: [{:wave_recalled, "wave 1: only 4 left"}]}, _, _} = plan([units: four_left], memory)
+    end
+
     test "never fewer than eight in a wave" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(1)}
       assert {%{wave: nil}, _, _} = plan([units: soldiers(10)], weak)

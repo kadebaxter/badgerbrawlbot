@@ -79,14 +79,18 @@ defmodule Swarm.Match do
   def submit(client, match_id, tick, commands) do
     case NetRts.commands(client, match_id, commands) do
       {:ok, %{"results" => results}} ->
-        for %{"accepted" => false, "index" => i, "error" => err} <- results do
-          Logger.debug("tick #{tick}: rejected #{Enum.at(commands, i)["type"]}: #{err["message"]}")
-        end
+        rejected =
+          for %{"accepted" => false, "index" => i, "error" => err} <- results do
+            Logger.debug("tick #{tick}: rejected #{Enum.at(commands, i)["type"]}: #{err["message"]}")
+          end
 
+        Swarm.Metrics.inc(:swarm_commands_total, %{result: "accepted"}, length(results) - length(rejected))
+        Swarm.Metrics.inc(:swarm_commands_total, %{result: "rejected"}, length(rejected))
         :ok
 
       {:error, reason} ->
         Logger.warning("tick #{tick}: commands not sent: #{inspect(reason)}")
+        Swarm.Metrics.inc(:swarm_commands_total, %{result: "not_sent"}, length(commands))
         :error
     end
   end

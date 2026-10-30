@@ -30,7 +30,9 @@ defmodule Swarm.MixProject do
       {:ra, "~> 3.2"},
       {:libcluster, "~> 3.5"},
       {:req, "~> 0.7.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      # Serves /metrics and /health (see Swarm.Metrics).
+      {:bandit, "~> 1.14"}
     ]
   end
 end

@@ -37,6 +37,8 @@ if config_env() != :test do
     tick_ms: tick_ms,
     matches: String.to_integer(System.get_env("SWARM_MATCHES", "1")),
     peers: peers,
+    # /metrics and /health (Swarm.Metrics); 0 turns them off.
+    metrics_port: String.to_integer(System.get_env("SWARM_METRICS_PORT", "9568")),
     data_dir: Path.join(System.get_env("SWARM_DATA_DIR", "data"), to_string(node()))
 
   # scripts/iex.sh: a plain shell with no cluster, for trying things out.

@@ -1,0 +1,16 @@
+# Tells kube-prometheus-stack's Prometheus to scrape every swarm pod's /metrics. It only picks up
+# monitors labelled with its Helm release name, which is "monitoring" here.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: swarm
+  namespace: netrts
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: swarm
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 5s

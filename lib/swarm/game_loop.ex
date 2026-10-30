@@ -21,14 +21,15 @@ defmodule Swarm.GameLoop do
 
   use GenServer, restart: :transient
   require Logger
-  alias Swarm.{Brain, Match, NetRts, Ra, Units, View}
+  alias Swarm.{Brain, Decisions, Match, Metrics, NetRts, Ra, Units, View}
 
   def start_link(_), do: GenServer.start_link(__MODULE__, nil)
 
   @impl true
   def init(nil) do
     send(self(), :start)
-    {:ok, %{client: nil, match_id: nil, terrain: nil, state: nil, memory: nil, recent: %{}, idle: false, waiting: false}}
+    {:ok,
+     %{client: nil, match_id: nil, terrain: nil, state: nil, memory: nil, recent: %{}, idle: false, waiting: false, mode: nil}}
   end
 
   @impl true
@@ -189,11 +190,15 @@ defmodule Swarm.GameLoop do
     terrain = Match.terrain!(st.client, match_id)
     send(self(), :tick)
 
+    how = if memory, do: "took over match #{match_id} at tick #{state["tick"]}", else: "started match #{match_id}"
+    Decisions.log(:leader, state["tick"], "#{node()} #{how}")
+
     {:noreply,
      %{st | match_id: match_id, terrain: terrain, state: state, memory: memory || Brain.new_memory(), idle: false}}
   end
 
   defp tick(view, st) do
+    started = System.monotonic_time(:millisecond)
     {units, recent} = Units.reconcile(view.my_units, view.tick, st.recent)
     {strategy, commands, memory} = Brain.plan(view, st.memory, st.terrain)
 
@@ -225,7 +230,20 @@ defmodule Swarm.GameLoop do
         # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
         Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands)
         send(self(), :poll)
-        {:noreply, %{st | memory: memory, recent: recent}}
+
+        for {kind, text} <- Decisions.from_tick(view, strategy, commands, st.mode),
+            do: Decisions.log(kind, view.tick, text)
+
+        Metrics.record_tick(%{
+          view: view,
+          strategy: strategy,
+          memory: memory,
+          asked: map_size(units),
+          answered: length(replies),
+          seconds: (System.monotonic_time(:millisecond) - started) / 1000
+        })
+
+        {:noreply, %{st | memory: memory, recent: recent, mode: strategy.mode}}
 
       other ->
         Logger.warning("Lost leadership before tick #{view.tick} (#{inspect(other)}); not sending orders")
@@ -247,9 +265,11 @@ defmodule Swarm.GameLoop do
 
   defp finish(st) do
     Ra.command({:match_finished, st.match_id})
+    Decisions.log(:match_over, (st.state && st.state["tick"]) || 0, "match #{st.match_id}")
     Match.report(st.client, st.match_id)
+    Metrics.clear_game()
     send(self(), :start)
-    {:noreply, %{st | match_id: nil, state: nil, recent: %{}}}
+    {:noreply, %{st | match_id: nil, state: nil, recent: %{}, mode: nil}}
   end
 
   defp wave_info(nil), do: ""

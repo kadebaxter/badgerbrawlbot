@@ -102,14 +102,16 @@ defmodule Swarm.Brain do
 
   @type pos :: {integer, integer}
 
-  # `mode` is only a summary for the logs; units go by the rest.
+  # `mode` is only a summary for the logs; units go by the rest. `why` explains this tick's army
+  # decisions, [{kind, text}], for the decision log (`Swarm.Decisions`); units ignore it.
   @type strategy :: %{
           mode: :gather | :attack | :defend,
           target: pos() | nil,
           rally: pos() | nil,
           post: pos() | nil,
           threat: Roles.threat(),
-          wave: Roles.wave()
+          wave: Roles.wave(),
+          why: [{atom(), String.t()}]
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -141,14 +143,14 @@ defmodule Swarm.Brain do
 
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory),
-    do: {%{mode: :attack, target: attack_target(v), rally: nil, post: nil, threat: nil, wave: nil}, memory}
+    do: {%{mode: :attack, target: attack_target(v), rally: nil, post: nil, threat: nil, wave: nil, why: []}, memory}
 
   defp strategy(%View{} = v, memory) do
     rally = rally(v)
     threat = Roles.threat(v)
     # Any base under attack, outposts included, or our workers out in the field.
     attacked? = threat != nil or Roles.help_wanted(v) != []
-    {wave, next_wave} = wave(v, memory, rally, attacked?)
+    {wave, next_wave, why} = wave(v, memory, rally, attacked?)
 
     mode =
       cond do
@@ -157,7 +159,16 @@ defmodule Swarm.Brain do
         true -> :gather
       end
 
-    strategy = %{mode: mode, target: attack_target(v), rally: rally, post: post(v, rally), threat: threat, wave: wave}
+    strategy = %{
+      mode: mode,
+      target: attack_target(v),
+      rally: rally,
+      post: post(v, rally),
+      threat: threat,
+      wave: wave,
+      why: why
+    }
+
     {strategy, %{memory | wave: wave, next_wave: next_wave}}
   end
 
@@ -187,12 +198,20 @@ defmodule Swarm.Brain do
   # Near the end and behind on score: every fighter goes, including new ones.
   defp all_in?(v), do: v.tick >= v.max_ticks - @all_in_ticks and v.my_score < v.enemy_score
 
+  # Each returns {wave, next wave id, why}.
   defp all_in(v, memory) do
     members = v |> Roles.fighters() |> Enum.map(& &1["id"]) |> Enum.sort()
 
     case memory.wave do
-      %{all_in: true} = wave -> {%{wave | members: members}, memory.next_wave}
-      _ -> {%{id: memory.next_wave, members: members, all_in: true}, memory.next_wave + 1}
+      %{all_in: true} = wave ->
+        {%{wave | members: members}, memory.next_wave, []}
+
+      _ ->
+        why =
+          "behind on score (#{v.my_score} vs #{v.enemy_score}) with #{v.max_ticks - v.tick} ticks left: " <>
+            "all #{length(members)} fighters attack"
+
+        {%{id: memory.next_wave, members: members, all_in: true}, memory.next_wave + 1, [{:all_in, why}]}
     end
   end
 
@@ -201,12 +220,21 @@ defmodule Swarm.Brain do
   defp keep_wave(v, %{wave: wave} = memory) do
     alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
 
-    if length(alive) < @recall_below or outmatched?(v, alive),
-      do: {nil, memory.next_wave},
-      else: {%{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave}
+    cond do
+      length(alive) < @recall_below ->
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}]}
+
+      facing = outmatched(v, alive) ->
+        why = "wave #{wave.id}: outmatched, strength #{round(Roles.strength(alive))} vs #{round(facing)} nearby"
+        {nil, memory.next_wave, [{:wave_recalled, why}]}
+
+      true ->
+        {%{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave, []}
+    end
   end
 
-  defp outmatched?(v, alive) do
+  # The strength of what the wave is facing if it is more than the wave's own, else nil.
+  defp outmatched(v, alive) do
     n = length(alive)
     center = {div(Enum.sum_by(alive, & &1["x"]), n), div(Enum.sum_by(alive, & &1["y"]), n)}
     near? = &(View.dist(View.pos(&1), center) <= @wave_sight)
@@ -215,7 +243,7 @@ defmodule Swarm.Brain do
       Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
         Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1)))
 
-    Roles.strength(alive) < Roles.strength(facing)
+    if Roles.strength(alive) < Roles.strength(facing), do: Roles.strength(facing)
   end
 
   # With no base under attack, send the attackers waiting at the rally point once they are
@@ -233,14 +261,25 @@ defmodule Swarm.Brain do
     # With several opponents, only the one we are going after matters.
     owner = target_owner(v, attack_target(v))
 
+    ours = Roles.strength(staged)
+    theirs = enemy_strength(v, memory, owner)
+
     ready? =
       if scouted?,
-        do: length(staged) >= @min_wave and Roles.strength(staged) >= @margin * enemy_strength(v, memory, owner),
+        do: length(staged) >= @min_wave and ours >= @margin * theirs,
         else: length(staged) >= @first_wave
 
-    if not attacked? and ready?,
-      do: {%{id: memory.next_wave, members: staged |> Enum.map(& &1["id"]) |> Enum.sort()}, memory.next_wave + 1},
-      else: {nil, memory.next_wave}
+    if not attacked? and ready? do
+      why =
+        if scouted?,
+          do: "wave #{memory.next_wave}: #{length(staged)} attackers, strength #{round(ours)} vs #{round(theirs)} known",
+          else: "wave #{memory.next_wave}: #{length(staged)} attackers, nothing scouted yet"
+
+      wave = %{id: memory.next_wave, members: staged |> Enum.map(& &1["id"]) |> Enum.sort()}
+      {wave, memory.next_wave + 1, [{:wave_launched, why}]}
+    else
+      {nil, memory.next_wave, []}
+    end
   end
 
   @doc """

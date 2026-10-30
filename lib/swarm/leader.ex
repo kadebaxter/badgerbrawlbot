@@ -42,6 +42,9 @@ defmodule Swarm.Leader do
       DynamicSupervisor.terminate_child(Swarm.LeaderSupervisor, pid)
     end
 
+    # Game figures are the leader's to report.
+    Swarm.Metrics.clear_game()
+
     {:noreply, state}
   end
 

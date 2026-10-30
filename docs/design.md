@@ -255,6 +255,11 @@ League matches: `Swarm.join(name)` commits the league to the replicated state. T
 (idempotent, so a new leader simply joins again), long-polls `state?waitForTick=0` for each round,
 plays the heat with a fresh brain and its own map, then waits again until `MATCH_FINISHED`.
 
+Watching it: every node serves Prometheus metrics at `:9568/metrics` (`Swarm.Metrics`: game
+figures from the leader, and each node's own share of the swarm), and the leader logs each
+decision with its reason (`Swarm.Decisions`). `k8s/observability/` has the PodMonitor, Loki and
+Alloy settings, and a Grafana dashboard.
+
 4. **AI coach (next):** every ~40 ticks an LLM suggests settings for the brain, committed through `ra`.
 
 ---
