@@ -267,10 +267,85 @@ defmodule Swarm.BrainTest do
     assert {%{wave: nil}, _, _} = plan(units: away)
   end
 
-  test "units trained after the launch wait for the next wave" do
+  test "units trained after the launch follow the wave once five are at the rally point" do
+    # Wave 1 is 201..215; seven guards stay home.
     {_, _, memory} = plan(units: soldiers(22))
-    {%{wave: wave}, _, _} = plan([units: soldiers(30)], memory)
-    assert wave.id == 1 and wave.members == Enum.to_list(201..215)
+
+    # 26 soldiers: guards 220..226, and 216..219 wait: four isn't enough.
+    assert {%{wave: %{id: 1, members: members}, hold: "reinforcements: 4 of 5 at the rally point"}, _, memory} =
+             plan([units: soldiers(26)], memory)
+
+    assert members == Enum.to_list(201..215)
+
+    # 27: 216..220 go after it, and are part of it.
+    assert {%{wave: %{id: 1, members: members}, why: [{:wave_reinforced, why}]}, _, _} = plan([units: soldiers(27)], memory)
+    assert members == Enum.to_list(201..220)
+    assert why == "wave 1: 5 more follow it (20 in all)"
+  end
+
+  describe "why no wave leaves (strategy.hold)" do
+    test "too few at the rally point" do
+      assert {%{wave: nil, hold: "3 attackers at the rally point (3 in all), want 15 while nothing is scouted"}, _, _} =
+               plan(units: soldiers(10))
+    end
+
+    test "not strong enough against what we know of them" do
+      strong = %{Brain.new_memory() | enemies: Map.new(1..12, &{900 + &1, %{"id" => 900 + &1, "type" => "Soldier", "owner" => 1, "hp" => 110, "x" => 56, "y" => 56, "seen" => 100}})}
+      assert {%{wave: nil, hold: hold}, _, _} = plan([units: soldiers(22)], strong)
+      assert hold == "15 attackers at the rally point (15 in all), strength 14850 vs 1.5 x 11880 = 17820 known of player 1"
+    end
+
+    test "home couldn't hold without them" do
+      raiders = for i <- 1..8, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
+      assert {%{wave: nil, hold: "home couldn't hold the raid without them" <> _}, _, _} = plan(units: soldiers(22) ++ raiders)
+    end
+
+    test "nothing to say once a wave leaves" do
+      assert {%{wave: %{id: 1}, hold: nil}, _, _} = plan(units: soldiers(22))
+    end
+  end
+
+  describe "a counterattack" do
+    # Fifteen attackers near the rally point (10, 10), but not at it: (14, 14) is four tiles out.
+    defp near_rally do
+      {attackers, guards} = Enum.split(soldiers(22), 15)
+      Enum.map(attackers, &%{&1 | "x" => 14, "y" => 14}) ++ guards
+    end
+
+    test "right after we beat a raid, everyone near the rally point goes" do
+      memory = %{Brain.new_memory() | raid: %{at: 95, kills: 3}}
+      assert {%{wave: %{members: members}, why: [{:wave_launched, "counterattack: " <> _}]}, _, %{raid: nil}} =
+               plan([units: near_rally()], memory)
+
+      assert length(members) == 15
+    end
+
+    test "not without the raid, or after only a kill or two, or long after" do
+      assert {%{wave: nil}, _, _} = plan(units: near_rally())
+      assert {%{wave: nil}, _, _} = plan([units: near_rally()], %{Brain.new_memory() | raid: %{at: 95, kills: 2}})
+      assert {%{wave: nil}, _, _} = plan([units: near_rally(), tick: 140], %{Brain.new_memory() | raid: %{at: 95, kills: 3}})
+    end
+
+    test "raiders we kill at home are counted" do
+      # An enemy soldier remembered by the base at (12, 9), killed this tick.
+      enemy = %{"id" => 900, "type" => "Soldier", "owner" => 1, "hp" => 110, "x" => 12, "y" => 9, "seen" => 99}
+      memory = %{Brain.new_memory() | enemies: %{900 => enemy}, raid: %{at: 99, kills: 2}}
+      killed = state(units: soldiers(5)) |> Map.put("events", [%{"kind" => "UnitKilled", "entityId" => 900}])
+      assert {_, _, %{raid: %{kills: 3}}} = Brain.plan(View.new(killed), memory, terrain())
+    end
+  end
+
+  test "a wave whose front meets more than it is, with reinforcements on the way, stays out" do
+    # Five in front at (45, 45) against eight; ten more walking up at (25, 25).
+    front = for i <- 1..5, do: unit(200 + i, "Soldier", 45, 45)
+    behind = for i <- 6..15, do: unit(200 + i, "Soldier", 25, 25)
+    enemies = for i <- 1..8, do: unit(900 + i, "Soldier", 47, 47, owner: 1)
+    memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..215), released: true}, next_wave: 2}
+    assert {%{wave: %{id: 1}}, _, _} = plan([units: front ++ behind ++ enemies], memory)
+
+    # Without them, it comes back.
+    memory = %{memory | wave: %{memory.wave | members: Enum.to_list(201..205)}}
+    assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched" <> _}]}, _, _} = plan([units: front ++ enemies], memory)
   end
 
   test "recalls the wave when fewer than five of it are left" do
@@ -365,7 +440,7 @@ defmodule Swarm.BrainTest do
       end)
     end
 
-    test "a scout per neighbor plus one roaming: two in a 1v1, once a Barracks is done" do
+    test "two scouts, once a Barracks is done" do
       barracks = building(2, "Barracks", 11, 7)
       {_, commands, _} = plan(units: workers(20), buildings: [barracks], ore: 1000)
       assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Scout"}, &1))
@@ -410,9 +485,9 @@ defmodule Swarm.BrainTest do
       strong = %{Brain.new_memory() | enemies: seen_enemies(12)}
       assert {%{wave: nil}, _, _} = plan([units: soldiers(22)], strong)
 
-      # 8 attackers (5 guards stay) against 2 soldiers: go.
+      # 8 attackers (7 guards stay) against 2 soldiers: go.
       weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
-      assert {%{wave: %{members: members}}, _, _} = plan([units: soldiers(13)], weak)
+      assert {%{wave: %{members: members}}, _, _} = plan([units: soldiers(15)], weak)
       assert length(members) == 8
     end
 
@@ -434,10 +509,10 @@ defmodule Swarm.BrainTest do
 
     test "launches and recalls say why" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
-      {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(13)], weak)
+      {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(15)], weak)
       assert why == "wave 1 at player 1: 8 attackers, strength 7920 vs 1980 known"
 
-      four_left = Enum.slice(soldiers(13), 0..3) ++ Enum.drop(soldiers(13), 8)
+      four_left = Enum.slice(soldiers(15), 0..3) ++ Enum.drop(soldiers(15), 8)
       assert {%{why: [{:wave_recalled, "wave 1: only 4 left"}]}, _, _} = plan([units: four_left], memory)
     end
 
@@ -530,7 +605,7 @@ defmodule Swarm.BrainTest do
 
   test "no wave leaves while an outpost is under an attack home can't hold without it" do
     miners = for i <- 1..6, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering")
-    enemies = for i <- 1..10, do: unit(900 + i, "Soldier", 34, 34, owner: 1)
+    enemies = for i <- 1..12, do: unit(900 + i, "Soldier", 34, 34, owner: 1)
     {strategy, _, _} = plan(units: soldiers(25) ++ miners ++ enemies, buildings: [building(50, "ResourceDepot", 30, 30)])
     assert %{mode: :defend, wave: nil} = strategy
   end

@@ -139,11 +139,11 @@ defmodule Swarm.UnitBrainTest do
       View.new(state(units: units ++ miners, buildings: [building(50, "ResourceDepot", 30, 30)]))
     end
 
-    # Twelve soldiers: 208..212 guard, 203..207 escort the outpost, 201..202 attack.
+    # Twelve soldiers: 206..212 guard, 203..205 escort the outpost, 201..202 attack.
     defp army, do: soldiers(12)
 
     test "an escort stands by its outpost, on the enemy's side" do
-      assert {%{"type" => "Move", "x" => 32, "y" => 32}, _} = UnitBrain.decide(207, outpost_view(army()), @gather)
+      assert {%{"type" => "Move", "x" => 32, "y" => 32}, _} = UnitBrain.decide(205, outpost_view(army()), @gather)
     end
 
     test "when an outpost is attacked, attackers go help and guards stay home" do
@@ -303,96 +303,75 @@ defmodule Swarm.UnitBrainTest do
     end
   end
 
-  test "a scout heads for the enemy base first" do
-    assert %{"type" => "Move", "x" => 56, "y" => 56} = cmd(unit(5, "Scout", 10, 10), @gather)
-  end
+  describe "scouts" do
+    # Us at (7, 7), the enemy at (56, 56): halfway is (31, 31).
+    test "a scout waits halfway to its neighbor" do
+      assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 10, 10), @gather)
+    end
 
-  test "a scout runs from enemy fighters" do
-    enemy = unit(900, "Soldier", 33, 30, owner: 1)
-    assert %{"type" => "Move", "x" => 24, "y" => 30} = cmd(unit(5, "Scout", 30, 30), @gather, [enemy])
-  end
+    test "with a wave out, it goes ahead of the wave toward the target" do
+      # The wave (unit 2) at (20, 20); six tiles on toward (56, 56).
+      assert %{"type" => "Move", "x" => 26, "y" => 26} =
+               cmd(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20)])
+    end
 
-  test "a scout gets close to soldiers but keeps its distance from archers" do
-    soldier = unit(900, "Soldier", 34, 30, owner: 1)
-    assert %{"x" => 56, "y" => 56} = cmd(unit(5, "Scout", 30, 30), @gather, [soldier])
+    test "it runs toward home from enemy fighters" do
+      enemy = unit(900, "Soldier", 33, 30, owner: 1)
+      assert %{"type" => "Move", "x" => 24, "y" => 24} = cmd(unit(5, "Scout", 30, 30), @gather, [enemy])
+    end
 
-    archer = unit(900, "Archer", 35, 30, owner: 1)
-    assert %{"x" => 24, "y" => 30} = cmd(unit(5, "Scout", 30, 30), @gather, [archer])
-  end
+    test "it keeps out of an archer's reach, but not a soldier's next step" do
+      soldier = unit(900, "Soldier", 29, 30, owner: 1)
+      assert %{"x" => 31, "y" => 31} = cmd(unit(5, "Scout", 25, 30), @gather, [soldier])
 
-  test "a scout runs when it is taking damage" do
-    scout = Map.put(unit(5, "Scout", 30, 30), "hp", 40)
-    soldier = unit(900, "Soldier", 36, 30, owner: 1)
-    assert {%{"x" => 24, "y" => 30}, _} = decide(scout, @gather, [soldier], %{intent: nil, hp: 55})
-  end
+      archer = unit(900, "Archer", 30, 30, owner: 1)
+      assert %{"x" => x, "y" => y} = cmd(unit(5, "Scout", 25, 30), @gather, [archer])
+      assert x < 25 and y < 30
+    end
 
-  test "after running, a scout checks somewhere else before coming back" do
-    {%{"x" => 44, "y" => 44}, memory} = decide(unit(5, "Scout", 50, 50), @gather, [unit(900, "Soldier", 52, 52, owner: 1)])
-    {%{"x" => x, "y" => y}, _} = decide(unit(5, "Scout", 44, 44, activity: "Moving"), @gather, [], memory)
-    refute {x, y} == {56, 56}
-  end
+    test "it runs when it is taking damage" do
+      scout = Map.put(unit(5, "Scout", 30, 30), "hp", 40)
+      soldier = unit(900, "Soldier", 36, 30, owner: 1)
+      assert {%{"x" => 24, "y" => 24}, _} = decide(scout, @gather, [soldier], %{intent: nil, hp: 55})
+    end
 
-  test "scouts share out the map: two scouts head for different enemy bases" do
-    scouts = [unit(5, "Scout", 10, 10), unit(6, "Scout", 10, 10)]
+    test "with the enemy between it and home, it runs straight away instead" do
+      enemy = unit(900, "Soldier", 28, 28, owner: 1)
+      assert %{"type" => "Move", "x" => x, "y" => y} = cmd(unit(5, "Scout", 30, 30), @gather, [enemy])
+      assert x > 30 and y > 30
+    end
 
-    three = Map.update!(state(units: scouts), "players", fn ps ->
-      ps ++ [%{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 56, "y" => 7}}]
-    end)
+    test "after running, it stays back a while before returning to its post" do
+      at = fn tick -> View.new(state(units: [unit(5, "Scout", 24, 24)], tick: tick)) end
+      {_, memory} = decide(unit(5, "Scout", 30, 30), @gather, [unit(900, "Soldier", 33, 30, owner: 1)])
 
-    v = View.new(three)
-    {%{"x" => x5, "y" => y5}, _} = UnitBrain.decide(5, v, @gather)
-    {%{"x" => x6, "y" => y6}, _} = UnitBrain.decide(6, v, @gather)
-    assert Enum.sort([{x5, y5}, {x6, y6}]) == [{56, 7}, {56, 56}]
-  end
+      assert {:no_change, memory} = UnitBrain.decide(5, at.(105), @gather, memory)
+      assert {%{"x" => 31, "y" => 31}, _} = UnitBrain.decide(5, at.(115), @gather, memory)
+    end
 
-  describe "scouts watch the neighbors" do
     # Us at (7, 7). Neighbors at (56, 7) and (7, 56); across the map at (56, 56).
-    defp four_scouts(scouts) do
+    defp four_scouts(scouts, eliminated \\ []) do
       View.new(
         Map.update!(state(units: scouts), "players", fn [me | _] ->
-          [me | for({slot, x, y} <- [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}], do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})]
+          [me | for({slot, x, y} <- [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}], do: %{"slot" => slot, "eliminated" => slot in eliminated, "startPosition" => %{"x" => x, "y" => y}})]
         end)
       )
     end
 
     defp goal(v, id), do: UnitBrain.decide(id, v, @gather) |> elem(0) |> then(&{&1["x"], &1["y"]})
 
-    test "one scout per neighbor, and the third roams" do
-      v = four_scouts(for id <- [5, 6, 7], do: unit(id, "Scout", 10, 10))
-      assert goal(v, 5) == {56, 7}
-      assert goal(v, 6) == {7, 56}
-      # The roamer: the far player's start is fair game for it.
-      assert goal(v, 7) in [{56, 7}, {7, 56}, {56, 56}]
+    test "one per neighbor" do
+      v = four_scouts(for id <- [5, 6], do: unit(id, "Scout", 10, 10))
+      assert goal(v, 5) == {31, 7}
+      assert goal(v, 6) == {7, 31}
     end
 
-    test "having seen the neighbor's start, its scout checks near them or the way to us" do
-      # Standing by their start: it counts as seen, so the scout picks its next spot.
-      v = four_scouts([unit(5, "Scout", 54, 7)])
-      assert {%{"x" => x, "y" => y}, _} = UnitBrain.decide(5, v, @gather)
-      assert View.dist({x, y}, {56, 7}) <= 16 or {x, y} == {31, 7}
+    test "with one neighbor left, both watch it" do
+      v = four_scouts(for(id <- [5, 6], do: unit(id, "Scout", 10, 10)), [1])
+      # (7, 56) is the nearest left; (56, 56) the other.
+      assert goal(v, 5) == {7, 31}
+      assert goal(v, 6) == {31, 31}
     end
-
-    test "a scout at a spot it can see doesn't stay there, however close to the enemy" do
-      # Everything else seen 50 ticks ago; it stands by the neighbor's start, seen now. That
-      # spot used to win on the enemy bonus, so the scout "arrived" and stood still.
-      v = four_scouts([unit(5, "Scout", 55, 8)])
-      seen = Map.new([{56, 40}, {40, 8}, {31, 7}, {40, 24}, {56, 24}], &{&1, 50})
-      {cmd, _} = UnitBrain.decide(5, v, @gather, %{intent: nil, seen: seen})
-      assert %{"type" => "Move", "x" => x, "y" => y} = cmd
-      assert View.dist({x, y}, {55, 8}) > 6
-    end
-
-    test "with one scout, a neighbor comes first" do
-      v = four_scouts([unit(5, "Scout", 10, 10)])
-      assert goal(v, 5) == {56, 7}
-    end
-  end
-
-  test "a scout gives up on a spot it can't reach and picks another" do
-    stuck = unit(5, "Scout", 40, 40)
-    {_, memory} = decide(stuck, @gather, [], %{intent: {:move, {56, 56}}})
-    {%{"x" => x, "y" => y}, _} = decide(stuck, @gather, [], %{memory | intent: {:move, {56, 56}}})
-    refute {x, y} == {56, 56}
   end
 
   test "a unit that is no longer ours does nothing" do

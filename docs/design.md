@@ -191,10 +191,9 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 
 Each unit gets the state and the strategy and decides for itself only. Workers mine when idle.
 A fighter works out its role from the view (`Swarm.Roles`, the same rule on every node, so no
-messages are needed): in the current **wave**, a **guard** (the newest fighters at home, at least 5
-or a third of the army), an **escort** (each outpost, a Resource Depot more than 6 tiles from
-the Command Center with workers mining there, gets a group of 5, or none if fewer than 3 can be
-spared; fighters already at the outpost keep the job, and a gap goes to the closest free fighter,
+messages are needed): in the current **wave**, a **guard** (the 7 newest fighters at home), an
+**escort** (each outpost, a Resource Depot more than 6 tiles from the Command Center with workers
+mining there, gets a group of 3, or none if 3 can't be spared; fighters already at the outpost keep the job, and a gap goes to the closest free fighter,
 so nobody rotates across the map; each outpost also gets a Guard Tower, two once we are rich), or an
 **attacker** waiting for the next wave. Then, first match wins:
 
@@ -214,7 +213,9 @@ or our workers are stronger (HP × damage per tick) than the fighters and towers
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
 on the way. A wave only leaves if what stays home can hold the raid going on (by the same
 comparison, so a scout poking at the base holds nothing up), and not within 20 ticks of a recall
-for home.
+for home. Right after we beat a raid (3 of its fighters killed at home, the last of it gone within
+30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
+counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
 first. Pairs are taken closest first, with enemies that can already hit us ahead of the rest,
@@ -266,14 +267,18 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
    back from anything inside their 3-tile blind spot.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
-   point; only those go, so units trained later wait for the next wave instead of trickling out.
-   The members are kept in the replicated memory, so a new leader knows who is out. The wave is
-   recalled when fewer than 5 of it are left, or when home can't hold without it. No wave leaves
+   point. While it is out, attackers trained later follow it in batches of 5 or more and become
+   part of it, so it goes out and comes back as one. The members are kept in the replicated
+   memory, so a new leader knows who is out. The wave is recalled when fewer than 5 of it are
+   left, when home can't hold without it, or when what its front faces is stronger than the whole
+   wave, reinforcements on their way included. No wave leaves
    while home couldn't hold the current raid without it, or for 20 ticks after a recall for home.
-3. **Scouting and attack decisions (done):** a scout per neighbor (the two nearest opponents) plus one roaming
-   scout (replaced when they die); each visits the spot of its share it
-   saw longest ago, checks the enemy base most often, gets as close as is safe (enemy range + 2),
-   runs when closer or taking damage, and then checks other spots before coming back. The
+3. **Scouting and attack decisions (done):** two scouts, one per neighbor (the two nearest
+   opponents), each waiting halfway between our Command Center and that neighbor's start, where
+   an attack from them comes through. While a wave is out they go 6 tiles ahead of it toward its
+   target, so the leader sees what it is walking into. A scout runs toward home (straight away
+   when the enemy is between it and home) once an enemy could reach it (its range + 2) or it is
+   taking damage, and stays back 15 ticks before returning. The
    leader remembers every enemy fighter seen (dropped when we kill it or after 300 ticks
    unseen) and launches a wave once the staged attackers are 1.5× the known enemy army plus
    towers, by HP × damage per tick (at least 8; 15 while we know nothing). A wave facing a

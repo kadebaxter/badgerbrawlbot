@@ -6,11 +6,10 @@ defmodule Swarm.Roles do
   A fighter is one of:
 
   - `:wave`: it left with the current wave (its id is in `strategy.wave.members`)
-  - `:guard`: one of the newest fighters at home; holds the main base. At least `@min_guards`,
-    or a third of the army.
+  - `:guard`: one of the `@guards` newest fighters at home; holds the main base.
   - `{:escort, outpost}`: holds an outpost (a Resource Depot more than `@outpost_distance` from
-    the Command Center) while workers mine there, as a group of `@escort_group` (at least
-    `@min_escort_group`, or none: one fighter alone stops nobody). Fighters already there keep
+    the Command Center) while workers mine there, as a group of `@escort_group` (the outpost's
+    towers do the rest), or none if that many can't be spared. Fighters already there keep
     the job; a gap goes to the closest free fighter.
   - `:attacker`: everyone else at home; waits at the rally point for the next wave, and goes to
     help wherever a base or our workers are attacked
@@ -24,12 +23,12 @@ defmodule Swarm.Roles do
 
   alias Swarm.View
 
-  @min_guards 5
+  @guards 7
   # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
   @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
   @worker_cover 5
-  @escort_group 5
+  @escort_group 3
   @min_escort_group 3
   # A depot farther than this from the Command Center is an outpost.
   @outpost_distance 6
@@ -106,7 +105,7 @@ defmodule Swarm.Roles do
       end)
 
     # 2. The newest of the rest guard the main base.
-    {guards, pool} = Enum.split(pool, max(@min_guards, div(length(fighters(v)), 3)))
+    {guards, pool} = Enum.split(pool, @guards)
 
     # 3. Each group is filled up from the closest of the rest. One that can't reach
     #    `@min_escort_group` isn't worth having: those fighters attack instead.
@@ -253,6 +252,12 @@ defmodule Swarm.Roles do
           Enum.any?(workers, &(View.dist(View.pos(&1), View.pos(e)) <= @worker_cover)) or
           siege_on_us?(v, e),
         do: e
+  end
+
+  @doc "Whether `pos` is somewhere we defend: in a base (the Command Center's or an outpost's), or by our workers."
+  def at_home?(%View{} = v, pos) do
+    Enum.any?(bases(v), &(View.dist(pos, &1) <= @base_radius)) or
+      Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), pos) <= @worker_cover))
   end
 
   @doc "What is defending without the wave: fighters and Trebuchets at home, plus finished towers."

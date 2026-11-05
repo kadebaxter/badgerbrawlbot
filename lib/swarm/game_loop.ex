@@ -410,7 +410,7 @@ defmodule Swarm.GameLoop do
       Logger.info(
         "tick #{view.tick} | ore #{view.ore} | #{map_size(units)} units (#{per_node}) | " <>
           "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
-          "#{length(replies)}/#{map_size(units)} answered"
+          "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}"
       )
     end
 
@@ -464,6 +464,10 @@ defmodule Swarm.GameLoop do
     send(self(), :start)
     {:noreply, %{st | match_id: nil, state: nil, recent: %{}, mode: nil}}
   end
+
+  # Why no wave (or no reinforcements) left this tick: see `Swarm.Brain`'s `strategy.hold`.
+  defp hold_info(%{hold: hold}) when is_binary(hold), do: " | waiting: " <> hold
+  defp hold_info(_strategy), do: ""
 
   defp wave_info(nil), do: ""
   defp wave_info(%{all_in: true} = wave), do: " (ALL IN: #{length(wave.members)})"

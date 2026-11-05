@@ -16,24 +16,33 @@ defmodule Swarm.Brain do
   Army: fighters work out their own roles (`Swarm.Roles`). A Scout per opponent explores. The leader
   remembers every enemy fighter it has seen, and launches a wave once the attackers waiting at
   the rally point are `@margin` times as strong as the enemy army and towers we know of (at
-  least `@min_wave` of them; `@first_wave` while we know nothing). Only those go; later ones
-  wait for the next wave. The wave is recalled when it meets a stronger force, when fewer than
+  least `@min_wave` of them; `@first_wave` while we know nothing). While it is out, later ones
+  follow it in batches of `@batch`, and count as part of it. The wave is recalled when it meets a stronger force, when fewer than
   `@recall_below` are left, or when whatever is hitting us at home (any base, or our workers) is
   stronger than what is home. A wave only leaves if what stays home can hold the raid going on
-  (a scout poking at the base holds nothing up), and not within `@calm_ticks` of a recall for home. In the last `@all_in_ticks` ticks, if we are behind on score,
+  (a scout poking at the base holds nothing up), and not within `@calm_ticks` of a recall for home.
+  Right after we beat a raid it may go with every attacker near the rally point (a
+  counterattack). When no wave leaves, `strategy.hold` says why, for the logs. In the last `@all_in_ticks` ticks, if we are behind on score,
   every fighter attacks: sitting still would lose on time anyway.
   """
 
   alias Swarm.{Roles, View}
 
   @target_workers 20
-  # One scout per opponent still in, up to this many.
-  # One scout per neighbor, plus one for everyone else.
-  @max_scouts 3
+  # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
+  @scouts 2
   @first_wave 15
   @min_wave 8
   @margin 1.5
   @recall_below 5
+  # While a wave is out, attackers at the rally point go after it this many at a time.
+  @batch 5
+  # Right after we beat a raid (`@counter_kills` of its fighters killed at home, the last of it
+  # gone within `@counter_window` ticks), a wave may leave with every attacker this close to the
+  # rally point, not only the ones standing at it: hit back while they are weak.
+  @counter_kills 3
+  @counter_window 30
+  @counter_radius 10
   @all_in_ticks 300
   # After a wave is called home to defend, no new one leaves for this long: raiders often come
   # back, and a wave that leaves the moment they step out of sight gets called home again.
@@ -145,7 +154,8 @@ defmodule Swarm.Brain do
           post: pos() | nil,
           threat: Roles.threat(),
           wave: Roles.wave(),
-          why: [{atom(), String.t()}]
+          why: [{atom(), String.t()}],
+          hold: String.t() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -154,6 +164,8 @@ defmodule Swarm.Brain do
   # `helpers` is building id => {worker id, tick} for workers sent to finish abandoned sites.
   # `ore_short_since` is the tick home has been short of ore since, or nil.
   # `recalled_at` is the last tick a wave was called home to defend, or nil.
+  # `raid` is the raid going on or just over: %{at: last tick it was here, kills: its fighters we
+  # killed at home}, or nil.
   # `buildings` is our building id => where it stands; `lost` is spot => tick, for buildings that
   # went missing (destroyed) in the last `@avoid_lost_ticks`.
   def new_memory do
@@ -166,7 +178,8 @@ defmodule Swarm.Brain do
       ore_short_since: nil,
       buildings: %{},
       lost: %{},
-      recalled_at: nil
+      recalled_at: nil,
+      raid: nil
     }
   end
 
@@ -174,7 +187,7 @@ defmodule Swarm.Brain do
   def plan(%View{} = v, memory, terrain) do
     # Memory from an older version may have other keys: keep only the ones we know.
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
-    memory = %{memory | enemies: remember_enemies(memory.enemies, v)}
+    memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
@@ -196,7 +209,7 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: []}, memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -210,7 +223,9 @@ defmodule Swarm.Brain do
     home_recall? = memory.wave != nil and not all_in?(v) and Roles.recall(v, memory.wave) != nil
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
-    {wave, next_wave, why} = wave(v, memory, rally, calm?, owner, target)
+    {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
+    # A raid answered with a counterattack is done with.
+    raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
 
     mode =
       cond do
@@ -226,10 +241,31 @@ defmodule Swarm.Brain do
       post: post(v, rally, target),
       threat: threat,
       wave: wave,
-      why: why
+      why: why,
+      hold: hold
     }
 
-    {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at}}
+    {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
+  end
+
+  # The raid on us: when it was last here, and how many of its fighters we have killed at home
+  # (a base, an outpost or our workers) going by where we last saw them. Over once it has been gone
+  # `@counter_window` ticks.
+  defp raid(memory, v) do
+    killed = MapSet.new(for e <- v.events, e["kind"] == "UnitKilled", do: e["entityId"])
+
+    kills =
+      Enum.count(memory.enemies, fn {id, e} ->
+        MapSet.member?(killed, id) and Roles.at_home?(v, View.pos(e))
+      end)
+
+    raid = memory.raid
+
+    cond do
+      Roles.raiders(v) != [] -> %{at: v.tick, kills: kills + ((raid && raid.kills) || 0)}
+      raid && v.tick - raid.at <= @counter_window -> %{raid | kills: raid.kills + kills}
+      true -> nil
+    end
   end
 
   # Enemy fighters as last seen. Ones we killed or haven't seen in a while are dropped.
@@ -249,8 +285,8 @@ defmodule Swarm.Brain do
 
   defp wave(v, memory, rally, calm?, owner, target) do
     cond do
-      all_in?(v) -> all_in(v, memory, owner)
-      memory.wave -> keep_wave(v, memory)
+      all_in?(v) -> Tuple.insert_at(all_in(v, memory, owner), 3, nil)
+      memory.wave -> keep_wave(v, memory, rally, target)
       true -> launch(v, memory, rally, calm?, owner, target)
     end
   end
@@ -276,27 +312,60 @@ defmodule Swarm.Brain do
   end
 
   # Keep the wave that is out (minus its dead), unless home needs it, too few are left, or what
-  # it is facing is stronger than it is. A recalled wave is just fighters at home again: they
-  # walk back and defend, and fight on the way only what attacks them.
-  defp keep_wave(v, %{wave: wave} = memory) do
+  # its front is facing is stronger than the whole wave, reinforcements on their way included (they
+  # go out and come back together). A recalled wave is just fighters at home again: they walk back
+  # and defend, and fight on the way only what attacks them. Attackers at the rally point follow it
+  # in batches of `@batch`.
+  defp keep_wave(v, %{wave: wave} = memory, rally, target) do
     alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
 
     cond do
       home = Roles.recall(v, wave) ->
         {theirs, ours} = home
         why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
-        {nil, memory.next_wave, [{:wave_recalled, why}]}
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
       length(alive) < @recall_below ->
-        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}]}
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}], nil}
 
-      facing = outmatched(v, alive) ->
+      facing = outmatched(v, alive, target) ->
         why = "wave #{wave.id}: outmatched, strength #{round(Roles.strength(alive))} vs #{round(facing)} nearby"
-        {nil, memory.next_wave, [{:wave_recalled, why}]}
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
       true ->
-        release(v, %{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave)
+        wave = %{wave | members: Enum.map(alive, & &1["id"])}
+        {wave, more, hold} = reinforce(v, wave, rally)
+        {wave, next_wave, why} = release(v, wave, memory.next_wave)
+        {wave, next_wave, more ++ why, hold}
     end
+  end
+
+  # `@batch` attackers at the rally point go after the wave, if home can still hold without them.
+  defp reinforce(v, wave, rally) do
+    staged = staged(v, wave, rally, @staged_radius)
+    ids = Enum.map(staged, & &1["id"])
+
+    cond do
+      length(staged) < @batch ->
+        {wave, [], "reinforcements: #{length(staged)} of #{@batch} at the rally point"}
+
+      Roles.recall(v, %{wave | members: wave.members ++ ids}) != nil ->
+        {wave, [], "reinforcements: home couldn't hold the raid without the #{length(staged)} at the rally point"}
+
+      true ->
+        why = "wave #{wave.id}: #{length(staged)} more follow it (#{length(wave.members) + length(staged)} in all)"
+        {%{wave | members: Enum.sort(wave.members ++ ids)}, [{:wave_reinforced, why}], nil}
+    end
+  end
+
+  # Attackers (not guards or escorts) within `radius` of the rally point.
+  defp staged(v, wave, rally, radius) do
+    roles = Roles.home_roles(v, wave)
+
+    for u <- Roles.home(v, wave),
+        roles[u["id"]] == :attacker,
+        View.dist(View.pos(u), rally) <= radius,
+        do: u
   end
 
   # A wave holding at its staging point goes in once its Trebuchets are there (or gone), or after
@@ -315,10 +384,14 @@ defmodule Swarm.Brain do
 
   defp release(_v, wave, next_wave), do: {wave, next_wave, []}
 
-  # The strength of what the wave is facing if it is more than the wave's own, else nil.
-  defp outmatched(v, alive) do
-    n = length(alive)
-    center = {div(Enum.sum_by(alive, & &1["x"]), n), div(Enum.sum_by(alive, & &1["y"]), n)}
+  # The strength of what the wave's front is facing if it is more than the whole wave's, else nil.
+  # The front: the members within `@wave_sight` of the one nearest the target (reinforcements
+  # walking up behind are counted in the wave, not in where it is fighting).
+  defp outmatched(v, alive, target) do
+    lead = if target, do: Enum.min_by(alive, &View.dist(View.pos(&1), target)), else: hd(alive)
+    front = Enum.filter(alive, &(View.dist(View.pos(&1), View.pos(lead)) <= @wave_sight))
+    n = length(front)
+    center = {div(Enum.sum_by(front, & &1["x"]), n), div(Enum.sum_by(front, & &1["y"]), n)}
     near? = &(View.dist(View.pos(&1), center) <= @wave_sight)
 
     facing =
@@ -330,15 +403,13 @@ defmodule Swarm.Brain do
 
   # Send the attackers waiting at the rally point once they are strong enough, if what stays home
   # can hold whatever is hitting us right now, and not just after a recall for home (`calm?`).
-  # Knowing nothing about the enemy yet, wait for `@first_wave` of them.
+  # Knowing nothing about the enemy yet, wait for `@first_wave` of them. Right after we beat a
+  # raid (`counter?/2`), every attacker near the rally point may go, recall or not. Otherwise the
+  # fourth element says why we wait.
   defp launch(v, memory, rally, calm?, owner, target) do
-    roles = Roles.home_roles(v, nil)
-
-    staged =
-      for u <- Roles.home(v, nil),
-          roles[u["id"]] == :attacker,
-          View.dist(View.pos(u), rally) <= @staged_radius,
-          do: u
+    counter? = counter?(memory, v)
+    staged = staged(v, nil, rally, if(counter?, do: @counter_radius, else: @staged_radius))
+    attackers = for {_id, :attacker} <- Roles.home_roles(v, nil), do: 1
 
     # Trebuchets waiting at the rally point go too, if there are enough of them.
     siege =
@@ -359,16 +430,41 @@ defmodule Swarm.Brain do
         else: length(staged) >= @first_wave
 
     leaving = %{members: Enum.map(staged ++ siege, & &1["id"])}
+    home = Roles.recall(v, leaving)
+    at_rally = "#{length(staged)} attackers at the rally point (#{length(attackers)} in all)"
 
-    if calm? and ready? and Roles.recall(v, leaving) == nil do
+    hold =
+      cond do
+        not calm? and not counter? ->
+          "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"
+
+        not scouted? and not ready? ->
+          "#{at_rally}, want #{@first_wave} while nothing is scouted"
+
+        length(staged) < @min_wave ->
+          "#{at_rally}, want #{@min_wave}"
+
+        not ready? ->
+          "#{at_rally}, strength #{round(ours)} vs #{@margin} x #{round(theirs)} = #{round(@margin * theirs)} known of player #{owner}"
+
+        home != nil ->
+          {raid, left} = home
+          "home couldn't hold the raid without them (#{round(raid)} vs #{round(left)} left home)"
+
+        true ->
+          nil
+      end
+
+    if hold == nil do
       with_siege = if siege == [], do: "", else: " and #{length(siege)} trebuchets"
+      counter = if counter?, do: "counterattack: ", else: ""
 
       why =
         if scouted?,
           do:
-            "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, " <>
+            "#{counter}wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, " <>
               "strength #{round(ours)} vs #{round(theirs)} known",
-          else: "wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, nothing scouted yet"
+          else: "#{counter}wave #{memory.next_wave} at player #{owner}: #{length(staged)} attackers#{with_siege}, nothing scouted yet"
 
       wave = %{
         id: memory.next_wave,
@@ -380,11 +476,18 @@ defmodule Swarm.Brain do
         at: v.tick
       }
 
-      {wave, memory.next_wave + 1, [{:wave_launched, why}]}
+      {wave, memory.next_wave + 1, [{:wave_launched, why}], nil}
     else
-      {nil, memory.next_wave, []}
+      {nil, memory.next_wave, [], hold}
     end
   end
+
+  # We just beat a raid: it is gone, we killed `@counter_kills` of its fighters at home, and it was
+  # here within `@counter_window` ticks.
+  defp counter?(%{raid: %{at: at, kills: kills}}, v),
+    do: Roles.raiders(v) == [] and kills >= @counter_kills and v.tick - at <= @counter_window
+
+  defp counter?(_memory, _v), do: false
 
   @doc """
   The army we remember of player `owner` (all opponents if nil), plus their finished towers we
@@ -764,14 +867,14 @@ defmodule Swarm.Brain do
     end
   end
 
-  # A scout per neighbor and one more (at most `@max_scouts`), counting ones being trained. From
+  # `@scouts` scouts while anyone is left to watch, counting ones being trained. From
   # the first free Barracks, one a tick.
   defp train_scout({cmds, mem, ore} = acc, v) do
     barracks = Enum.filter(View.buildings_of(v, "Barracks"), & &1["completed"])
     queued = for b <- barracks, p <- b["production"], p["unitType"] == "Scout", do: p
     free = Enum.find(barracks, &(length(&1["production"]) < 2))
 
-    wanted = min(length(Roles.neighbors(v)) + 1, @max_scouts)
+    wanted = if Roles.neighbors(v) == [], do: 0, else: @scouts
 
     if length(View.units_of(v, "Scout")) + length(queued) < wanted and free != nil and ore >= @costs["Scout"] do
       cmd = %{"type" => "Produce", "buildingId" => free["id"], "unitType" => "Scout"}

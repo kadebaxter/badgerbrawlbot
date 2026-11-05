@@ -16,12 +16,12 @@ defmodule Swarm.UnitBrain do
   5. an attacker, with an outpost or our workers under attack: go help (the closest)
   6. otherwise go to its spot: guards to the post, attackers to the rally point
 
-  Scouts split up: one per neighbor (the two nearest opponents) watching around that neighbor's
-  base and the way from them to us, and one roaming the whole map. A scout heads for the spot (of
-  its share) it saw longest ago (the enemy base and their buildings count as
-  older, so it keeps checking them). It gets as close as is safe, and runs once an enemy could
-  reach it or it is taking damage; then it checks other spots before coming back. Its memory
-  holds when it last saw each spot, where it is heading, and its HP last tick.
+  Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
+  Command Center and its neighbor's start, where an attack from them comes through. While a wave
+  is out, they go `@scout_lead` tiles ahead of it, toward its target, so the leader sees what the
+  wave is walking into. A scout runs toward home once an enemy could reach it or it is taking
+  damage, and waits `@scout_rest` ticks before going back. Its memory holds its HP last tick and
+  when it last ran.
 
   Any unit standing on a tile where an enemy shell is about to land steps off it first: a
   Trebuchet's shell hits whatever is on the tile when it lands, and it aims at units standing
@@ -55,14 +55,10 @@ defmodule Swarm.UnitBrain do
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
-  # A scout counts a spot as seen this close (its vision is 8).
-  @scout_sight 6
-  # A neighbor's scout covers the grid this close to the neighbor's start.
-  @neighbor_area 16
-  # Spots near the enemy's buildings count as this many ticks older: check them more often.
-  @enemy_base_bonus 200
-  # ... but only for spots not seen for this long.
-  @recheck_ticks 100
+  # How far ahead of the wave a scout goes (its vision is 8).
+  @scout_lead 6
+  # How long a scout that ran stays back before returning to its post.
+  @scout_rest 15
 
   def new_memory, do: %{intent: nil}
 
@@ -93,7 +89,7 @@ defmodule Swarm.UnitBrain do
   end
 
   defp act(%{"type" => "Worker"} = unit, v, strategy, memory), do: {worker(unit, v, strategy), memory}
-  defp act(%{"type" => "Scout"} = unit, v, _strategy, memory), do: scout(unit, v, memory)
+  defp act(%{"type" => "Scout"} = unit, v, strategy, memory), do: scout(unit, v, strategy, memory)
   defp act(%{"type" => "Trebuchet"} = unit, v, strategy, memory), do: siege(unit, v, strategy, memory)
   defp act(unit, v, strategy, memory), do: fighter(unit, v, strategy, memory)
 
@@ -287,98 +283,64 @@ defmodule Swarm.UnitBrain do
   defp holding?(%{wave: %{released: false, staging: {_, _}}}), do: true
   defp holding?(_strategy), do: false
 
-  defp scout(unit, v, memory) do
+  defp scout(unit, v, s, memory) do
     here = View.pos(unit)
-    spots = my_spots(v, unit)
-    goal = Map.get(memory, :goal)
-    seen = Map.get(memory, :seen, %{})
-    seen = Enum.reduce(spots, seen, &if(View.dist(&1, here) <= @scout_sight, do: Map.put(&2, &1, v.tick), else: &2))
-
-    # Idle short of its goal: the goal can't be reached, give up on it.
-    seen =
-      if goal && unit["activity"] == "Idle" && View.dist(goal, here) > @scout_sight,
-        do: Map.put(seen, goal, v.tick),
-        else: seen
-
     hurt? = unit["hp"] != nil and unit["hp"] < Map.get(memory, :hp, unit["hp"])
+    fled_at = Map.get(memory, :fled_at)
 
-    {intent, goal, seen} =
-      case danger(v, here, hurt?) do
-        nil ->
-          goal = next_spot(v, spots, seen, here)
-          {{:move, goal}, goal, seen}
-
-        from ->
-          # Run, and count the goal and the area we ran from as just seen, without the enemy
-          # base bonus: check other spots before coming back.
-          later = v.tick + @enemy_base_bonus
-          avoid = &(&1 == goal or View.dist(&1, from) <= 8)
-          seen = Enum.reduce(spots, seen, &if(avoid.(&1), do: Map.put(&2, &1, later), else: &2))
-          {{:move, away(v, here, from)}, nil, seen}
+    {intent, fled_at} =
+      cond do
+        from = danger(v, here, hurt?) -> {{:move, flee(v, here, from)}, v.tick}
+        fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at}
+        true -> {{:move, scout_post(v, s, unit)}, nil}
       end
 
-    memory = Map.merge(memory, %{seen: seen, goal: goal, hp: unit["hp"]})
+    memory = Map.merge(memory, %{hp: unit["hp"], fled_at: fled_at})
 
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
   end
 
-  # Scouts share the work by id: the first watches our nearest neighbor, the next our other
-  # neighbor (`Swarm.Roles.neighbors/1`), and the rest roam the whole map. With fewer scouts than
-  # that, the neighbors are covered first.
-  defp my_spots(v, unit) do
-    scouts = v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.sort()
-    me = Enum.find_index(scouts, &(&1 == unit["id"]))
-
-    case Enum.at(Roles.neighbors(v), me) do
-      {start, slot} -> neighbor_spots(v, start, slot)
-      nil -> all_spots(v)
+  # Ahead of the wave, toward its target, while one is out; otherwise halfway to our neighbor.
+  # Scouts share the neighbors by id: the first watches the nearest, the next the other one.
+  defp scout_post(v, s, unit) do
+    case s.wave && s.target && Roles.wave_center(v, s.wave) do
+      {_, _} = center -> toward(center, s.target, @scout_lead)
+      _ -> watch_post(v, unit)
     end
   end
 
-  # Around one neighbor: their start, their buildings we know of, the grid near their base, and
-  # halfway between them and us, where an attack from them would come through.
-  defp neighbor_spots(v, start, slot) do
-    buildings = for b <- v.enemy_buildings ++ v.remembered, b["owner"] == slot, do: View.pos(b)
-    near = for spot <- grid(v), View.dist(spot, start) <= @neighbor_area, do: spot
+  defp watch_post(%View{cc: nil} = v, _unit), do: {div(v.map_width, 2), div(v.map_height, 2)}
 
-    way =
-      case v.cc do
-        nil -> []
-        cc -> [{div(elem(start, 0) + elem(View.pos(cc), 0), 2), div(elem(start, 1) + elem(View.pos(cc), 1), 2)}]
-      end
+  defp watch_post(%View{cc: cc} = v, unit) do
+    scouts = v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.sort()
+    me = Enum.find_index(scouts, &(&1 == unit["id"])) || 0
 
-    Enum.uniq([start | buildings] ++ near ++ way)
+    case Roles.neighbors(v) do
+      [] ->
+        {div(v.map_width, 2), div(v.map_height, 2)}
+
+      neighbors ->
+        {{sx, sy}, _slot} = Enum.at(neighbors, rem(me, length(neighbors)))
+        {cx, cy} = View.pos(cc)
+        {div(sx + cx, 2), div(sy + cy, 2)}
+    end
   end
 
-  # Every enemy start and the grid, minus grid points right by a start (that start again).
-  defp all_spots(v) do
-    grid = Enum.reject(grid(v), fn spot -> Enum.any?(v.enemy_starts, &(View.dist(&1, spot) <= @scout_sight)) end)
-    Enum.uniq(v.enemy_starts ++ grid)
+  # `n` tiles from `from` toward `to` (or `to` itself, if it is closer).
+  defp toward({fx, fy} = from, {tx, ty} = to, n) do
+    d = View.dist(from, to)
+    if d <= n, do: to, else: {fx + div((tx - fx) * n, d), fy + div((ty - fy) * n, d)}
   end
 
-  defp grid(v), do: for(x <- 8..(v.map_width - 1)//16, y <- 8..(v.map_height - 1)//16, do: {x, y})
+  # Six tiles toward home, or straight away from the threat when it is closer to home than we are
+  # (between us and home), or we have no home left.
+  defp flee(%View{cc: nil} = v, here, from), do: away(v, here, from)
 
-  # The spot seen longest ago (never seen first); closest on a tie. Never one the scout can see
-  # from where it is: it would "arrive" at once and stand there. Spots by the enemy count as older,
-  # so they get checked more often, but only once they haven't been seen for `@recheck_ticks`:
-  # otherwise a spot just seen there beats everything else and the scout parks on it.
-  defp next_spot(v, spots, seen, here) do
-    enemy = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1) ++ v.enemy_starts
-
-    candidates =
-      case Enum.reject(spots, &(View.dist(&1, here) <= @scout_sight)) do
-        [] -> spots
-        away -> away
-      end
-
-    Enum.min_by(candidates, fn spot ->
-      at = Map.get(seen, spot, -1000)
-      stale? = v.tick - at >= @recheck_ticks
-      bonus = if stale? and Enum.any?(enemy, &(View.dist(&1, spot) <= 12)), do: @enemy_base_bonus, else: 0
-      {at - bonus, View.dist(spot, here), spot}
-    end)
+  defp flee(%View{cc: cc} = v, here, from) do
+    home = View.pos(cc)
+    if View.dist(here, home) <= View.dist(from, home), do: toward(here, home, 6), else: away(v, here, from)
   end
 
   # The closest enemy fighter or tower that could reach us. Taking damage, the closest one we
