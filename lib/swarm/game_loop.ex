@@ -220,7 +220,7 @@ defmodule Swarm.GameLoop do
 
     found =
       case Match.find(st.client, name) do
-        :none -> Match.create(st.client, opponents, name)
+        :none -> create_named(st.client, opponents, name)
         other -> other
       end
 
@@ -233,6 +233,22 @@ defmodule Swarm.GameLoop do
         Ra.command({:claim_failed, name})
         Process.send_after(self(), :start, 5_000)
         {:noreply, st}
+    end
+  end
+
+  # No two unfinished matches share a name (409 MATCH_NAME_TAKEN): if it's taken, the old leader
+  # created it after all, between our lookup and our create. That one is ours.
+  defp create_named(client, opponents, name) do
+    case Match.create(client, opponents, name) do
+      {:error, %{code: "MATCH_NAME_TAKEN"}} ->
+        case Match.find(client, name) do
+          {:ok, id} -> {:ok, id}
+          :none -> {:error, :name_taken_but_not_found}
+          other -> other
+        end
+
+      other ->
+        other
     end
   end
 

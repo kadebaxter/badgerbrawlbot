@@ -118,6 +118,18 @@ defmodule Swarm.View do
     v |> drop_offs() |> Enum.map(&dist(&1, pos(deposit))) |> Enum.min(fn -> nil end)
   end
 
+  @doc """
+  Deposits by a Resource Depot of ours that is still being built: worth mining once it is done,
+  and the place to head for while it goes up.
+  """
+  def soon_near_deposits(%__MODULE__{my_buildings: buildings, deposits: deposits}) do
+    sites = for b <- buildings, b["type"] == "ResourceDepot", not b["completed"], do: pos(b)
+    Enum.filter(deposits, fn d -> Enum.any?(sites, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+  end
+
+  @doc "How far ore can be from a drop-off and still be worth mining."
+  def drop_off_reach, do: @drop_off_reach
+
   @doc "Deposits worth mining: within #{@drop_off_reach} tiles of a drop-off."
   def near_deposits(%__MODULE__{} = v) do
     Enum.filter(v.deposits, fn d ->

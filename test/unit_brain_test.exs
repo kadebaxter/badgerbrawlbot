@@ -17,6 +17,14 @@ defmodule Swarm.UnitBrainTest do
     assert %{"type" => "Gather", "unitIds" => [1], "targetId" => 4} = cmd(unit(1, "Worker", 8, 8), @gather)
   end
 
+  test "with no ore by a drop-off, a worker heads for the ore by a depot going up" do
+    # Two far fields: (20, 7) is the shorter trip, but the depot is going up by (7, 30).
+    deposits = [%{"id" => 5, "x" => 20, "y" => 7, "remaining" => 900}, %{"id" => 6, "x" => 7, "y" => 30, "remaining" => 900}]
+    site = Map.put(building(50, "ResourceDepot", 7, 28), "completed", false)
+    v = View.new(state(units: [unit(1, "Worker", 8, 8)], deposits: deposits, buildings: [site]))
+    assert {%{"type" => "Gather", "targetId" => 6}, _} = UnitBrain.decide(1, v, @gather)
+  end
+
   describe "a worker picks its ore" do
     # Home ore by the Command Center at (7, 7), and a field 30 tiles away.
     @home %{"id" => 4, "x" => 2, "y" => 7, "remaining" => 900}

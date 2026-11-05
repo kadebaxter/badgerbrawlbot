@@ -140,9 +140,16 @@ defmodule Swarm.UnitBrain do
   end
 
   # An idle worker picks a deposit. So does one mining a deposit too far from any drop-off (once
-  # there is a closer one), or one with enemies by it. With only unsafe ore left, it waits.
+  # there is a closer one), or one with enemies by it. With only unsafe ore left, it waits. With
+  # no ore by a drop-off, ore by a depot being built comes first: the brain put it by the field
+  # it expects miners at, so they don't scatter to another far one.
   defp worker(unit, %View{deposits: [_ | _]} = v) do
-    near = View.near_deposits(v)
+    near =
+      case View.near_deposits(v) do
+        [] -> View.soon_near_deposits(v)
+        near -> near
+      end
+
     current = Enum.find(v.deposits, &(&1["id"] == unit["targetId"]))
     mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
 

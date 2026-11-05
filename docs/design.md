@@ -212,7 +212,9 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
 or our workers are stronger (HP × damage per tick) than the fighters and towers at home. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
-on the way, and no new wave leaves until nothing has been attacked for 20 ticks.
+on the way. A wave only leaves if what stays home can hold the raid going on (by the same
+comparison, so a scout poking at the base holds nothing up), and not within 20 ticks of a recall
+for home.
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
 first. Pairs are taken closest first, with enemies that can already hit us ahead of the rest,
@@ -235,7 +237,7 @@ remembers the order it is carrying out, so it sends nothing while that order sti
 Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
-   (7 workers) → Resource Depot by the ore (9) → Guard Tower toward the enemy (11) → TechLab (13)
+   (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13)
    → 2nd Barracks (15) → 2nd Guard Tower (17). The ore for the next building is
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
@@ -244,9 +246,15 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    enemy, and don't mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
    workers on it, else the shortest. When home has been short of ore for 30 ticks in a row (under
    1,500 left within reach of a drop-off, or more than 3 workers per nearby deposit), a Resource
-   Depot goes by the closest other ore, ahead of the build order. Depots only go by ore on our
+   Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
+   next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
+   And whenever 3 or more workers are already mining one field out of reach, a depot goes by
+   that field right away (a depot costs one Soldier and saves them all the walk). Depots only go by ore on our
    side (closer to our Command Center than to any enemy start, so never a contested deposit
-   between players) and not within 4 tiles of where we lost a building in the last 300 ticks. Below an army floor (6 fighters,
+   between players; an eliminated player's start doesn't count) and not within 4 tiles of where
+   we lost a building in the last 300 ticks. Guard Towers go 3–4 tiles from the Command Center,
+   so their 5-tile range covers the base, toward the nearest neighbor still in that no tower
+   faces yet, so they spread over the ways in (the middle of the map with no neighbor left). Below an army floor (6 fighters,
    plus 1 per 100 ticks) the Barracks train before anything is built or researched.
    With 500+ ore on hand once the first Barracks is up ("rich"): the build order stops waiting
    for workers, except for depots; once it is done,
@@ -261,7 +269,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    point; only those go, so units trained later wait for the next wave instead of trickling out.
    The members are kept in the replicated memory, so a new leader knows who is out. The wave is
    recalled when fewer than 5 of it are left, or when home can't hold without it. No wave leaves
-   while anything of ours is under attack, or for 20 ticks after.
+   while home couldn't hold the current raid without it, or for 20 ticks after a recall for home.
 3. **Scouting and attack decisions (done):** a scout per neighbor (the two nearest opponents) plus one roaming
    scout (replaced when they die); each visits the spot of its share it
    saw longest ago, checks the enemy base most often, gets as close as is safe (enemy range + 2),

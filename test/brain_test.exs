@@ -167,17 +167,40 @@ defmodule Swarm.BrainTest do
     refute Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
   end
 
-  test "with four players, the Guard Tower still faces the middle, not a map edge" do
-    corners = [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}]
+  describe "Guard Tower sites" do
+    # Neighbors at (56, 7) and (7, 56), player 3 across the map at (56, 56).
+    defp four(buildings \\ [], eliminated \\ []) do
+      corners = [{1, 56, 7}, {2, 7, 56}, {3, 56, 56}]
 
-    four =
-      Map.update!(state(), "players", fn [me | _] ->
-        [me | for({slot, x, y} <- corners, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})]
+      Map.update!(state(buildings: buildings), "players", fn [me | _] ->
+        [me | for({slot, x, y} <- corners, do: %{"slot" => slot, "eliminated" => slot in eliminated, "startPosition" => %{"x" => x, "y" => y}})]
       end)
+      |> View.new()
+    end
 
-    {x, y} = Brain.site(terrain(), View.new(four), :front)
-    # Diagonally out from the Command Center at (7, 7), toward (32, 32).
-    assert x >= 12 and y >= 12
+    test "close to the Command Center, so the tower covers the base" do
+      {x, y} = Brain.site(terrain(), four(), :front)
+      assert View.dist({x, y}, {7, 7}) in 3..4
+    end
+
+    test "facing the nearest neighbor, then the other one" do
+      {x, y} = first = Brain.site(terrain(), four(), :front)
+      # Player 1 at (56, 7) and player 2 at (7, 56) are as near; the lower slot goes first: east.
+      assert x > 7 and y <= 8
+
+      {x, y} = Brain.site(terrain(), four([building(2, "GuardTower", elem(first, 0), elem(first, 1))]), :front)
+      assert y > 7 and x <= 8
+    end
+
+    test "with a neighbor gone, toward the one still in" do
+      {_x, y} = Brain.site(terrain(), four([], [1]), :front)
+      assert y > 9
+    end
+
+    test "no neighbor left: toward the middle" do
+      {x, y} = Brain.site(terrain(), four([], [1, 2, 3]), :front)
+      assert x > 8 and y > 8
+    end
   end
 
   test "towers and the TechLab wait for a finished Barracks" do
@@ -272,7 +295,7 @@ defmodule Swarm.BrainTest do
 
     test "comes home when the base can't hold" do
       {ours, memory} = wave_out()
-      assert {%{wave: nil, why: [{:wave_recalled, why}]}, _, %{attacked_at: 110}} =
+      assert {%{wave: nil, why: [{:wave_recalled, why}]}, _, %{recalled_at: 110}} =
                plan([units: ours ++ raiders(10, 12, 9), tick: 110], memory)
 
       assert why =~ "home under attack"
@@ -299,9 +322,19 @@ defmodule Swarm.BrainTest do
     end
   end
 
-  test "no wave leaves while the base is under attack" do
+  test "a wave still leaves when home can hold the raid without it" do
     enemy = unit(900, "Soldier", 12, 9, owner: 1)
-    assert {%{mode: :defend, wave: nil}, _, _} = plan(units: soldiers(22) ++ [enemy])
+    assert {%{mode: :defend, wave: %{id: 1}}, _, _} = plan(units: soldiers(22) ++ [enemy])
+  end
+
+  test "no wave leaves while the base is under an attack home can't hold without it" do
+    enemies = for i <- 1..8, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
+    assert {%{mode: :defend, wave: nil}, _, _} = plan(units: soldiers(22) ++ enemies)
+  end
+
+  test "a scout poking at the base doesn't hold the wave" do
+    scout = unit(900, "Scout", 15, 12, owner: 1)
+    assert {%{wave: %{id: 1}}, _, _} = plan(units: soldiers(22) ++ [scout])
   end
 
   test "prefers a visible enemy building as the target" do
@@ -495,18 +528,44 @@ defmodule Swarm.BrainTest do
     end
   end
 
-  test "no wave leaves while an outpost is under attack" do
+  test "no wave leaves while an outpost is under an attack home can't hold without it" do
     miners = for i <- 1..6, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering")
-    enemy = unit(900, "Soldier", 34, 34, owner: 1)
-    # 25 soldiers: 6 guards, 2 escorts, 17 attackers, against one enemy.
-    {strategy, _, _} = plan(units: soldiers(25) ++ miners ++ [enemy], buildings: [building(50, "ResourceDepot", 30, 30)])
+    enemies = for i <- 1..10, do: unit(900 + i, "Soldier", 34, 34, owner: 1)
+    {strategy, _, _} = plan(units: soldiers(25) ++ miners ++ enemies, buildings: [building(50, "ResourceDepot", 30, 30)])
     assert %{mode: :defend, wave: nil} = strategy
   end
 
-  test "no wave leaves while our workers are attacked out in the field" do
+  test "no wave leaves while our workers out in the field are attacked by more than home can hold" do
     miner = unit(101, "Worker", 42, 40, activity: "Gathering")
-    enemy = unit(900, "Soldier", 40, 40, owner: 1)
-    assert {%{mode: :defend, wave: nil}, _, _} = plan(units: [miner, enemy | soldiers(25)])
+    enemies = for i <- 1..10, do: unit(900 + i, "Soldier", 40, 40, owner: 1)
+    assert {%{mode: :defend, wave: nil}, _, _} = plan(units: [miner | enemies ++ soldiers(25)])
+  end
+
+  describe "co-ops where the workers are" do
+    # A field 30+ tiles out, past any drop-off's reach; the home deposit by the Command Center is gone.
+    defp far_field, do: for(i <- 0..2, do: %{"id" => 60 + i, "x" => 40 + i, "y" => 40, "remaining" => 900})
+    defp far_miners(n), do: for(i <- 1..n, do: unit(100 + i, "Worker", 41, 41, activity: "Gathering", target_id: 60))
+
+    defp depot_builds(commands),
+      do: for(%{"type" => "Build", "buildingType" => "ResourceDepot"} = c <- commands, do: c)
+
+    test "three workers mining a far field get a depot by it, right away" do
+      {_, commands, _} = plan(units: far_miners(3), deposits: far_field(), ore: 200)
+      assert [%{"x" => x, "y" => y}] = depot_builds(commands)
+      assert View.dist({x, y}, {41, 40}) <= 4
+    end
+
+    test "not for two" do
+      {_, commands, _} = plan(units: far_miners(2), deposits: far_field(), ore: 200)
+      assert depot_builds(commands) == []
+    end
+
+    test "not when one is already going up there" do
+      site = Map.put(building(50, "ResourceDepot", 41, 43), "completed", false)
+      {_, commands, _} = plan(units: far_miners(3), deposits: far_field(), buildings: [site], ore: 200)
+      # Only a worker sent to finish that one, no second depot.
+      assert Enum.all?(depot_builds(commands), &({&1["x"], &1["y"]} == {41, 43}))
+    end
   end
 
   describe "with plenty of ore" do
