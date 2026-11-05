@@ -228,6 +228,13 @@ defmodule Swarm.UnitBrainTest do
       assert View.dist({x, y}, {28, 28}) > 2
     end
 
+    test "with more of us around than them, it stands and shoots" do
+      # Six archers against one soldier right on top of one of them.
+      soldier = unit(900, "Soldier", 31, 30, owner: 1)
+      friends = for i <- 1..5, do: unit(10 + i, "Archer", 29, 28 + i)
+      assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 30, 30), [soldier | friends])
+    end
+
     test "at home, it stands and fights" do
       soldier = unit(900, "Soldier", 12, 11, owner: 1)
       assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 11, 11), [soldier])

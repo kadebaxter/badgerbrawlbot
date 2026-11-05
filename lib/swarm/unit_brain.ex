@@ -6,8 +6,10 @@ defmodule Swarm.UnitBrain do
   Workers mine the closest ore to a drop-off that isn't crowded, never ore far from one, and
   run to the rally point when an enemy is about to hit them. A fighter first works out its role (`Swarm.Roles`), then, in order:
 
-  0. an archer with an enemy soldier or scout about to reach it: step back toward home, then
-     shoot again from range (kiting)
+  0. an archer losing the fight around it (the enemy fighters near it are stronger than ours) with
+     an enemy soldier or scout about to reach it: step back toward home, then shoot again from
+     range (kiting). Winning, it stands and shoots: archers are slower than soldiers, so backing
+     off from one they could kill only stops them shooting.
   1. something to fight nearby (`Swarm.Roles.target/3`: enemy fighters first, shared out so
      none is overkilled; fighters at home don't chase out of the base): attack it
   2. in the wave: attack-move to the target, or to the threat if the wave turns back
@@ -34,11 +36,10 @@ defmodule Swarm.UnitBrain do
 
   alias Swarm.{Roles, View}
 
-  # Archers step back once an enemy soldier or scout is this close (it reaches us next tick), or
-  # this close when the enemy is stronger around us; `@kite_step` tiles at a time. Within
-  # `@kite_home` of the rally point they stand and fight: help is there.
-  @kite_distance 2
-  @kite_distance_outnumbered 3
+  # Archers losing the fight around them step back once an enemy soldier or scout is this close,
+  # `@kite_step` tiles at a time. Within `@kite_home` of the rally point they stand and fight:
+  # help is there.
+  @kite_distance 3
   @kite_step 3
   @kite_home 2
   @melee ["Soldier", "Scout"]
@@ -198,7 +199,7 @@ defmodule Swarm.UnitBrain do
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
 
     cond do
-      back = unit["type"] == "Archer" && kite(unit, v, s) -> {:move, back}
+      back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.target(v, s.wave, unit) -> {:attack, enemy["id"]}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
@@ -214,7 +215,7 @@ defmodule Swarm.UnitBrain do
   # from the closest enemy soldier or scout, the one closest to the rally point: so it backs off
   # toward home, around an enemy in the way, and never just into a corner.
   # Everything but workers, for a Trebuchet: it can't hit anything inside 3 tiles.
-  defp kite(unit, v, s, types \\ @melee, near \\ @kite_distance, near_outnumbered \\ @kite_distance_outnumbered) do
+  defp kite(unit, v, s, types, near) do
     here = View.pos(unit)
     melee = Enum.filter(v.enemy_units, &(if types == :fighters, do: &1["type"] != "Worker", else: &1["type"] in types))
     home = s.rally
@@ -223,7 +224,7 @@ defmodule Swarm.UnitBrain do
          true <- home != nil and View.dist(here, home) > @kite_home,
          closest = Enum.min_by(melee, &View.dist(View.pos(&1), here)),
          now = View.dist(View.pos(closest), here),
-         true <- now <= if(outnumbered?(v, here), do: near_outnumbered, else: near) do
+         true <- now <= near do
       {x, y} = here
 
       for({dx, dy} <- @steps, do: {x + dx * @kite_step, y + dy * @kite_step})
@@ -269,7 +270,7 @@ defmodule Swarm.UnitBrain do
       cond do
         s.rally == nil -> {:attack_move, s.target}
         role == :siege_out -> {:move, s.rally}
-        back = kite(unit, v, s, :fighters, @siege_blind_spot, @siege_blind_spot) -> {:move, back}
+        back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
         holding?(s) -> {:move, s.wave.staging}
         true -> {:attack_move, s.target}
       end

@@ -199,7 +199,7 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 
 | Situation | Fighter does |
 |---|---|
-| Archer, an enemy soldier or scout within 2 (3 if outnumbered), away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
+| Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | Something to fight within 6 tiles | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
