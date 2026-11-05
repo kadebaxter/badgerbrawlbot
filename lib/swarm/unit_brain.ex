@@ -296,11 +296,13 @@ defmodule Swarm.UnitBrain do
     hurt? = unit["hp"] != nil and unit["hp"] < Map.get(memory, :hp, unit["hp"])
     fled_at = Map.get(memory, :fled_at)
 
+    job = scout_job(v, s, unit)
+
     {intent, fled_at, phase} =
       cond do
-        from = danger(v, here, hurt?) -> {{:move, flee(v, here, from)}, v.tick, nil}
-        fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at, nil}
-        true -> scout_post(v, s, unit, Map.get(memory, :phase))
+        from = danger(v, here, hurt?) -> run(v, s, here, from, job)
+        fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at, Map.get(memory, :phase)}
+        true -> scout_post(v, s, here, job, Map.get(memory, :phase))
       end
 
     memory = Map.merge(memory, %{hp: unit["hp"], fled_at: fled_at, phase: phase})
@@ -310,30 +312,58 @@ defmodule Swarm.UnitBrain do
       else: {command(unit, intent), %{memory | intent: intent}}
   end
 
-  # The spot the leader wants looked at, for the scout watching that side; with a wave out, in
-  # front of it (or just behind it), for the scout watching its target's side; otherwise halfway
-  # to our neighbor. Returns {intent, nil, its phase with the wave}.
-  defp scout_post(v, s, unit, phase) do
+  @doc """
+  What each of our scouts is doing, for the leader's log: [{id, job, position}], where the job is
+  `:look` (looking at a target before a wave leaves), `:wave` (working in front of the wave out)
+  or `:post` (watching its side from halfway).
+  """
+  def scout_jobs(%View{} = v, strategy) do
+    for u <- View.units_of(v, "Scout"), do: {u["id"], elem(scout_job(v, strategy, u), 0), View.pos(u)}
+  end
+
+  # The spot the leader wants looked at, for the scout watching that side; with a wave out, the
+  # wave, for the scout watching its target's side; otherwise its post halfway to our neighbor.
+  defp scout_job(v, s, unit) do
     spot = Map.get(s, :look)
     front = s.wave && s.target && s.rally && wave_front(v, s.wave, s.target)
 
     cond do
-      spot && looker(v, spot) == unit["id"] -> {{:move, spot}, nil, nil}
-      front && looker(v, s.target) == unit["id"] -> with_wave(v, s, unit, front, phase)
-      true -> {{:move, watch_post(v, unit)}, nil, nil}
+      spot && looker(v, spot) == unit["id"] -> {:look, spot}
+      front && looker(v, s.target) == unit["id"] -> {:wave, front}
+      true -> {:post, watch_post(v, unit)}
     end
   end
 
+  # A threatened scout runs: with the wave, back behind it (and stays behind it a while), if that
+  # takes it away from the threat; otherwise toward home.
+  defp run(v, s, here, from, {:wave, {_lead, middle}}) do
+    behind = toward(middle, s.rally, @scout_behind)
+
+    if View.dist(behind, from) > View.dist(here, from),
+      do: {{:move, behind}, v.tick, {:behind, v.tick}},
+      else: {{:move, flee(v, here, from)}, v.tick, {:behind, v.tick}}
+  end
+
+  defp run(v, _s, here, from, _job), do: {{:move, flee(v, here, from)}, v.tick, nil}
+
+  # Returns {intent, nil, its phase with the wave}.
+  defp scout_post(_v, _s, _here, {:look, spot}, _phase), do: {{:move, spot}, nil, nil}
+  defp scout_post(v, s, here, {:wave, front}, phase), do: with_wave(v, s, here, front, phase)
+  defp scout_post(_v, _s, _here, {:post, spot}, _phase), do: {{:move, spot}, nil, nil}
+
   # Ahead of the wave's lead unit for a while (or until it is there), then behind the wave's
-  # middle for a while, and again. `phase` is {:ahead | :behind, since tick}.
-  defp with_wave(v, s, unit, {lead, middle}, phase) do
+  # middle for a while, and again. `phase` is {:ahead | :behind, since tick}. Not ahead into a
+  # fight: with enemies already by the spot ahead, the wave is at them and there is nothing left
+  # to see, so the scout stays behind.
+  defp with_wave(v, s, here, {lead, middle}, phase) do
     ahead = toward(lead, s.target, @scout_ahead)
     behind = toward(middle, s.rally, @scout_behind)
+    fight? = Enum.any?(threats(v), &(View.dist(View.pos(&1), ahead) <= Roles.range(&1) + @scout_margin + 1))
 
     phase =
       case phase do
         {:ahead, since} ->
-          if v.tick - since >= @ahead_ticks or View.dist(View.pos(unit), ahead) <= 2, do: {:behind, v.tick}, else: phase
+          if v.tick - since >= @ahead_ticks or View.dist(here, ahead) <= 2, do: {:behind, v.tick}, else: phase
 
         {:behind, since} ->
           if v.tick - since >= @behind_ticks, do: {:ahead, v.tick}, else: phase
@@ -342,7 +372,7 @@ defmodule Swarm.UnitBrain do
           {:ahead, v.tick}
       end
 
-    spot = if elem(phase, 0) == :ahead, do: ahead, else: behind
+    spot = if elem(phase, 0) == :ahead and not fight?, do: ahead, else: behind
     {{:move, spot}, nil, phase}
   end
 
@@ -396,6 +426,10 @@ defmodule Swarm.UnitBrain do
     if d <= n, do: to, else: {fx + div((tx - fx) * n, d), fy + div((ty - fy) * n, d)}
   end
 
+  # What can hurt a scout: enemy fighters and towers.
+  defp threats(v),
+    do: Enum.filter(v.enemy_units, &(&1["type"] != "Worker")) ++ Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower"))
+
   # Six tiles toward home, or straight away from the threat when it is closer to home than we are
   # (between us and home), or we have no home left.
   defp flee(%View{cc: nil} = v, here, from), do: away(v, here, from)
@@ -408,12 +442,8 @@ defmodule Swarm.UnitBrain do
   # The closest enemy fighter or tower that could reach us. Taking damage, the closest one we
   # can see at all: something is hitting us.
   defp danger(v, here, hurt?) do
-    threats =
-      Enum.filter(v.enemy_units, &(&1["type"] != "Worker")) ++
-        Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower"))
-
     close =
-      Enum.filter(threats, fn t ->
+      Enum.filter(threats(v), fn t ->
         d = View.dist(View.pos(t), here)
         d <= Roles.range(t) + @scout_margin or (hurt? and d <= 8)
       end)

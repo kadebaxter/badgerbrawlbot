@@ -330,6 +330,25 @@ defmodule Swarm.UnitBrainTest do
       assert {%{"x" => 26, "y" => 26}, _} = UnitBrain.decide(5, at.(118, {15, 15}), @attack, memory)
     end
 
+    test "with the wave, threatened, it falls back behind the wave, not home" do
+      # The wave (unit 2) at (20, 20); the scout ahead at (26, 26), an enemy soldier on it.
+      enemy = unit(900, "Soldier", 28, 28, owner: 1)
+      assert %{"x" => 15, "y" => 15} = cmd(unit(5, "Scout", 26, 26), @attack, [unit(2, "Soldier", 20, 20), enemy])
+    end
+
+    test "with the wave already at enemies, it doesn't go ahead into them" do
+      # Enemy soldiers by the spot ahead (26, 26), not near the scout at (10, 10).
+      enemies = for i <- 1..3, do: unit(900 + i, "Soldier", 28, 27, owner: 1)
+      assert %{"x" => 15, "y" => 15} = cmd(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20) | enemies])
+    end
+
+    test "the leader can tell what each scout is doing" do
+      v = View.new(state(units: [unit(5, "Scout", 10, 10), unit(6, "Scout", 30, 30), unit(2, "Soldier", 20, 20)]))
+      # One neighbor: both watch it; the first goes with the wave.
+      assert [{5, :wave, {10, 10}}, {6, :post, {30, 30}}] = UnitBrain.scout_jobs(v, @attack)
+      assert [{5, :post, _}, {6, :post, _}] = UnitBrain.scout_jobs(v, @gather)
+    end
+
     test "having got ahead, it steps back at once" do
       {_, memory} = decide(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20)])
       assert {%{"x" => 15, "y" => 15}, _} = decide(unit(5, "Scout", 26, 26), @attack, [unit(2, "Soldier", 20, 20)], memory)

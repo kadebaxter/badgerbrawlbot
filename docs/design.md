@@ -209,7 +209,10 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Attacker | Wait at the rally point |
 
 The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
-or our workers are stronger (HP × damage per tick) than the fighters and towers at home. A
+or our workers are stronger (HP × damage per tick) than what can meet them: our fighters not in the
+wave within 12 tiles of a raider, and the towers that can reach one, each worth 2 Soldiers (by HP ×
+damage a tower would count as 5, but it can't move, gets focused down and is outranged by
+Trebuchets). Defenders at another base don't count. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
 on the way. A wave only leaves if what stays home can hold the raid going on (by the same
 comparison, so a scout poking at the base holds nothing up), and not within 20 ticks of a recall
@@ -284,9 +287,11 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    most 40 ticks), except for a counterattack. While a wave is out, the scout watching its
    target's side works in front of it: 6 tiles ahead of its lead unit for up to 8 ticks, then 5
    tiles behind its middle for 10 ticks, out of the fight, and again, through every new target;
-   the wave never waits for it. A scout runs toward home (straight away
-   when the enemy is between it and home) once an enemy could reach it (its range + 2) or it is
-   taking damage, and stays back 15 ticks before returning. The
+   the wave never waits for it. With enemies already by the spot ahead, the wave is at them, so
+   the scout stays behind it. A scout runs once an enemy could reach it (its range + 2) or it is
+   taking damage: with the wave, back behind the wave; otherwise toward home (straight away when
+   the enemy is between it and home). It stays back 15 ticks before returning. The leader's
+   10-tick log line says what each scout is doing and where (`scouts: 288 wave (51,16), …`). The
    leader remembers every enemy fighter seen (dropped when we kill it, after 300 ticks unseen, or
    when one of our units or buildings should see it where we last saw it and doesn't) and
    launches a wave once the staged attackers are 1.5× the known enemy army plus towers, by HP ×

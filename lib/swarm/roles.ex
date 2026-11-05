@@ -35,6 +35,9 @@ defmodule Swarm.Roles do
   # The base is everything this close to the Command Center. Fighters at home don't chase
   # enemies out of it.
   @base_radius 10
+  # Defenders this close to a raider can meet it; a finished tower is worth this many Soldiers.
+  @defend_reach 12
+  @tower_worth 2
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
@@ -260,11 +263,21 @@ defmodule Swarm.Roles do
       Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), pos) <= @worker_cover))
   end
 
-  @doc "What is defending without the wave: fighters and Trebuchets at home, plus finished towers."
-  def home_strength(%View{} = v, wave) do
+  @doc """
+  What can meet `raiders` without the wave: our fighters and Trebuchets not in it within
+  `@defend_reach` of a raider, and our finished towers that can reach one, each worth
+  `@tower_worth` Soldiers. (By HP × damage a tower would count as five: it can't move, gets
+  focused down, and Trebuchets outrange it.) Defenders elsewhere, at another base, don't count.
+  """
+  def home_strength(%View{} = v, wave, raiders) do
+    near? = fn pos, reach -> Enum.any?(raiders, &(View.dist(View.pos(&1), pos) <= reach)) end
     siege = Enum.reject(View.units_of(v, "Trebuchet"), &(&1["id"] in members(wave)))
-    towers = Enum.filter(View.buildings_of(v, "GuardTower"), & &1["completed"])
-    strength(home(v, wave)) + strength(siege) + strength(towers)
+    units = Enum.filter(home(v, wave) ++ siege, &near?.(View.pos(&1), @defend_reach))
+
+    towers =
+      Enum.count(View.buildings_of(v, "GuardTower"), &(&1["completed"] and near?.(View.pos(&1), range(&1) + 1)))
+
+    strength(units) + towers * @tower_worth * strength([%{"type" => "Soldier"}])
   end
 
   @doc """
@@ -278,7 +291,7 @@ defmodule Swarm.Roles do
         nil
 
       raiders ->
-        {theirs, ours} = {strength(raiders), home_strength(v, wave)}
+        {theirs, ours} = {strength(raiders), home_strength(v, wave, raiders)}
         if theirs > ours, do: {theirs, ours}
     end
   end

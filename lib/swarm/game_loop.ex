@@ -410,7 +410,7 @@ defmodule Swarm.GameLoop do
       Logger.info(
         "tick #{view.tick} | ore #{view.ore} | #{map_size(units)} units (#{per_node}) | " <>
           "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
-          "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}"
+          "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}#{scout_info(view, strategy)}"
       )
     end
 
@@ -463,6 +463,22 @@ defmodule Swarm.GameLoop do
     Metrics.clear_game()
     send(self(), :start)
     {:noreply, %{st | match_id: nil, state: nil, recent: %{}, mode: nil}}
+  end
+
+  # What each scout is doing and where, e.g. "scouts: 288 wave (51,16), 311 post (40,30) home":
+  # "home" means it is by our Command Center, whatever its job.
+  defp scout_info(view, strategy) do
+    case Swarm.UnitBrain.scout_jobs(view, strategy) do
+      [] ->
+        ""
+
+      jobs ->
+        " | scouts: " <>
+          Enum.map_join(jobs, ", ", fn {id, job, {x, y} = pos} ->
+            home = if view.cc && View.dist(pos, View.pos(view.cc)) <= 8, do: " home", else: ""
+            "#{id} #{job} (#{x},#{y})#{home}"
+          end)
+    end
   end
 
   # Why no wave (or no reinforcements) left this tick: see `Swarm.Brain`'s `strategy.hold`.

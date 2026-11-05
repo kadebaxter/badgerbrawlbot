@@ -152,6 +152,19 @@ defmodule Swarm.RolesTest do
       assert Roles.recall(view(ours ++ raiders(6, 12, 9), towers), wave) == nil
     end
 
+    test "only defenders near the raid count, and a tower is worth two soldiers", %{wave: wave} do
+      # Twenty raiders at the base. Home: seven guards and three towers there, and nine fighters
+      # away at an outpost, which don't count.
+      raiders = for i <- 1..20, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
+      guards = for i <- 1..7, do: unit(300 + i, "Soldier", 10, 10)
+      away = for i <- 1..9, do: unit(400 + i, "Soldier", 40, 40)
+      towers = for {id, x} <- [{2, 12}, {3, 13}, {4, 11}], do: building(id, "GuardTower", x, 10)
+      far_tower = building(5, "GuardTower", 40, 42)
+
+      # 20 x 990 against 7 x 990 + 3 x 2 x 990.
+      assert {19800.0, 12870.0} = Roles.recall(view(raiders ++ guards ++ away, [far_tower | towers]), wave)
+    end
+
     test "not for enemies nowhere near anything of ours", %{wave: wave, ours: ours} do
       assert Roles.recall(view(ours ++ raiders(10, 30, 50)), wave) == nil
     end
