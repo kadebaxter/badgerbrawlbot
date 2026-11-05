@@ -316,10 +316,15 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 10, 10), @gather)
     end
 
-    test "with a wave out, it goes ahead of the wave toward the target" do
-      # The wave (unit 2) at (20, 20); six tiles on toward (56, 56).
-      assert %{"type" => "Move", "x" => 26, "y" => 26} =
+    test "with a wave out, it stays at its post" do
+      assert %{"type" => "Move", "x" => 31, "y" => 31} =
                cmd(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20)])
+    end
+
+    test "asked for a look, it goes there; once the look is done, back to its post" do
+      look = Map.put(@gather, :look, {50, 50})
+      assert %{"type" => "Move", "x" => 50, "y" => 50} = cmd(unit(5, "Scout", 31, 31), look)
+      assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 50, 50), @gather)
     end
 
     test "it runs toward home from enemy fighters" do
@@ -371,6 +376,14 @@ defmodule Swarm.UnitBrainTest do
       v = four_scouts(for id <- [5, 6], do: unit(id, "Scout", 10, 10))
       assert goal(v, 5) == {31, 7}
       assert goal(v, 6) == {7, 31}
+    end
+
+    test "only the scout watching that side goes to look; the other stays at its post" do
+      v = four_scouts(for id <- [5, 6], do: unit(id, "Scout", 10, 10))
+      # A look by player 2's start at (7, 56): scout 6 watches that side.
+      look = Map.put(@gather, :look, {7, 50})
+      assert {%{"x" => 31, "y" => 7}, _} = UnitBrain.decide(5, v, look)
+      assert {%{"x" => 7, "y" => 50}, _} = UnitBrain.decide(6, v, look)
     end
 
     test "with one neighbor left, both watch it" do

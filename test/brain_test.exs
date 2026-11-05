@@ -3,8 +3,10 @@ defmodule Swarm.BrainTest do
   import Swarm.Test.GameState
   alias Swarm.{Brain, View}
 
+  # A scout has just looked at player 1 (the enemy in a 1v1), so waves don't wait for a look; the
+  # look itself is tested under "a look before attacking".
   defp plan(opts, memory \\ Brain.new_memory()),
-    do: Brain.plan(View.new(state(opts)), memory, terrain())
+    do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
 
   test "gathers while the army is small" do
     assert {%{mode: :gather, rally: {10, 10}}, _, _} = plan(units: workers(5) ++ soldiers(2))
@@ -306,6 +308,104 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  describe "a look before attacking" do
+    # No look yet. The spot: six tiles short of their start at (56, 56), toward us.
+    defp fresh(opts, memory \\ Brain.new_memory()), do: Brain.plan(View.new(state(opts)), memory, terrain())
+
+    test "once five attackers wait, a scout is sent to look, and the wave waits for it" do
+      {s, _, memory} = fresh(units: soldiers(22))
+      assert %{wave: nil, look: {50, 50}, why: [{:scout_sent, "scout looking at player 1 by (50,50)"}]} = s
+      assert s.hold =~ "scout looking at player 1"
+      assert %{look: %{owner: 1, pos: {50, 50}, at: 100, done: nil}} = memory
+    end
+
+    test "not with fewer than five waiting" do
+      assert {%{look: nil, why: []}, _, %{look: nil}} = fresh(units: soldiers(11))
+    end
+
+    test "when a scout gets there, it reports what it sees and the wave goes" do
+      {_, _, memory} = fresh(units: soldiers(22))
+      scout = unit(300, "Scout", 50, 51)
+      enemies = for i <- 1..2, do: unit(900 + i, "Soldier", 55, 55, owner: 1)
+
+      assert {%{wave: %{id: 1}, look: nil, why: [{:scouted, "scouted player 1: 2 fighters, strength 1980"} | _]}, _, %{look: %{done: 110}}} =
+               fresh([units: [scout | soldiers(22) ++ enemies], tick: 110], memory)
+    end
+
+    test "if no scout gets there in 40 ticks, the wave goes on what we know" do
+      {_, _, memory} = fresh(units: [unit(300, "Scout", 20, 20) | soldiers(22)])
+      assert {%{wave: nil}, _, memory} = fresh([units: [unit(300, "Scout", 25, 25) | soldiers(22)], tick: 120], memory)
+
+      assert {%{wave: %{id: 1}, why: [{:scouted, "no look at player 1" <> _} | _]}, _, _} =
+               fresh([units: [unit(300, "Scout", 25, 25) | soldiers(22)], tick: 140], memory)
+    end
+
+    test "with no scout at all, it doesn't wait" do
+      {_, _, memory} = fresh(units: soldiers(22))
+      assert {%{wave: %{id: 1}}, _, _} = fresh([units: soldiers(22), tick: 101], memory)
+    end
+
+    test "a counterattack doesn't wait for one" do
+      {attackers, guards} = Enum.split(soldiers(22), 15)
+      near = Enum.map(attackers, &%{&1 | "x" => 14, "y" => 14}) ++ guards
+      memory = %{Brain.new_memory() | raid: %{at: 95, kills: 3}}
+      assert {%{wave: %{id: 1}}, _, _} = fresh([units: near], memory)
+    end
+
+    test "with a wave out on a new player, a scout looks at them; the wave doesn't wait" do
+      # The wave went after player 1 (eliminated now); player 2 at (7, 56) is next.
+      wave = %{id: 1, members: Enum.to_list(201..215), owner: 1, released: true}
+      memory = %{looked(nil) | wave: wave, next_wave: 2}
+
+      two =
+        Map.update!(state(units: soldiers(22)), "players", fn [me, them] ->
+          [me, Map.put(them, "eliminated", true), %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}]
+        end)
+
+      assert {%{wave: %{id: 1}, look: {7, 50}, why: [{:scout_sent, "scout looking at player 2" <> _} | _]}, _, _} =
+               Brain.plan(View.new(two), memory, terrain())
+    end
+  end
+
+  describe "what we remember of the enemy" do
+    test "enemies we should see where we last saw them, and don't, are forgotten" do
+      # Our soldiers at (10, 10) see five tiles; (12, 12) is in sight, (40, 40) isn't.
+      near = %{"id" => 900, "type" => "Soldier", "owner" => 1, "hp" => 110, "x" => 12, "y" => 12, "seen" => 90}
+      far = %{"id" => 901, "type" => "Soldier", "owner" => 1, "hp" => 110, "x" => 40, "y" => 40, "seen" => 90}
+      memory = %{Brain.new_memory() | enemies: %{900 => near, 901 => far}}
+      assert {_, _, %{enemies: enemies}} = plan([units: soldiers(3)], memory)
+      assert Map.keys(enemies) == [901]
+    end
+  end
+
+  describe "the strongest single player" do
+    defp army(owner, n, x, y, first), do: for(i <- 1..n, do: unit(first + i, "Soldier", x, y, owner: owner))
+
+    test "two others fighting each other near the wave don't add up: it stays" do
+      # Ten of ours at the front; eight each of players 2 and 3 there.
+      wave = for s <- Enum.take(soldiers(10), 10), do: %{s | "x" => 45, "y" => 45}
+      memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2}
+      others = army(2, 8, 47, 47, 900) ++ army(3, 8, 46, 48, 950)
+      assert {%{wave: %{id: 1}}, _, _} = plan([units: wave ++ others], memory)
+    end
+
+    test "one player stronger than the whole wave: it comes back, saying who" do
+      wave = for s <- Enum.take(soldiers(10), 10), do: %{s | "x" => 45, "y" => 45}
+      memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2}
+      assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched by player 3, strength 9900 vs 11880 nearby"}]}, _, _} =
+               plan([units: wave ++ army(3, 12, 47, 47, 900)], memory)
+    end
+
+    test "no wave leaves into a stronger army we can see on the way" do
+      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(22) ++ army(3, 20, 30, 30, 900))
+      assert hold =~ "player 3's army is in the way (19800 vs our 14850)"
+    end
+
+    test "but two weaker ones on the way, likely fighting each other, don't stop it" do
+      assert {%{wave: %{id: 1}}, _, _} = plan(units: soldiers(22) ++ army(2, 10, 30, 30, 900) ++ army(3, 10, 31, 31, 950))
+    end
+  end
+
   describe "a counterattack" do
     # Fifteen attackers near the rally point (10, 10), but not at it: (14, 14) is four tiles out.
     defp near_rally do
@@ -505,7 +605,7 @@ defmodule Swarm.BrainTest do
         end
 
       memory = %{Brain.new_memory() | enemies: armies}
-      assert {%{target: {40, 7}, wave: %{}}, _, _} = Brain.plan(View.new(three), memory, terrain())
+      assert {%{target: {40, 7}, wave: %{}}, _, _} = Brain.plan(View.new(three), looked(memory, 2), terrain())
     end
 
     test "launches and recalls say why" do
@@ -529,10 +629,10 @@ defmodule Swarm.BrainTest do
         end)
       end
 
-      {s, _, _} = Brain.plan(View.new(four.(%{1 => 3000, 2 => 1200, 3 => 100})), nil, terrain())
+      {s, _, _} = Brain.plan(View.new(four.(%{1 => 3000, 2 => 1200, 3 => 100})), looked(nil, 2), terrain())
       assert %{target: {7, 56}, wave: %{owner: 2}} = s
 
-      {s, _, _} = Brain.plan(View.new(four.(%{1 => 900, 2 => 1200, 3 => 100})), nil, terrain())
+      {s, _, _} = Brain.plan(View.new(four.(%{1 => 900, 2 => 1200, 3 => 100})), looked(nil, 1), terrain())
       assert %{target: {56, 7}, wave: %{owner: 1}} = s
     end
 
@@ -545,7 +645,7 @@ defmodule Swarm.BrainTest do
         end)
       end
 
-      {%{wave: %{owner: 2}}, _, memory} = Brain.plan(View.new(two.(%{1 => 3000, 2 => 500})), nil, terrain())
+      {%{wave: %{owner: 2}}, _, memory} = Brain.plan(View.new(two.(%{1 => 3000, 2 => 500})), looked(nil, 2), terrain())
       # Player 1 is now the weaker; the wave out stays on player 2.
       assert {%{target: {7, 56}, wave: %{owner: 2}}, _, _} =
                Brain.plan(View.new(two.(%{1 => 100, 2 => 500})), memory, terrain())

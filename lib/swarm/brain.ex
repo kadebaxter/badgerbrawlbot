@@ -22,7 +22,11 @@ defmodule Swarm.Brain do
   stronger than what is home. A wave only leaves if what stays home can hold the raid going on
   (a scout poking at the base holds nothing up), and not within `@calm_ticks` of a recall for home.
   Right after we beat a raid it may go with every attacker near the rally point (a
-  counterattack). When no wave leaves, `strategy.hold` says why, for the logs. In the last `@all_in_ticks` ticks, if we are behind on score,
+  counterattack). Before a wave leaves, a scout looks at the target (`strategy.look`), so the
+  launch goes on what is there now: enemies we remember where our units can see and don't are
+  forgotten. Fights are judged against the strongest single enemy player there: two others fighting
+  each other don't add up (we can come in on them). When no wave leaves, `strategy.hold` says why,
+  for the logs. In the last `@all_in_ticks` ticks, if we are behind on score,
   every fighter attacks: sitting still would lose on time anyway.
   """
 
@@ -43,6 +47,18 @@ defmodule Swarm.Brain do
   @counter_kills 3
   @counter_window 30
   @counter_radius 10
+  # Before a wave leaves, a scout looks at the target: once `@look_at` attackers wait at the rally
+  # point, unless we looked at that player in the last `@look_fresh` ticks. It goes to `@look_from`
+  # tiles short of the target (its vision is 8); the look is done once a scout is within
+  # `@look_sight` of that spot. The launch waits at most `@look_timeout` ticks for it.
+  @look_at 5
+  @look_fresh 60
+  @look_from 6
+  @look_sight 3
+  @look_timeout 40
+  # How far our units see, for forgetting enemies we should see and don't (one less, as they move).
+  @vision %{"Scout" => 8, "Archer" => 6, "Trebuchet" => 7, "GuardTower" => 7}
+  @default_vision 6
   @all_in_ticks 300
   # After a wave is called home to defend, no new one leaves for this long: raiders often come
   # back, and a wave that leaves the moment they step out of sight gets called home again.
@@ -159,7 +175,8 @@ defmodule Swarm.Brain do
           threat: Roles.threat(),
           wave: Roles.wave(),
           why: [{atom(), String.t()}],
-          hold: String.t() | nil
+          hold: String.t() | nil,
+          look: pos() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -168,6 +185,8 @@ defmodule Swarm.Brain do
   # `helpers` is building id => {worker id, tick} for workers sent to finish abandoned sites.
   # `ore_short_since` is the tick home has been short of ore since, or nil.
   # `recalled_at` is the last tick a wave was called home to defend, or nil.
+  # `look` is the last look at a target: %{owner, pos, at: when we sent the scout, done: when it
+  # got there (or we gave up), or nil}, or nil.
   # `raid` is the raid going on or just over: %{at: last tick it was here, kills: its fighters we
   # killed at home}, or nil.
   # `buildings` is our building id => where it stands; `lost` is spot => tick, for buildings that
@@ -183,7 +202,8 @@ defmodule Swarm.Brain do
       buildings: %{},
       lost: %{},
       recalled_at: nil,
-      raid: nil
+      raid: nil,
+      look: nil
     }
   end
 
@@ -213,7 +233,7 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil}, memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -227,6 +247,8 @@ defmodule Swarm.Brain do
     home_recall? = memory.wave != nil and not all_in?(v) and Roles.recall(v, memory.wave) != nil
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
+    {look, looked} = look(memory, v, rally, owner, target)
+    memory = %{memory | look: look}
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
     # A raid answered with a counterattack is done with.
     raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
@@ -245,8 +267,9 @@ defmodule Swarm.Brain do
       post: post(v, rally, target),
       threat: threat,
       wave: wave,
-      why: why,
-      hold: hold
+      why: looked ++ why,
+      hold: hold,
+      look: if(look && look.done == nil, do: look.pos)
     }
 
     {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
@@ -272,7 +295,62 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Enemy fighters as last seen. Ones we killed or haven't seen in a while are dropped.
+  # The look at the target before a wave leaves. Settles the one going on (a scout got there, or
+  # we give up on it), and sends a new one: before a launch, once `@look_at` attackers wait and we
+  # haven't looked at that player lately; with a wave out, when it has moved on to a new player.
+  # Returns the look and what to log.
+  defp look(memory, v, rally, owner, target) do
+    {look, why} = settle_look(memory.look, v, memory)
+
+    want? =
+      cond do
+        owner == nil or target == nil or v.cc == nil -> false
+        looking?(look, owner) or fresh?(look, owner, v) -> false
+        memory.wave != nil -> look == nil or look.owner != owner
+        true -> length(staged(v, nil, rally, @staged_radius)) >= @look_at
+      end
+
+    if want? do
+      spot = toward(target, View.pos(v.cc), @look_from)
+      {%{owner: owner, pos: spot, at: v.tick, done: nil}, why ++ [{:scout_sent, "scout looking at player #{owner} by #{fmt(spot)}"}]}
+    else
+      {look, why}
+    end
+  end
+
+  defp settle_look(%{done: nil} = look, v, memory) do
+    there? = Enum.any?(View.units_of(v, "Scout"), &(View.dist(View.pos(&1), look.pos) <= @look_sight))
+
+    cond do
+      there? ->
+        seen = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] == look.owner))
+        why = "scouted player #{look.owner}: #{length(seen)} fighters, strength #{round(Roles.strength(seen))}"
+        {%{look | done: v.tick}, [{:scouted, why}]}
+
+      View.units_of(v, "Scout") == [] or v.tick - look.at >= @look_timeout ->
+        why = "no look at player #{look.owner} (no scout got there in #{v.tick - look.at} ticks): going on what we know"
+        {%{look | done: v.tick}, [{:scouted, why}]}
+
+      true ->
+        {look, []}
+    end
+  end
+
+  defp settle_look(look, _v, _memory), do: {look, []}
+
+  defp looking?(look, owner), do: look != nil and look.owner == owner and look.done == nil
+  defp fresh?(look, owner, v), do: look != nil and look.owner == owner and look.done != nil and v.tick - look.done <= @look_fresh
+
+  # `n` tiles from `from` toward `to` (or `to` itself, if it is closer).
+  defp toward({fx, fy} = from, {tx, ty} = to, n) do
+    d = View.dist(from, to)
+    if d <= n, do: to, else: {fx + div((tx - fx) * n, d), fy + div((ty - fy) * n, d)}
+  end
+
+  defp fmt({x, y}), do: "(#{x},#{y})"
+
+  # Enemy fighters as last seen. Ones we killed, haven't seen in a while, or should see where we
+  # last saw them and don't (they died out of our sight, or moved on) are dropped.
   defp remember_enemies(enemies, %View{} = v) do
     killed = for e <- v.events, e["kind"] == "UnitKilled", do: e["entityId"]
 
@@ -281,7 +359,14 @@ defmodule Swarm.Brain do
         {u["id"], u |> Map.take(["id", "owner", "type", "hp", "x", "y"]) |> Map.put("seen", v.tick)}
       end
 
+    eyes =
+      for(u <- v.my_units, do: {View.pos(u), Map.get(@vision, u["type"], @default_vision) - 1}) ++
+        for b <- v.my_buildings, b["completed"], do: {View.pos(b), Map.get(@vision, b["type"], @default_vision) - 1}
+
+    in_sight? = fn e -> Enum.any?(eyes, fn {pos, r} -> View.dist(pos, View.pos(e)) <= r end) end
+
     enemies
+    |> Map.reject(fn {id, e} -> not Map.has_key?(seen, id) and in_sight?.(e) end)
     |> Map.merge(seen)
     |> Map.drop(killed)
     |> Map.reject(fn {_id, e} -> v.tick - e["seen"] > @forget_after end)
@@ -333,7 +418,8 @@ defmodule Swarm.Brain do
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}], nil}
 
       facing = outmatched(v, alive, target) ->
-        why = "wave #{wave.id}: outmatched, strength #{round(Roles.strength(alive))} vs #{round(facing)} nearby"
+        {player, theirs} = facing
+        why = "wave #{wave.id}: outmatched by player #{player}, strength #{round(Roles.strength(alive))} vs #{round(theirs)} nearby"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
       true ->
@@ -388,7 +474,9 @@ defmodule Swarm.Brain do
 
   defp release(_v, wave, next_wave), do: {wave, next_wave, []}
 
-  # The strength of what the wave's front is facing if it is more than the whole wave's, else nil.
+  # The strongest single enemy player at the wave's front, as {player, strength}, if stronger than
+  # the whole wave; else nil. Players are counted apart: two fighting each other near us don't add
+  # up, and we may well come in on them.
   # The front: the members within `@wave_sight` of the one nearest the target (reinforcements
   # walking up behind are counted in the wave, not in where it is fighting).
   defp outmatched(v, alive, target) do
@@ -402,7 +490,32 @@ defmodule Swarm.Brain do
       Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
         Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1)))
 
-    if Roles.strength(alive) < Roles.strength(facing), do: Roles.strength(facing)
+    case strongest_player(facing) do
+      {_player, theirs} = top when theirs > 0 -> if Roles.strength(alive) < theirs, do: top
+      _ -> nil
+    end
+  end
+
+  # {player, strength} of the strongest single player among these units and towers, or nil.
+  defp strongest_player([]), do: nil
+
+  defp strongest_player(units) do
+    units
+    |> Enum.group_by(& &1["owner"])
+    |> Enum.map(fn {owner, us} -> {owner, Roles.strength(us)} end)
+    |> Enum.max_by(fn {owner, strength} -> {strength, -(owner || 0)} end)
+  end
+
+  # The strongest single player's fighters we can see near the rally point or on the way to the
+  # target, as {player, strength}, or nil. Their towers aren't counted: the strength test already
+  # counts the target's.
+  defp in_the_way(v, rally, target) do
+    d = View.dist(rally, target)
+    path = for k <- 0..d//4, do: toward(rally, target, k)
+
+    v.enemy_units
+    |> Enum.filter(fn u -> u["type"] != "Worker" and Enum.any?(path, &(View.dist(&1, View.pos(u)) <= @wave_sight)) end)
+    |> strongest_player()
   end
 
   # Send the attackers waiting at the rally point once they are strong enough, if what stays home
@@ -448,8 +561,15 @@ defmodule Swarm.Brain do
         length(staged) < @min_wave ->
           "#{at_rally}, want #{@min_wave}"
 
+        not counter? and looking?(memory.look, owner) ->
+          "#{at_rally}, scout looking at player #{owner} (#{v.tick - memory.look.at} ticks)"
+
         not ready? ->
           "#{at_rally}, strength #{round(ours)} vs #{@margin} x #{round(theirs)} = #{round(@margin * theirs)} known of player #{owner}"
+
+        (way = target && in_the_way(v, rally, target)) && elem(way, 1) > ours ->
+          {player, strength} = way
+          "#{at_rally}, player #{player}'s army is in the way (#{round(strength)} vs our #{round(ours)})"
 
         home != nil ->
           {raid, left} = home

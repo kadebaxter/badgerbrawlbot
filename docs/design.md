@@ -272,19 +272,24 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    point. While it is out, attackers trained later follow it in batches of 5 or more and become
    part of it, so it goes out and comes back as one. The members are kept in the replicated
    memory, so a new leader knows who is out. The wave is recalled when fewer than 5 of it are
-   left, when home can't hold without it, or when what its front faces is stronger than the whole
-   wave, reinforcements on their way included. No wave leaves
+   left, when home can't hold without it, or when the strongest single enemy player at its front
+   is stronger than the whole wave, reinforcements on their way included. Players are counted
+   apart: two fighting each other near us don't add up, so we can come in on them. No wave leaves
    while home couldn't hold the current raid without it, or for 20 ticks after a recall for home.
 3. **Scouting and attack decisions (done):** two scouts, one per neighbor (the two nearest
    opponents), each waiting halfway between our Command Center and that neighbor's start, where
-   an attack from them comes through. While a wave is out they go 6 tiles ahead of it toward its
-   target, so the leader sees what it is walking into. A scout runs toward home (straight away
+   an attack from them comes through. Before a wave leaves, once 5 attackers wait at the rally
+   point and we haven't looked at that player in the last 60 ticks, the scout watching that side
+   goes to 6 tiles short of the target, then back to its post; the launch waits for the look (at
+   most 40 ticks), except for a counterattack. When a wave moves on to a new player, that side's
+   scout looks at them too, without the wave waiting. A scout runs toward home (straight away
    when the enemy is between it and home) once an enemy could reach it (its range + 2) or it is
    taking damage, and stays back 15 ticks before returning. The
-   leader remembers every enemy fighter seen (dropped when we kill it or after 300 ticks
-   unseen) and launches a wave once the staged attackers are 1.5× the known enemy army plus
-   towers, by HP × damage per tick (at least 8; 15 while we know nothing). A wave facing a
-   stronger force pulls back. Waves only go after the weaker (by survival score, which the server
+   leader remembers every enemy fighter seen (dropped when we kill it, after 300 ticks unseen, or
+   when one of our units or buildings should see it where we last saw it and doesn't) and
+   launches a wave once the staged attackers are 1.5× the known enemy army plus towers, by HP ×
+   damage per tick (at least 8; 15 while we know nothing), and stronger than the strongest single
+   player's army we can see on the way. A wave facing a stronger force pulls back. Waves only go after the weaker (by survival score, which the server
    reports for every player) of our two nearest opponents, never across the map; a wave sticks to
    that opponent, and comes home whenever home can't hold on its own. In the last 300 ticks, if we are behind on score, every fighter
    attacks; if ahead, we don't throw units away, since living units count toward the score.

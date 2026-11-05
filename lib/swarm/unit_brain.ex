@@ -19,9 +19,9 @@ defmodule Swarm.UnitBrain do
   6. otherwise go to its spot: guards to the post, attackers to the rally point
 
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
-  Command Center and its neighbor's start, where an attack from them comes through. While a wave
-  is out, they go `@scout_lead` tiles ahead of it, toward its target, so the leader sees what the
-  wave is walking into. A scout runs toward home once an enemy could reach it or it is taking
+  Command Center and its neighbor's start, where an attack from them comes through. When the leader
+  wants a look at a target before attacking (`strategy.look`), the scout watching that side goes
+  there, then comes back to its post; the other stays. A scout runs toward home once an enemy could reach it or it is taking
   damage, and waits `@scout_rest` ticks before going back. Its memory holds its HP last tick and
   when it last ran.
 
@@ -56,8 +56,6 @@ defmodule Swarm.UnitBrain do
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
-  # How far ahead of the wave a scout goes (its vision is 8).
-  @scout_lead 6
   # How long a scout that ran stays back before returning to its post.
   @scout_rest 15
 
@@ -303,29 +301,42 @@ defmodule Swarm.UnitBrain do
       else: {command(unit, intent), %{memory | intent: intent}}
   end
 
-  # Ahead of the wave, toward its target, while one is out; otherwise halfway to our neighbor.
-  # Scouts share the neighbors by id: the first watches the nearest, the next the other one.
+  # The spot the leader wants looked at, for the scout watching that side; otherwise halfway to
+  # our neighbor.
   defp scout_post(v, s, unit) do
-    case s.wave && s.target && Roles.wave_center(v, s.wave) do
-      {_, _} = center -> toward(center, s.target, @scout_lead)
-      _ -> watch_post(v, unit)
+    spot = Map.get(s, :look)
+    if spot && looker(v, spot) == unit["id"], do: spot, else: watch_post(v, unit)
+  end
+
+  # Scouts share the neighbors by id: the first watches the nearest, the next the other one (with
+  # one neighbor, both watch it). {scout id, the start it watches} for each.
+  defp watched(%View{} = v) do
+    scouts = v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.sort()
+
+    case Roles.neighbors(v) do
+      [] -> Enum.map(scouts, &{&1, nil})
+      neighbors -> scouts |> Enum.with_index() |> Enum.map(fn {id, i} -> {id, elem(Enum.at(neighbors, rem(i, length(neighbors))), 0)} end)
+    end
+  end
+
+  # The scout that goes to look at `spot`: the one watching the start nearest it (the first, on a tie).
+  defp looker(v, spot) do
+    case watched(v) do
+      [] -> nil
+      scouts -> scouts |> Enum.min_by(fn {id, start} -> {if(start, do: View.dist(start, spot), else: 0), id} end) |> elem(0)
     end
   end
 
   defp watch_post(%View{cc: nil} = v, _unit), do: {div(v.map_width, 2), div(v.map_height, 2)}
 
   defp watch_post(%View{cc: cc} = v, unit) do
-    scouts = v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.sort()
-    me = Enum.find_index(scouts, &(&1 == unit["id"])) || 0
-
-    case Roles.neighbors(v) do
-      [] ->
-        {div(v.map_width, 2), div(v.map_height, 2)}
-
-      neighbors ->
-        {{sx, sy}, _slot} = Enum.at(neighbors, rem(me, length(neighbors)))
+    case List.keyfind(watched(v), unit["id"], 0) do
+      {_id, {sx, sy}} ->
         {cx, cy} = View.pos(cc)
         {div(sx + cx, 2), div(sy + cy, 2)}
+
+      _ ->
+        {div(v.map_width, 2), div(v.map_height, 2)}
     end
   end
 

@@ -43,4 +43,13 @@ defmodule Swarm.Test.GameState do
   def soldiers(n, opts \\ []), do: for(i <- 1..n, do: unit(200 + i, "Soldier", 10, 10, opts))
 
   def terrain, do: List.duplicate(String.duplicate(".", 64), 64)
+
+  @doc """
+  Brain memory (or a fresh one, for nil) in which a scout has just looked at `owner`, so a wave
+  may leave at `tick` without waiting for a look. Only one if the memory has no look yet.
+  """
+  def looked(memory, owner \\ 1, tick \\ 100) do
+    memory = memory || Swarm.Brain.new_memory()
+    if memory.look, do: memory, else: %{memory | look: %{owner: owner, pos: {50, 50}, at: tick - 10, done: tick}}
+  end
 end
