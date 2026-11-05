@@ -22,7 +22,8 @@ defmodule Swarm.Brain do
   stronger than what is home. A wave only leaves if what stays home can hold the raid going on
   (a scout poking at the base holds nothing up), and not within `@calm_ticks` of a recall for home.
   Right after we beat a raid it may go with every attacker near the rally point (a
-  counterattack). Before a wave leaves, a scout looks at the target (`strategy.look`), so the
+  counterattack). Before a wave leaves, a scout looks at the target (`strategy.look`; while it is
+  out, a scout works in front of it), so the
   launch goes on what is there now: enemies we remember where our units can see and don't are
   forgotten. Fights are judged against the strongest single enemy player there: two others fighting
   each other don't add up (we can come in on them). When no wave leaves, `strategy.hold` says why,
@@ -296,8 +297,8 @@ defmodule Swarm.Brain do
   end
 
   # The look at the target before a wave leaves. Settles the one going on (a scout got there, or
-  # we give up on it), and sends a new one: before a launch, once `@look_at` attackers wait and we
-  # haven't looked at that player lately; with a wave out, when it has moved on to a new player.
+  # we give up on it), and sends a new one once `@look_at` attackers wait and we haven't looked at
+  # that player lately. Not while a wave is out: then a scout works in front of it.
   # Returns the look and what to log.
   defp look(memory, v, rally, owner, target) do
     {look, why} = settle_look(memory.look, v, memory)
@@ -306,7 +307,8 @@ defmodule Swarm.Brain do
       cond do
         owner == nil or target == nil or v.cc == nil -> false
         looking?(look, owner) or fresh?(look, owner, v) -> false
-        memory.wave != nil -> look == nil or look.owner != owner
+        # With a wave out, a scout works in front of it instead (see `Swarm.UnitBrain`).
+        memory.wave != nil -> false
         true -> length(staged(v, nil, rally, @staged_radius)) >= @look_at
       end
 

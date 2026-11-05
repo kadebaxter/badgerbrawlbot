@@ -352,7 +352,7 @@ defmodule Swarm.BrainTest do
       assert {%{wave: %{id: 1}}, _, _} = fresh([units: near], memory)
     end
 
-    test "with a wave out on a new player, a scout looks at them; the wave doesn't wait" do
+    test "with a wave out on a new player, no look: a scout is in front of the wave already" do
       # The wave went after player 1 (eliminated now); player 2 at (7, 56) is next.
       wave = %{id: 1, members: Enum.to_list(201..215), owner: 1, released: true}
       memory = %{looked(nil) | wave: wave, next_wave: 2}
@@ -362,8 +362,7 @@ defmodule Swarm.BrainTest do
           [me, Map.put(them, "eliminated", true), %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}]
         end)
 
-      assert {%{wave: %{id: 1}, look: {7, 50}, why: [{:scout_sent, "scout looking at player 2" <> _} | _]}, _, _} =
-               Brain.plan(View.new(two), memory, terrain())
+      assert {%{wave: %{id: 1}, target: {7, 56}, look: nil, why: []}, _, _} = Brain.plan(View.new(two), memory, terrain())
     end
   end
 

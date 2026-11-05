@@ -21,7 +21,10 @@ defmodule Swarm.UnitBrain do
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
   Command Center and its neighbor's start, where an attack from them comes through. When the leader
   wants a look at a target before attacking (`strategy.look`), the scout watching that side goes
-  there, then comes back to its post; the other stays. A scout runs toward home once an enemy could reach it or it is taking
+  there, then comes back to its post; the other stays. While a wave is out, the scout watching
+  the side of its target works in front of it: `@scout_ahead` tiles ahead of its lead unit for up
+  to `@ahead_ticks` ticks, then `@scout_behind` tiles behind it for `@behind_ticks`, out of the
+  fight, and again; the wave doesn't wait for it. A scout runs toward home once an enemy could reach it or it is taking
   damage, and waits `@scout_rest` ticks before going back. Its memory holds its HP last tick and
   when it last ran.
 
@@ -58,6 +61,12 @@ defmodule Swarm.UnitBrain do
   @scout_margin 2
   # How long a scout that ran stays back before returning to its post.
   @scout_rest 15
+  # A scout with the wave: this far ahead of its lead unit, for at most this long (less once it is
+  # there), then this far behind its middle, for this long.
+  @scout_ahead 6
+  @ahead_ticks 8
+  @scout_behind 5
+  @behind_ticks 10
 
   def new_memory, do: %{intent: nil}
 
@@ -287,25 +296,66 @@ defmodule Swarm.UnitBrain do
     hurt? = unit["hp"] != nil and unit["hp"] < Map.get(memory, :hp, unit["hp"])
     fled_at = Map.get(memory, :fled_at)
 
-    {intent, fled_at} =
+    {intent, fled_at, phase} =
       cond do
-        from = danger(v, here, hurt?) -> {{:move, flee(v, here, from)}, v.tick}
-        fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at}
-        true -> {{:move, scout_post(v, s, unit)}, nil}
+        from = danger(v, here, hurt?) -> {{:move, flee(v, here, from)}, v.tick, nil}
+        fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at, nil}
+        true -> scout_post(v, s, unit, Map.get(memory, :phase))
       end
 
-    memory = Map.merge(memory, %{hp: unit["hp"], fled_at: fled_at})
+    memory = Map.merge(memory, %{hp: unit["hp"], fled_at: fled_at, phase: phase})
 
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
   end
 
-  # The spot the leader wants looked at, for the scout watching that side; otherwise halfway to
-  # our neighbor.
-  defp scout_post(v, s, unit) do
+  # The spot the leader wants looked at, for the scout watching that side; with a wave out, in
+  # front of it (or just behind it), for the scout watching its target's side; otherwise halfway
+  # to our neighbor. Returns {intent, nil, its phase with the wave}.
+  defp scout_post(v, s, unit, phase) do
     spot = Map.get(s, :look)
-    if spot && looker(v, spot) == unit["id"], do: spot, else: watch_post(v, unit)
+    front = s.wave && s.target && s.rally && wave_front(v, s.wave, s.target)
+
+    cond do
+      spot && looker(v, spot) == unit["id"] -> {{:move, spot}, nil, nil}
+      front && looker(v, s.target) == unit["id"] -> with_wave(v, s, unit, front, phase)
+      true -> {{:move, watch_post(v, unit)}, nil, nil}
+    end
+  end
+
+  # Ahead of the wave's lead unit for a while (or until it is there), then behind the wave's
+  # middle for a while, and again. `phase` is {:ahead | :behind, since tick}.
+  defp with_wave(v, s, unit, {lead, middle}, phase) do
+    ahead = toward(lead, s.target, @scout_ahead)
+    behind = toward(middle, s.rally, @scout_behind)
+
+    phase =
+      case phase do
+        {:ahead, since} ->
+          if v.tick - since >= @ahead_ticks or View.dist(View.pos(unit), ahead) <= 2, do: {:behind, v.tick}, else: phase
+
+        {:behind, since} ->
+          if v.tick - since >= @behind_ticks, do: {:ahead, v.tick}, else: phase
+
+        nil ->
+          {:ahead, v.tick}
+      end
+
+    spot = if elem(phase, 0) == :ahead, do: ahead, else: behind
+    {{:move, spot}, nil, phase}
+  end
+
+  # {the wave member nearest its target, the middle of the wave}, or nil with none of it left.
+  defp wave_front(v, %{members: members} = wave, target) do
+    case Enum.filter(v.my_units, &(&1["id"] in members)) do
+      [] ->
+        nil
+
+      alive ->
+        lead = Enum.min_by(alive, &{View.dist(View.pos(&1), target), &1["id"]})
+        {View.pos(lead), Roles.wave_center(v, wave)}
+    end
   end
 
   # Scouts share the neighbors by id: the first watches the nearest, the next the other one (with

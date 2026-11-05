@@ -316,9 +316,23 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 10, 10), @gather)
     end
 
-    test "with a wave out, it stays at its post" do
-      assert %{"type" => "Move", "x" => 31, "y" => 31} =
-               cmd(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20)])
+    test "with a wave out, it goes ahead of it, then steps back behind it, and again" do
+      # The wave (unit 2) at (20, 20): six tiles on toward (56, 56), or five back toward the rally
+      # point (10, 10).
+      at = fn tick, {x, y} -> View.new(state(units: [unit(5, "Scout", x, y), unit(2, "Soldier", 20, 20)], tick: tick)) end
+
+      {%{"x" => 26, "y" => 26}, memory} = UnitBrain.decide(5, at.(100, {10, 10}), @attack)
+      # On its way ahead for up to 8 ticks...
+      {_, memory} = UnitBrain.decide(5, at.(104, {18, 18}), @attack, memory)
+      # ... then behind the wave for 10.
+      {%{"x" => 15, "y" => 15}, memory} = UnitBrain.decide(5, at.(108, {22, 22}), @attack, memory)
+      {_, memory} = UnitBrain.decide(5, at.(112, {16, 16}), @attack, memory)
+      assert {%{"x" => 26, "y" => 26}, _} = UnitBrain.decide(5, at.(118, {15, 15}), @attack, memory)
+    end
+
+    test "having got ahead, it steps back at once" do
+      {_, memory} = decide(unit(5, "Scout", 10, 10), @attack, [unit(2, "Soldier", 20, 20)])
+      assert {%{"x" => 15, "y" => 15}, _} = decide(unit(5, "Scout", 26, 26), @attack, [unit(2, "Soldier", 20, 20)], memory)
     end
 
     test "asked for a look, it goes there; once the look is done, back to its post" do
@@ -384,6 +398,15 @@ defmodule Swarm.UnitBrainTest do
       look = Map.put(@gather, :look, {7, 50})
       assert {%{"x" => 31, "y" => 7}, _} = UnitBrain.decide(5, v, look)
       assert {%{"x" => 7, "y" => 50}, _} = UnitBrain.decide(6, v, look)
+    end
+
+    test "with a wave out, only the scout on its target's side goes with it" do
+      # The wave at (20, 10) after player 1 at (56, 7): scout 5 watches that side.
+      wave = for i <- 1..3, do: unit(200 + i, "Soldier", 20, 10)
+      v = four_scouts(for(id <- [5, 6], do: unit(id, "Scout", 10, 10)) ++ wave)
+      s = %{@gather | mode: :attack, target: {56, 7}, wave: %{id: 1, members: [201, 202, 203]}}
+      assert {%{"x" => 26, "y" => 10}, _} = UnitBrain.decide(5, v, s)
+      assert {%{"x" => 7, "y" => 31}, _} = UnitBrain.decide(6, v, s)
     end
 
     test "with one neighbor left, both watch it" do
