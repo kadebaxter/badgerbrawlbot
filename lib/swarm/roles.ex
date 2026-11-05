@@ -7,7 +7,7 @@ defmodule Swarm.Roles do
 
   - `:wave`: it left with the current wave (its id is in `strategy.wave.members`)
   - `:guard`: one of the newest fighters at home; holds the main base. At least `@min_guards`,
-    or a quarter of the army.
+    or a third of the army.
   - `{:escort, outpost}`: holds an outpost (a Resource Depot more than `@outpost_distance` from
     the Command Center) while workers mine there, as a group of `@escort_group` (at least
     `@min_escort_group`, or none: one fighter alone stops nobody). Fighters already there keep
@@ -16,17 +16,15 @@ defmodule Swarm.Roles do
     help wherever a base or our workers are attacked
 
   Scouts are none of these (`:scout`): they explore and never fight on purpose. Our Trebuchets
-  are their own: the `@home_siege` oldest hold the base from the guard post (`:siege`); the rest
-  (`:siege_out`) wait at the rally point and go out with a wave (`:wave`).
+  are their own: they wait at the rally point (`:siege_out`) and go out with a wave (`:wave`).
+  None stay home: for the ore, Soldiers and towers defend far better.
 
   It also decides who fights whom (`target/3`), the same way on every node.
   """
 
   alias Swarm.View
 
-  @min_guards 3
-  # Trebuchets that always stay home.
-  @home_siege 2
+  @min_guards 5
   # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
   @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
@@ -38,8 +36,6 @@ defmodule Swarm.Roles do
   # The base is everything this close to the Command Center. Fighters at home don't chase
   # enemies out of it.
   @base_radius 10
-  # A finished Guard Tower defends about as well as this many fighters.
-  @tower_worth 2
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
@@ -76,7 +72,7 @@ defmodule Swarm.Roles do
           | nil
   @type threat :: %{pos: {integer, integer}, size: non_neg_integer()} | nil
 
-  @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege | :siege_out
+  @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege_out
 
   @spec role(View.t(), wave(), integer()) :: role()
   def role(%View{} = v, wave, id) do
@@ -110,7 +106,7 @@ defmodule Swarm.Roles do
       end)
 
     # 2. The newest of the rest guard the main base.
-    {guards, pool} = Enum.split(pool, max(@min_guards, div(length(fighters(v)), 4)))
+    {guards, pool} = Enum.split(pool, max(@min_guards, div(length(fighters(v)), 3)))
 
     # 3. Each group is filled up from the closest of the rest. One that can't reach
     #    `@min_escort_group` isn't worth having: those fighters attack instead.
@@ -129,18 +125,7 @@ defmodule Swarm.Roles do
     Map.new(Enum.map(guards, &{&1["id"], :guard}) ++ escorts ++ Enum.map(attackers, &{&1["id"], :attacker}))
   end
 
-  defp siege_role(v, wave, id) do
-    cond do
-      id in members(wave) -> :wave
-      id in home_siege(v) -> :siege
-      true -> :siege_out
-    end
-  end
-
-  @doc "The Trebuchets that stay home: the `@home_siege` oldest (they were there first)."
-  def home_siege(%View{} = v) do
-    v |> View.units_of("Trebuchet") |> Enum.map(& &1["id"]) |> Enum.sort() |> Enum.take(@home_siege)
-  end
+  defp siege_role(_v, wave, id), do: if(id in members(wave), do: :wave, else: :siege_out)
 
   @doc "Ids of the guards."
   def guards(%View{} = v, wave) do
@@ -254,11 +239,46 @@ defmodule Swarm.Roles do
     end
   end
 
-  @doc "What is defending the base without the wave: fighters at home, plus the towers."
-  def home_defense(%View{} = v, wave) do
-    towers = Enum.count(View.buildings_of(v, "GuardTower"), & &1["completed"])
-    length(home(v, wave)) + @tower_worth * towers
+  @doc """
+  Enemy fighters hitting anything of ours: inside a base (the Command Center's or an outpost's),
+  by our workers, or Trebuchets shelling our buildings.
+  """
+  def raiders(%View{} = v) do
+    bases = bases(v)
+    workers = View.units_of(v, "Worker")
+
+    for e <- v.enemy_units,
+        e["type"] != "Worker",
+        Enum.any?(bases, &(View.dist(View.pos(e), &1) <= @base_radius)) or
+          Enum.any?(workers, &(View.dist(View.pos(&1), View.pos(e)) <= @worker_cover)) or
+          siege_on_us?(v, e),
+        do: e
   end
+
+  @doc "What is defending without the wave: fighters and Trebuchets at home, plus finished towers."
+  def home_strength(%View{} = v, wave) do
+    siege = Enum.reject(View.units_of(v, "Trebuchet"), &(&1["id"] in members(wave)))
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), & &1["completed"])
+    strength(home(v, wave)) + strength(siege) + strength(towers)
+  end
+
+  @doc """
+  Should the wave come home? When what is hitting us, anywhere (the main base, an outpost, our
+  workers), is stronger than what is home to meet it. We only attack a neighbor, so home is never
+  far. `{raiders' strength, home's strength}` if so, else nil.
+  """
+  def recall(%View{} = v, wave) when wave != nil do
+    case raiders(v) do
+      [] ->
+        nil
+
+      raiders ->
+        {theirs, ours} = {strength(raiders), home_strength(v, wave)}
+        if theirs > ours, do: {theirs, ours}
+    end
+  end
+
+  def recall(_v, nil), do: nil
 
   @doc "The average position of the wave's living members, or nil."
   def wave_center(%View{} = v, wave) do
@@ -271,17 +291,6 @@ defmodule Swarm.Roles do
         {div(Enum.sum_by(alive, & &1["x"]), n), div(Enum.sum_by(alive, & &1["y"]), n)}
     end
   end
-
-  @doc """
-  Should the wave come home? Whenever home can't hold on its own: we only attack a neighbor, so
-  home is never far. Every member gets the same answer.
-  """
-  def turn_back?(%View{} = v, %{wave: wave, threat: threat, rally: rally})
-      when wave != nil and threat != nil and rally != nil do
-    threat.size > home_defense(v, wave)
-  end
-
-  def turn_back?(_v, _strategy), do: false
 
   @doc """
   What `unit` should attack, or nil.

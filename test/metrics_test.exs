@@ -23,7 +23,7 @@ defmodule Swarm.MetricsTest do
   end
 
   test "a tick's figures, and they go when the game does" do
-    v = View.new(state(units: workers(3) ++ soldiers(20), ore: 420, tick: 300))
+    v = View.new(state(units: workers(3) ++ soldiers(22), ore: 420, tick: 300))
     {strategy, _, memory} = Brain.plan(v, nil, terrain())
     Metrics.record_tick(%{view: v, strategy: strategy, memory: memory, asked: 23, answered: 22, seconds: 0.25})
 

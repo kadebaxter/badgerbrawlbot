@@ -122,6 +122,8 @@ Commands, applied in `apply/3` (pure: state in, state + reply out):
 | Command | Effect |
 |---|---|
 | `{:match_started, name, id}` | remember the match |
+| `{:claim_match, name}` | claim the next practice match before creating it; refused if one is claimed or being played |
+| `{:claimed_started, name, id}` | record the claimed match's id; refused if the claim was settled already |
 | `{:set_strategy, order}` | change the team strategy |
 | `{:tick_submitted, tick}` | record progress (and act as a fence, below) |
 
@@ -142,7 +144,10 @@ can commit, so a deposed leader's commit fails and it never sends stale orders.
 
 ```
 on start:  read match_id / strategy from the replicated state
-           (no match yet → POST /matches with houseBots, commit {:match_started, …})
+           (no match yet → commit {:claim_match, name}; only the winner of the claim
+            POST /matches with houseBots and that name, then commits {:claimed_started, name, id}.
+            A new leader that finds a claim with no id looks the match up by name first, so a
+            leader dying mid-create leaves one match, never two)
 
 loop:
   state = GET /matches/{id}/state?waitForTick=tick+1&sinceTick=tick     (long-poll)
@@ -186,18 +191,17 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 
 Each unit gets the state and the strategy and decides for itself only. Workers mine when idle.
 A fighter works out its role from the view (`Swarm.Roles`, the same rule on every node, so no
-messages are needed): in the current **wave**, a **guard** (the newest fighters at home, at least 3
-or a quarter of the army), an **escort** (each outpost, a Resource Depot more than 6 tiles from
+messages are needed): in the current **wave**, a **guard** (the newest fighters at home, at least 5
+or a third of the army), an **escort** (each outpost, a Resource Depot more than 6 tiles from
 the Command Center with workers mining there, gets a group of 5, or none if fewer than 3 can be
 spared; fighters already at the outpost keep the job, and a gap goes to the closest free fighter,
-so nobody rotates across the map; each outpost also gets a Guard Tower), or an
+so nobody rotates across the map; each outpost also gets a Guard Tower, two once we are rich), or an
 **attacker** waiting for the next wave. Then, first match wins:
 
 | Situation | Fighter does |
 |---|---|
 | Archer, an enemy soldier or scout within 2 (3 if outnumbered), away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | Something to fight within 6 tiles | Attack it (see below) |
-| In the wave, home can't hold and the wave is closer to home than the target | Attack-move to the threat |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat |
@@ -205,8 +209,10 @@ so nobody rotates across the map; each outpost also gets a Guard Tower), or an
 | Guard | Stand at the post (behind the front tower, else the rally point) |
 | Attacker | Wait at the rally point |
 
-"Home can't hold" means the enemy fighters near the base outnumber home fighters plus 2 per
-finished tower. It is judged from the wave's center, so the whole wave agrees.
+The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
+or our workers are stronger (HP × damage per tick) than the fighters and towers at home. A
+recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
+on the way, and no new wave leaves until nothing has been attacked for 20 ticks.
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
 first. Pairs are taken closest first, with enemies that can already hit us ahead of the rest,
@@ -245,17 +251,17 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    With 500+ ore on hand once the first Barracks is up ("rich"): the build order stops waiting
    for workers, except for depots; once it is done,
    extras follow (a 3rd and 4th Barracks, up to 5 Guard Towers); each building gets two
-   builders; Barracks queue up to 5. Siege waits for a defensive army: at 15 fighters, with the
-   build order done, SiegeEngineering is researched and a SiegeWorkshop built. It keeps 2
-   Trebuchets (4 once the army is 15): the 2 oldest hold the guard post and let the game aim them
-   (idle ones fire by themselves, at enemies standing still first); the others wait at the rally
-   point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of
+   builders; Barracks queue up to 5. Siege is only for the waves (at home a 350-ore Trebuchet is
+   a fifth as strong as the 3.5 Soldiers it costs): at 25 fighters, with the build order done,
+   SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets. They wait
+   at the rally point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of
    its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
    back from anything inside their 3-tile blind spot.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
    point; only those go, so units trained later wait for the next wave instead of trickling out.
    The members are kept in the replicated memory, so a new leader knows who is out. The wave is
-   recalled when fewer than 5 of it are left. No wave leaves while the base is under attack.
+   recalled when fewer than 5 of it are left, or when home can't hold without it. No wave leaves
+   while anything of ours is under attack, or for 20 ticks after.
 3. **Scouting and attack decisions (done):** a scout per neighbor (the two nearest opponents) plus one roaming
    scout (replaced when they die); each visits the spot of its share it
    saw longest ago, checks the enemy base most often, gets as close as is safe (enemy range + 2),
@@ -265,7 +271,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    towers, by HP × damage per tick (at least 8; 15 while we know nothing). A wave facing a
    stronger force pulls back. Waves only go after the weaker (by survival score, which the server
    reports for every player) of our two nearest opponents, never across the map; a wave sticks to
-   that opponent, and comes home whenever the base can't hold on its own. In the last 300 ticks, if we are behind on score, every fighter
+   that opponent, and comes home whenever home can't hold on its own. In the last 300 ticks, if we are behind on score, every fighter
    attacks; if ahead, we don't throw units away, since living units count toward the score.
 League matches: `Swarm.join(name)` commits the league to the replicated state. The leader joins
 (idempotent, so a new leader simply joins again), long-polls `state?waitForTick=0` for each round,

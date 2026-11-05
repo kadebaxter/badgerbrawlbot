@@ -197,7 +197,6 @@ defmodule Swarm.UnitBrain do
     cond do
       back = unit["type"] == "Archer" && kite(unit, v, s) -> {:move, back}
       enemy = Roles.target(v, s.wave, unit) -> {:attack, enemy["id"]}
-      role == :wave and Roles.turn_back?(v, s) -> {:attack_move, s.threat.pos}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
@@ -257,11 +256,8 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # A Trebuchet holds the guard post (behind the front tower) and lets the game aim it: an idle
-  # one fires by itself, at enemies standing still first, like a wave stopped at our tower. With
-  # no base left it joins the attack.
-  # Home Trebuchets hold the guard post. The others wait at the rally point for a wave; with
-  # one, they go to its staging point, then attack-move to the target (the game fires them at
+  # A Trebuchet waits at the rally point for a wave (with no base left it joins the attack);
+  # with one, it goes to the wave's staging point, then attack-move to the target (the game fires them at
   # whatever they reach), stepping back from anything inside their blind spot.
   defp siege(unit, v, s, memory) do
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
@@ -269,10 +265,8 @@ defmodule Swarm.UnitBrain do
     intent =
       cond do
         s.rally == nil -> {:attack_move, s.target}
-        role == :siege -> {:move, s.post}
         role == :siege_out -> {:move, s.rally}
         back = kite(unit, v, s, :fighters, @siege_blind_spot, @siege_blind_spot) -> {:move, back}
-        Roles.turn_back?(v, s) -> {:attack_move, s.threat.pos}
         holding?(s) -> {:move, s.wave.staging}
         true -> {:attack_move, s.target}
       end

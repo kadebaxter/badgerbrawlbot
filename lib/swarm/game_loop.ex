@@ -172,11 +172,13 @@ defmodule Swarm.GameLoop do
       request = Map.get(shared, :host) ->
         host(request, st)
 
+      # A leader claimed a practice match and stopped before recording it: finish the job.
+      name = Map.get(shared, :creating) ->
+        Logger.info("Match #{shared.matches_played + 1} was claimed as #{name}; looking for it")
+        create_claimed(name, shared, st)
+
       shared.matches_played < shared.matches_wanted ->
-        Logger.info("Starting match #{shared.matches_played + 1} of #{shared.matches_wanted}")
-        id = Match.create!(client, Map.get(shared, :opponents) || Match.config(:opponents))
-        {:ok, :ok, _} = Ra.command({:match_started, id})
-        play(id, nil, st)
+        claim_match(shared, st)
 
       true ->
         unless st.idle do
@@ -187,6 +189,79 @@ defmodule Swarm.GameLoop do
 
         Process.send_after(self(), :start, 2_000)
         {:noreply, %{st | idle: true}}
+    end
+  end
+
+  # Claim the match in the replicated state before creating it on the server. Only one claim is
+  # applied, so two leaders in a handover can't both create one; the loser just starts over.
+  defp claim_match(shared, st) do
+    name = "swarm-" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+
+    case Ra.command({:claim_match, name}) do
+      {:ok, :ok, _} ->
+        Logger.info("Starting match #{shared.matches_played + 1} of #{shared.matches_wanted} (#{name})")
+        create_claimed(name, shared, st)
+
+      {:ok, {:error, :taken}, _} ->
+        send(self(), :start)
+        {:noreply, st}
+
+      other ->
+        Logger.warning("Could not claim a match (#{inspect(other)}); trying again")
+        Process.send_after(self(), :start, 1_000)
+        {:noreply, st}
+    end
+  end
+
+  # Find the claimed match by its name (the leader that claimed it may have created it before it
+  # stopped), or create it, then record its id.
+  defp create_claimed(name, shared, st) do
+    opponents = Map.get(shared, :opponents) || Match.config(:opponents)
+
+    found =
+      case Match.find(st.client, name) do
+        :none -> Match.create(st.client, opponents, name)
+        other -> other
+      end
+
+    case found do
+      {:ok, id} ->
+        record_claimed(name, id, st)
+
+      {:error, reason} ->
+        Logger.error("Could not create match #{name}: #{inspect(reason)}; trying again in 5 s")
+        Ra.command({:claim_failed, name})
+        Process.send_after(self(), :start, 5_000)
+        {:noreply, st}
+    end
+  end
+
+  defp record_claimed(name, id, st) do
+    case Ra.command({:claimed_started, name, id}) do
+      {:ok, :ok, _} ->
+        play(id, nil, st)
+
+      {:ok, {:error, :not_claimed}, _} ->
+        # Another leader settled the claim first. If it recorded a different match, nobody
+        # would play this one: give up our seat in it.
+        case Ra.state() do
+          {:ok, %{match_id: ^id}, _} ->
+            :ok
+
+          _ ->
+            Logger.warning("Match #{id} (#{name}) lost the claim to another match; leaving it")
+            NetRts.leave(st.client, id)
+        end
+
+        send(self(), :start)
+        {:noreply, st}
+
+      other ->
+        # No majority right now. The command may still be applied; if not, the claim stays and
+        # the next try finds this match by its name.
+        Logger.warning("Could not record match #{id} (#{inspect(other)}); trying again")
+        Process.send_after(self(), :start, 1_000)
+        {:noreply, st}
     end
   end
 

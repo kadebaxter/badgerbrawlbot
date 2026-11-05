@@ -101,6 +101,46 @@ defmodule Swarm.MachineTest do
     assert %{matches_played: 1, matches_wanted: 3} = state
   end
 
+  describe "claiming a practice match" do
+    defp apply_one(cmd, state), do: Machine.apply(@meta, cmd, state)
+
+    test "two leaders in a handover: only the first claim is applied" do
+      state = Machine.init(%{matches: 1})
+      {state, :ok} = apply_one({:claim_match, "swarm-a"}, state)
+      assert {^state, {:error, :taken}} = apply_one({:claim_match, "swarm-b"}, state)
+
+      {state, :ok} = apply_one({:claimed_started, "swarm-a", "m1"}, state)
+      assert %{match_id: "m1", creating: nil} = state
+    end
+
+    test "a match recorded for a settled claim is refused" do
+      state = run([{:claim_match, "swarm-a"}, {:claimed_started, "swarm-a", "m1"}])
+      assert {^state, {:error, :not_claimed}} = apply_one({:claimed_started, "swarm-a", "m2"}, state)
+      assert {^state, {:error, :not_claimed}} = apply_one({:claimed_started, "swarm-b", "m2"}, state)
+    end
+
+    test "nothing to claim once the wanted matches are played" do
+      state = run([{:match_started, "m1"}, {:match_finished, "m1"}])
+      assert {^state, {:error, :taken}} = apply_one({:claim_match, "swarm-a"}, state)
+    end
+
+    test "a failed create releases the claim, a stale failure doesn't" do
+      state = run([{:claim_match, "swarm-a"}])
+      assert {^state, :ok} = apply_one({:claim_failed, "swarm-b"}, state)
+      assert %{creating: nil} = run([{:claim_failed, "swarm-a"}], state)
+    end
+
+    test "joining or hosting waits while a match is being created" do
+      state = run([{:claim_match, "swarm-a"}])
+      assert {_, {:error, :busy}} = apply_one({:join_match, "x"}, state)
+    end
+
+    test "a state saved before claims existed can claim" do
+      old = Map.delete(Machine.init(%{matches: 1}), :creating)
+      assert %{creating: "swarm-a"} = run([{:claim_match, "swarm-a"}], old)
+    end
+  end
+
   test "becoming leader starts the game loop, anything else stops it" do
     assert [{:mod_call, Swarm.Leader, :lead, []}] = Machine.state_enter(:leader, %{})
     assert [{:mod_call, Swarm.Leader, :follow, []}] = Machine.state_enter(:follower, %{})

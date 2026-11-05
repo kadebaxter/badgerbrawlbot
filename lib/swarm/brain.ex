@@ -17,8 +17,9 @@ defmodule Swarm.Brain do
   remembers every enemy fighter it has seen, and launches a wave once the attackers waiting at
   the rally point are `@margin` times as strong as the enemy army and towers we know of (at
   least `@min_wave` of them; `@first_wave` while we know nothing). Only those go; later ones
-  wait for the next wave. The wave is recalled when it meets a stronger force or fewer than
-  `@recall_below` are left. In the last `@all_in_ticks` ticks, if we are behind on score,
+  wait for the next wave. The wave is recalled when it meets a stronger force, when fewer than
+  `@recall_below` are left, or when whatever is hitting us at home (any base, or our workers) is
+  stronger than what is home; no new one leaves until `@calm_ticks` after the attack. In the last `@all_in_ticks` ticks, if we are behind on score,
   every fighter attacks: sitting still would lose on time anyway.
   """
 
@@ -33,6 +34,9 @@ defmodule Swarm.Brain do
   @margin 1.5
   @recall_below 5
   @all_in_ticks 300
+  # After an attack on us ends, no wave leaves for this long: raiders often come back, and a
+  # wave that leaves the moment they step out of sight gets called home again.
+  @calm_ticks 20
   # An enemy fighter not seen for this long is forgotten: we can't trust where it was.
   @forget_after 300
   # How far from the wave's center enemies count when deciding to pull back.
@@ -83,13 +87,12 @@ defmodule Swarm.Brain do
     {"GuardTower", 5, :front}
   ]
 
-  # Defensive Trebuchets kept at home (see `Swarm.UnitBrain`). Siege only once the army can
-  # hold the base without it: SiegeEngineering, the SiegeWorkshop and so the Trebuchets wait for
-  # this many fighters (and the build order to be done).
+  # Siege is only for knocking down the enemy's towers with a wave: at home a Trebuchet (350 ore)
+  # is a fifth as strong as the 3.5 Soldiers it costs, and can't hit anything close. So
+  # SiegeEngineering, the SiegeWorkshop and the Trebuchets wait for this many fighters (and the
+  # build order to be done), and then we keep `@trebuchets` of them, for the waves.
+  @siege_after_fighters 25
   @trebuchets 2
-  @siege_after_fighters 15
-  # With that army, this many in all: 2 stay home, the rest go out with waves.
-  @trebuchets_with_army 4
   # Trebuchets needed at the rally point to go out with a wave.
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
@@ -114,6 +117,8 @@ defmodule Swarm.Brain do
   @low_home_ore 1500
   # A Guard Tower this close to an outpost counts as its tower.
   @outpost_tower_reach 6
+  # Towers an outpost gets once we are rich.
+  @outpost_towers 2
   # Where we lost a building, no new depot for this long: it was a contested spot.
   @avoid_lost_ticks 300
   @workers_per_deposit 3
@@ -141,6 +146,7 @@ defmodule Swarm.Brain do
   # `pending` is the building we ordered and are waiting to see: %{type, builder, at, had}.
   # `helpers` is building id => {worker id, tick} for workers sent to finish abandoned sites.
   # `ore_short_since` is the tick home has been short of ore since, or nil.
+  # `attacked_at` is the last tick anything of ours was under attack, or nil.
   # `buildings` is our building id => where it stands; `lost` is spot => tick, for buildings that
   # went missing (destroyed) in the last `@avoid_lost_ticks`.
   def new_memory do
@@ -152,7 +158,8 @@ defmodule Swarm.Brain do
       helpers: %{},
       ore_short_since: nil,
       buildings: %{},
-      lost: %{}
+      lost: %{},
+      attacked_at: nil
     }
   end
 
@@ -192,7 +199,9 @@ defmodule Swarm.Brain do
     attacked? = threat != nil or Roles.help_wanted(v) != []
     owner = opponent(v, memory)
     target = target_of(v, owner)
-    {wave, next_wave, why} = wave(v, memory, rally, attacked?, owner, target)
+    attacked_at = if attacked?, do: v.tick, else: memory.attacked_at
+    calm? = attacked_at == nil or v.tick - attacked_at >= @calm_ticks
+    {wave, next_wave, why} = wave(v, memory, rally, calm?, owner, target)
 
     mode =
       cond do
@@ -211,7 +220,7 @@ defmodule Swarm.Brain do
       why: why
     }
 
-    {strategy, %{memory | wave: wave, next_wave: next_wave}}
+    {strategy, %{memory | wave: wave, next_wave: next_wave, attacked_at: attacked_at}}
   end
 
   # Enemy fighters as last seen. Ones we killed or haven't seen in a while are dropped.
@@ -229,11 +238,11 @@ defmodule Swarm.Brain do
     |> Map.reject(fn {_id, e} -> v.tick - e["seen"] > @forget_after end)
   end
 
-  defp wave(v, memory, rally, attacked?, owner, target) do
+  defp wave(v, memory, rally, calm?, owner, target) do
     cond do
       all_in?(v) -> all_in(v, memory, owner)
       memory.wave -> keep_wave(v, memory)
-      true -> launch(v, memory, rally, attacked?, owner, target)
+      true -> launch(v, memory, rally, calm?, owner, target)
     end
   end
 
@@ -257,12 +266,18 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Keep the wave that is out (minus its dead), unless too few are left or what it is facing
-  # is stronger than it is.
+  # Keep the wave that is out (minus its dead), unless home needs it, too few are left, or what
+  # it is facing is stronger than it is. A recalled wave is just fighters at home again: they
+  # walk back and defend, and fight on the way only what attacks them.
   defp keep_wave(v, %{wave: wave} = memory) do
     alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
 
     cond do
+      home = Roles.recall(v, wave) ->
+        {theirs, ours} = home
+        why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
+        {nil, memory.next_wave, [{:wave_recalled, why}]}
+
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}]}
 
@@ -304,9 +319,9 @@ defmodule Swarm.Brain do
     if Roles.strength(alive) < Roles.strength(facing), do: Roles.strength(facing)
   end
 
-  # With no base under attack, send the attackers waiting at the rally point once they are
-  # strong enough. Knowing nothing about the enemy yet, wait for `@first_wave` of them.
-  defp launch(v, memory, rally, attacked?, owner, target) do
+  # With nothing of ours attacked for `@calm_ticks`, send the attackers waiting at the rally point
+  # once they are strong enough. Knowing nothing about the enemy yet, wait for `@first_wave` of them.
+  defp launch(v, memory, rally, calm?, owner, target) do
     roles = Roles.home_roles(v, nil)
 
     staged =
@@ -316,11 +331,8 @@ defmodule Swarm.Brain do
           do: u
 
     # Trebuchets waiting at the rally point go too, if there are enough of them.
-    home_siege = Roles.home_siege(v)
-
     siege =
       for u <- View.units_of(v, "Trebuchet"),
-          u["id"] not in home_siege,
           View.dist(View.pos(u), rally) <= @staged_radius,
           do: u
 
@@ -336,7 +348,7 @@ defmodule Swarm.Brain do
         do: length(staged) >= @min_wave and ours >= @margin * theirs,
         else: length(staged) >= @first_wave
 
-    if not attacked? and ready? do
+    if calm? and ready? do
       with_siege = if siege == [], do: "", else: " and #{length(siege)} trebuchets"
 
       why =
@@ -615,14 +627,16 @@ defmodule Swarm.Brain do
     end)
   end
 
-  # An outpost without a Guard Tower (finished or not) near it gets one. Needs a finished
-  # Barracks, like every tower; doesn't need us to be rich.
+  # An outpost without a Guard Tower (finished or not) near it gets one, and a second once we are
+  # rich: towers are the cheapest defense there is, and outposts are where raiders go. Needs a
+  # finished Barracks, like every tower; the first doesn't need us to be rich.
   defp outpost_tower(v, terrain) do
     towers = Enum.map(View.buildings_of(v, "GuardTower"), &View.pos/1)
+    wanted = if rich?(v), do: @outpost_towers, else: 1
 
     if prerequisites?(v, "GuardTower") do
       Roles.outposts(v)
-      |> Enum.reject(fn o -> Enum.any?(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) end)
+      |> Enum.reject(fn o -> Enum.count(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) >= wanted end)
       |> Enum.find_value(fn o ->
         site = site(terrain, v, {:outpost, o})
         site && {"GuardTower", site}
@@ -714,7 +728,7 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Keep `@trebuchets` (counting ones being trained) from a finished SiegeWorkshop. Short of
+  # Once it is siege time, keep `@trebuchets` (counting ones being trained) from a finished SiegeWorkshop. Short of
   # the ore, set it aside like a building's, so soldiers don't spend it tick after tick and a
   # Trebuchet never comes. (The army floor trains first, so the base is never left bare for it.)
   defp train_siege({cmds, mem, ore} = acc, v) do
@@ -722,7 +736,7 @@ defmodule Swarm.Brain do
     queued = for w <- workshops, p <- w["production"], p["unitType"] == "Trebuchet", do: p
     free = Enum.find(workshops, &(length(&1["production"]) < 2))
     cost = @costs["Trebuchet"]
-    wanted = if siege_time?(v), do: @trebuchets_with_army, else: @trebuchets
+    wanted = if siege_time?(v), do: @trebuchets, else: 0
 
     cond do
       free == nil or length(View.units_of(v, "Trebuchet")) + length(queued) >= wanted ->

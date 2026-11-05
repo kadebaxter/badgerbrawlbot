@@ -19,16 +19,37 @@ defmodule Swarm.Match do
 
   @doc "Creates a practice match against house bots (default: the configured ones), one seat each."
   def create!(client, opponents \\ config(:opponents)) do
+    case create(client, opponents) do
+      {:ok, id} -> id
+      {:error, reason} -> raise "could not create a match: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Like `create!/2`, but `{:ok, id}` or `{:error, reason}`, and with an optional `name`: the
+  swarm names the match it claimed, so a new leader can find it (`find/2`).
+  """
+  def create(client, opponents, name \\ nil) do
     settings = if config(:tick_ms), do: %{tickIntervalMs: config(:tick_ms)}, else: %{}
     body = %{houseBots: opponents, maxPlayers: length(opponents) + 1, settings: settings}
+    body = if name, do: Map.put(body, :name, name), else: body
 
     case NetRts.create_match(client, body) do
       {:ok, %{"matchId" => id}} ->
         Logger.info("Created match #{id} vs #{Enum.join(opponents, ", ")}. Watch: #{config(:server)}/#/match/#{id}")
-        id
+        {:ok, id}
 
       {:error, reason} ->
-        raise "could not create a match: #{inspect(reason)}"
+        {:error, reason}
+    end
+  end
+
+  @doc "The id of the match called `name`: `{:ok, id}`, `:none`, or `{:error, reason}`."
+  def find(client, name) do
+    case NetRts.match_by_name(client, name) do
+      {:ok, %{"matchId" => id}} -> {:ok, id}
+      {:error, %{code: code}} when code in ["NOT_FOUND", "MATCH_NOT_FOUND"] -> :none
+      {:error, reason} -> {:error, reason}
     end
   end
 

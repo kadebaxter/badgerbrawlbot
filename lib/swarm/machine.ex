@@ -27,7 +27,11 @@ defmodule Swarm.Machine do
       # A match to join by id (`Swarm.join_match/1`) or to host (`Swarm.host/2`), until the
       # leader has done it. Only taken while we play nothing.
       join_match: nil,
-      host: nil
+      host: nil,
+      # The name of the practice match a leader has claimed and is creating, until its id is
+      # recorded. Claiming before creating is what keeps two leaders in a handover from both
+      # creating one: only one claim is applied, and a new leader finds the match by its name.
+      creating: nil
     }
   end
 
@@ -36,6 +40,28 @@ defmodule Swarm.Machine do
   def apply(_meta, {:match_started, id}, state) do
     state = %{state | match_id: id, brain: nil, last_tick: 0}
     {Map.merge(state, %{join_match: nil, host: nil}), :ok}
+  end
+
+  # Only one claim at a time, and only when another practice match is wanted and nothing else is on.
+  def apply(_meta, {:claim_match, name}, state) do
+    if Map.get(state, :creating) != nil or busy?(state) or state.matches_played >= state.matches_wanted,
+      do: {state, {:error, :taken}},
+      else: {Map.put(state, :creating, name), :ok}
+  end
+
+  # The claimed match exists: record it. Refused if the claim was settled already (another
+  # leader found or made the match first): the caller then gives up the one it made.
+  def apply(_meta, {:claimed_started, name, id}, state) do
+    if Map.get(state, :creating) == name and state.match_id == nil,
+      do: {Map.put(%{state | match_id: id, brain: nil, last_tick: 0}, :creating, nil), :ok},
+      else: {state, {:error, :not_claimed}}
+  end
+
+  # Creating it failed: let the next try claim again.
+  def apply(_meta, {:claim_failed, name}, state) do
+    if Map.get(state, :creating) == name,
+      do: {Map.put(state, :creating, nil), :ok},
+      else: {state, :ok}
   end
 
   def apply(_meta, {:match_finished, id}, %{match_id: id} = state),
@@ -94,7 +120,7 @@ defmodule Swarm.Machine do
 
   defp busy?(state) do
     state.match_id != nil or Map.get(state, :league) != nil or Map.get(state, :join_match) != nil or
-      Map.get(state, :host) != nil
+      Map.get(state, :host) != nil or Map.get(state, :creating) != nil
   end
 
   # Map.put, not %{state | ...}: a state saved by an older version has no :opponents yet.

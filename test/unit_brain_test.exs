@@ -13,9 +13,6 @@ defmodule Swarm.UnitBrainTest do
 
   defp cmd(unit, strategy, others \\ []), do: elem(decide(unit, strategy, others), 0)
 
-  # Fighters at home, at the rally point.
-  defp home_soldiers(n), do: for(i <- 1..n, do: unit(10 + i, "Soldier", 10, 10))
-
   test "an idle worker mines the nearest deposit" do
     assert %{"type" => "Gather", "unitIds" => [1], "targetId" => 4} = cmd(unit(1, "Worker", 8, 8), @gather)
   end
@@ -100,14 +97,11 @@ defmodule Swarm.UnitBrainTest do
     assert %{"type" => "Attack", "x" => 16, "y" => 9} = cmd(unit(2, "Soldier", 25, 25), defend)
   end
 
-  test "the wave comes home when home can't hold, wherever it is" do
-    s = %{@attack | threat: %{pos: {12, 9}, size: 10}}
-    assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 20, 20), s, home_soldiers(3))
-    assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 45, 45), s, home_soldiers(3))
-
-    # Home can hold (a small raid): the wave keeps going.
-    s = %{@attack | threat: %{pos: {12, 9}, size: 2}}
-    assert %{"type" => "Attack", "x" => 56, "y" => 56} = cmd(unit(2, "Soldier", 45, 45), s, home_soldiers(3))
+  test "a recalled wave walks home past enemies that aren't fighting it" do
+    # Recalled: no wave any more. An enemy soldier nearby that isn't in range isn't worth stopping for.
+    defend = %{@gather | mode: :defend, threat: %{pos: {12, 9}, size: 10}}
+    camp = unit(900, "Soldier", 52, 45, owner: 1)
+    assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 45, 45), defend, [camp])
   end
 
   test "a unit already carrying out its order sends nothing" do
@@ -137,8 +131,8 @@ defmodule Swarm.UnitBrainTest do
       View.new(state(units: units ++ miners, buildings: [building(50, "ResourceDepot", 30, 30)]))
     end
 
-    # Ten soldiers: 208..210 guard, 206..207 escort the outpost, 201..205 attack.
-    defp army, do: soldiers(10)
+    # Twelve soldiers: 208..212 guard, 203..207 escort the outpost, 201..202 attack.
+    defp army, do: soldiers(12)
 
     test "an escort stands by its outpost, on the enemy's side" do
       assert {%{"type" => "Move", "x" => 32, "y" => 32}, _} = UnitBrain.decide(207, outpost_view(army()), @gather)
@@ -189,12 +183,12 @@ defmodule Swarm.UnitBrainTest do
     end
   end
 
-  test "a Trebuchet holds the guard post and isn't a guard or attacker" do
+  test "a Trebuchet waits at the rally point for a wave and isn't a guard or attacker" do
     treb = unit(300, "Trebuchet", 20, 20)
     v = View.new(state(units: [treb | soldiers(10)]))
-    assert Swarm.Roles.role(v, nil, 300) == :siege
+    assert Swarm.Roles.role(v, nil, 300) == :siege_out
     refute Map.has_key?(Swarm.Roles.home_roles(v, nil), 300)
-    assert {%{"type" => "Move", "x" => 9, "y" => 9}, _} = UnitBrain.decide(300, v, @attack)
+    assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(300, v, @attack)
   end
 
   describe "archers kite" do
@@ -253,12 +247,11 @@ defmodule Swarm.UnitBrainTest do
       assert {%{"type" => "Attack", "x" => 56, "y" => 56}, _} = UnitBrain.decide(303, v, @going)
     end
 
-    test "a Trebuchet not in a wave, and not one of the two oldest, waits at the rally point" do
+    test "a Trebuchet not in a wave waits at the rally point, the oldest too" do
       v = treb_view([unit(303, "Trebuchet", 20, 20)])
       assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(303, v, @gather)
-      # The two oldest hold the guard post.
-      v = View.new(state(units: [unit(301, "Trebuchet", 20, 20), unit(302, "Trebuchet", 9, 9), unit(303, "Trebuchet", 20, 20)]))
-      assert {%{"type" => "Move", "x" => 9, "y" => 9}, _} = UnitBrain.decide(301, v, @gather)
+      v = View.new(state(units: [unit(301, "Trebuchet", 20, 20)]))
+      assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(301, v, @gather)
     end
 
     test "out there, it steps back from anything inside its blind spot" do

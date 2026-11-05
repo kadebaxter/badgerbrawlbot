@@ -5,9 +5,9 @@ defmodule Swarm.RolesTest do
 
   defp view(units, buildings \\ []), do: View.new(state(units: units, buildings: buildings))
 
-  test "the newest fighters guard: at least three, or a quarter of the army" do
-    assert Roles.guards(view(soldiers(8)), nil) == MapSet.new([206, 207, 208])
-    assert MapSet.size(Roles.guards(view(soldiers(20)), nil)) == 5
+  test "the newest fighters guard: at least five, or a third of the army" do
+    assert Roles.guards(view(soldiers(8)), nil) == MapSet.new(204..208)
+    assert MapSet.size(Roles.guards(view(soldiers(30)), nil)) == 10
   end
 
   test "scouts are neither guards nor attackers" do
@@ -21,14 +21,14 @@ defmodule Swarm.RolesTest do
     defp miners(n), do: for(i <- 1..n, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering"))
 
     test "an outpost with miners gets a group of five escorts, after the guards" do
-      roles = Roles.home_roles(view(soldiers(10) ++ miners(6), [depot()]), nil)
-      assert Enum.map(208..210, &roles[&1]) == [:guard, :guard, :guard]
+      roles = Roles.home_roles(view(soldiers(12) ++ miners(6), [depot()]), nil)
+      assert Enum.map(208..212, &roles[&1]) == List.duplicate(:guard, 5)
       assert Enum.map(203..207, &roles[&1]) == List.duplicate({:escort, {30, 30}}, 5)
       assert roles[202] == :attacker and roles[201] == :attacker
     end
 
     test "fewer than three to spare: no escorts at all, they attack instead" do
-      roles = Roles.home_roles(view(soldiers(5) ++ miners(6), [depot()]), nil)
+      roles = Roles.home_roles(view(soldiers(7) ++ miners(6), [depot()]), nil)
       refute Enum.any?(roles, &match?({_, {:escort, _}}, &1))
       assert roles[201] == :attacker and roles[202] == :attacker
     end
@@ -120,30 +120,39 @@ defmodule Swarm.RolesTest do
     assert Roles.role(v, nil, 201) == :attacker
   end
 
-  describe "turn_back?" do
-    # Five wave members, three guards at home, a threat of size 6.
+  describe "recall" do
+    # Five wave members out by the enemy, three soldiers at home.
     setup do
       wave = %{id: 1, members: [201, 202, 203, 204, 205]}
-      guards = for i <- 1..3, do: unit(300 + i, "Soldier", 10, 10)
-      strategy = %{wave: wave, threat: %{pos: {12, 9}, size: 6}, rally: {10, 10}, target: {56, 56}}
-      %{guards: guards, strategy: strategy}
+      out = soldiers(5) |> Enum.map(&%{&1 | "x" => 45, "y" => 45})
+      home = for i <- 1..3, do: unit(300 + i, "Soldier", 10, 10)
+      %{wave: wave, ours: out ++ home}
     end
 
-    test "when home can't hold and the wave is still near home", %{guards: guards, strategy: s} do
-      near = soldiers(5) |> Enum.map(&%{&1 | "x" => 20, "y" => 20})
-      assert Roles.turn_back?(view(near ++ guards), s)
+    defp raiders(n, x, y), do: for(i <- 1..n, do: unit(900 + i, "Soldier", x, y, owner: 1))
+
+    test "when the base is hit harder than home can hold", %{wave: wave, ours: ours} do
+      assert {_, _} = Roles.recall(view(ours ++ raiders(6, 12, 9)), wave)
     end
 
-    test "even when the wave is nearly at the target: we only attack neighbors", %{guards: guards, strategy: s} do
-      far = soldiers(5) |> Enum.map(&%{&1 | "x" => 45, "y" => 45})
-      assert Roles.turn_back?(view(far ++ guards), s)
+    test "when our workers out in the field are", %{wave: wave, ours: ours} do
+      miners = for i <- 1..4, do: unit(100 + i, "Worker", 30, 8)
+      assert {_, _} = Roles.recall(view(ours ++ miners ++ raiders(6, 31, 8)), wave)
     end
 
-    test "not when home can hold", %{guards: guards, strategy: s} do
-      near = soldiers(5) |> Enum.map(&%{&1 | "x" => 20, "y" => 20})
-      # Two towers are worth four fighters: 3 + 4 >= 6.
-      towers = [building(2, "GuardTower", 12, 12), building(3, "GuardTower", 13, 10)]
-      refute Roles.turn_back?(view(near ++ guards, towers), s)
+    test "when an outpost is", %{wave: wave, ours: ours} do
+      depot = building(2, "ResourceDepot", 30, 30)
+      assert {_, _} = Roles.recall(view(ours ++ raiders(6, 31, 30), [depot]), wave)
+    end
+
+    test "not for a raid home can hold", %{wave: wave, ours: ours} do
+      assert Roles.recall(view(ours ++ raiders(2, 12, 9)), wave) == nil
+      towers = for {id, x} <- [{2, 12}, {3, 13}, {4, 11}], do: building(id, "GuardTower", x, 10)
+      assert Roles.recall(view(ours ++ raiders(6, 12, 9), towers), wave) == nil
+    end
+
+    test "not for enemies nowhere near anything of ours", %{wave: wave, ours: ours} do
+      assert Roles.recall(view(ours ++ raiders(10, 30, 50)), wave) == nil
     end
   end
 

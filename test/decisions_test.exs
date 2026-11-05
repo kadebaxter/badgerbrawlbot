@@ -9,7 +9,7 @@ defmodule Swarm.DecisionsTest do
   end
 
   test "a launch, with its reason, and the mode change it causes" do
-    v = View.new(state(units: soldiers(20)))
+    v = View.new(state(units: soldiers(22)))
     {strategy, commands, _} = Brain.plan(v, nil, terrain())
 
     assert [{:wave_launched, "wave 1 at player 1: 15 attackers, nothing scouted yet"}, {:mode, "gather -> attack: wave 1 out with 15"}] =
