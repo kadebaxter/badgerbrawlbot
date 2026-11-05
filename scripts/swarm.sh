@@ -6,9 +6,8 @@
 #   scripts/swarm.sh status                 # leader, league, match, units per node
 #   scripts/swarm.sh enemies                # what the leader knows of the enemy armies
 #   scripts/swarm.sh stop                   # no more matches after the current one
-#   scripts/swarm.sh join season-week3      # play a league match, round after round (name or id)
-#   scripts/swarm.sh leave                  # no more league rounds after this one
-#   scripts/swarm.sh join-match <id>        # take a seat in someone's match, play it when it fills
+#   scripts/swarm.sh join <name or id>      # join a match: a league one round after round, any other once
+#   scripts/swarm.sh leave                  # no more league rounds after this one, or stop looking for the match
 #   scripts/swarm.sh host 6 [--name kaden-brawl] [house bots...]   # host a match others join
 #   scripts/swarm.sh unhost                 # give up our seat before it starts (joined or hosted)
 #   scripts/swarm.sh shell                  # an iex on a swarm node (leave with Ctrl+C, a)
@@ -58,14 +57,8 @@ case "$cmd" in
   status) rpc 'Swarm.status()' ;;
   enemies) rpc 'Swarm.enemies()' ;;
   stop) rpc 'Swarm.stop()' ;;
-  join) rpc "Swarm.join(\"$(name "${1:?usage: join <league match name>}")\")" ;;
-  leave) rpc 'Swarm.leave()' ;;
-  join-match)
-    id=${1:?usage: join-match <match id>}
-    [[ $id =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] ||
-      { echo "not a match id: $id" >&2; exit 1; }
-    rpc "IO.inspect(Swarm.join_match(\"$id\"))"
-    ;;
+  join | join-match) rpc "IO.inspect(Swarm.join(\"$(name "${1:?usage: join <match name or id>}")\"))" ;;
+  leave) rpc 'IO.inspect(Swarm.leave())' ;;
   host)
     seats=${1:?usage: host <seats> [--name NAME] [house bots...]}
     [[ $seats =~ ^[0-9]+$ ]] || { echo "seats must be a number: $seats" >&2; exit 1; }

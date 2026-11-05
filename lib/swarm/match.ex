@@ -81,18 +81,19 @@ defmodule Swarm.Match do
   def id?(s), do: is_binary(s) and s =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
   @doc """
-  Takes a seat in the match with this id. `{:ok, :league}` if it is a league match (played in
-  rounds: join it with `join_league/2` instead), `{:ok, :joined}` once seated (already being
-  seated counts), else the server's `{:error, code, message}`.
+  Takes a seat in the match with this name or id. `{:ok, :league}` if it is a league match
+  (played in rounds: join it with `join_league/2` instead), `{:ok, :joined, id}` once seated
+  (already being seated counts), else the server's `{:error, code, message}`.
   """
-  def enter(client, id) do
-    with {:ok, match} <- NetRts.match(client, id) do
+  def enter(client, name_or_id) do
+    with {:ok, id} <- resolve(client, name_or_id),
+         {:ok, match} <- NetRts.match(client, id) do
       if match["heats"] != nil do
         {:ok, :league}
       else
         case NetRts.join(client, id) do
-          {:ok, _} -> {:ok, :joined}
-          {:error, %{code: "ALREADY_JOINED"}} -> {:ok, :joined}
+          {:ok, _} -> {:ok, :joined, id}
+          {:error, %{code: "ALREADY_JOINED"}} -> {:ok, :joined, id}
           {:error, %{code: code, message: message}} -> {:error, code, message}
           {:error, other} -> {:error, "HTTP_ERROR", inspect(other)}
         end

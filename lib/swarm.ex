@@ -7,11 +7,11 @@ defmodule Swarm do
       Swarm.play(opponents: ["balanced", "rusher"])   # ... against these (and from now on)
       Swarm.play(3)    # three more (each call adds to the queue: see Swarm.status())
       Swarm.stop()     # no more matches after the current one
-      Swarm.join("season-week3")   # play a league match, round after round, until it closes
-      Swarm.join_match("a9cb…")    # take a seat in someone's match by id, and play it
+      Swarm.join("kaden-brawl")    # join a match by name or id: a league match round after round
+                                   # until it closes, any other match once
       Swarm.host(6, name: "kaden-brawl", bots: ["rusher"])   # host a match others join
       Swarm.leave_match()          # give up our seat in a match that hasn't started
-      Swarm.leave()    # stop after the current round (back to practice)
+      Swarm.leave()    # stop after the current league round, or stop looking for a match to join
       Swarm.client()   # a NetRts client for the configured server and key
       Swarm.enemies()  # the enemy fighters the leader remembers, per opponent
   """
@@ -45,28 +45,28 @@ defmodule Swarm do
   end
 
   @doc """
-  Joins the league match called `name` (as the admin named it) and plays every round until the
-  admin closes it. Goes through the replicated state, so whichever node leads does the joining,
-  and a new leader carries on. The bot must be Discord-verified.
+  Joins the match with this name or id and plays it. A league match (preseason, season,
+  championship: the bot must be Discord-verified) is played every round until the admin closes it;
+  any other match (hosted on the website, or another bot's) once, when it starts. A name nobody
+  has used yet is looked for every 10 s until it shows up (`leave/0` stops that). Goes through the
+  replicated state, so whichever node leads does the joining, and a new leader carries on. Refused
+  while we play something already.
   """
-  def join(name) when is_binary(name) do
-    {:ok, :ok, _leader} = Ra.command({:join_league, name})
-    :ok
+  def join(name_or_id) when is_binary(name_or_id) do
+    cond do
+      Match.id?(name_or_id) -> request({:join_match, String.downcase(name_or_id)})
+      name_or_id =~ ~r/^[A-Za-z0-9_-]{3,32}$/ -> request({:join_match, name_or_id})
+      true -> {:error, :not_a_match_name_or_id}
+    end
   end
+
+  @doc false
+  def join_match(name_or_id), do: join(name_or_id)
 
   @doc "No more practice matches after the one being played: clears the queue `play` built up."
   def stop do
     {:ok, :ok, _leader} = Ra.command(:stop)
     :ok
-  end
-
-  @doc """
-  Takes a seat in the match with this id (someone else's practice match, say) and plays it once
-  it fills up. A league match id is joined round by round, like `join/1`. Refused while we play
-  something already.
-  """
-  def join_match(id) do
-    if Match.id?(id), do: request({:join_match, String.downcase(id)}), else: {:error, :not_a_match_id}
   end
 
   @doc """
@@ -124,15 +124,22 @@ defmodule Swarm do
     end
   end
 
-  @doc "Stops playing the league match once the current round is over."
+  @doc """
+  Stops playing the league match once the current round is over, or stops looking for a match
+  `join/1` hasn't found yet.
+  """
   def leave do
     case Ra.state() do
       {:ok, %{league: name}, _} when is_binary(name) ->
         {:ok, :ok, _} = Ra.command({:league_over, name})
         :ok
 
+      {:ok, %{join_match: name}, _} when is_binary(name) ->
+        {:ok, :ok, _} = Ra.command(:request_failed)
+        :ok
+
       _ ->
-        {:error, :not_in_a_league}
+        {:error, :not_joining_anything}
     end
   end
 

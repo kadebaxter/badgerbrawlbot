@@ -40,30 +40,33 @@ Each node keeps its Raft log in `data/<node>/`; stop all nodes and `rm -rf data`
 
 League matches (`Preseason`, `Season`, `Championship`) are created by the admins and played in
 rounds of heats. On league night, start the nodes with `SWARM_MATCHES=0` in `.env` so the leader
-doesn't start a practice match first, then in any node's `iex`:
+doesn't start a practice match first, then:
 
-```elixir
-Swarm.join("season-week3")   # the name the admin gave it
-Swarm.status()               # league: season-week3
-Swarm.leave()                # no more rounds after the current one
+```bash
+scripts/swarm.sh join season-week3   # the name the admin gave it (or its id)
+scripts/swarm.sh status              # league: season-week3
+scripts/swarm.sh leave               # no more rounds after the current one
 ```
 
 The leader joins, waits for each round, plays the heat with a fresh brain, and waits again until
 the admin closes the match. The league lives in the replicated state, so if the leader's node dies
 another node rejoins (joining twice is harmless) and picks up the same heat. If the admin hasn't
-created the match yet, the leader keeps looking every 10 s. The bot must be Discord-verified.
+created the match yet, the leader keeps looking every 10 s (`leave` stops it). The bot must be
+Discord-verified.
 
 ## Other people's matches, and hosting
 
 ```bash
-scripts/swarm.sh join-match <id>                        # take a seat in a match by its id, play it once it fills
+scripts/swarm.sh join kaden-brawl                       # take a seat in a match by name or id, play it once it starts
 scripts/swarm.sh host 6 --name kaden-brawl              # host 6 seats; starts when 5 other bots have joined
 scripts/swarm.sh host 6 --name kaden-brawl rusher       # ... with one seat taken by a house rusher
 scripts/swarm.sh unhost                                 # give up our seat before it starts
 ```
 
-Both go through the replicated state, so whichever node leads does them and a new leader carries
-on; both are refused while the swarm is already playing. The leader's log (`scripts/swarm.sh
-logs`) shows the hosted match's id and name, which other bots join with
-`POST /api/v1/matches/{id}/join`. A league match id given to `join-match` is played round by
-round, like `join`.
+`join` is one command for every kind of match: it finds the match by name or id, plays a league
+match round by round and any other match (one hosted on the website, say) once. It can't take a
+seat in a practice match that has already started (`MATCH_ALREADY_STARTED`); a league match takes
+new players between rounds. Both go through the replicated state, so whichever node leads does
+them and a new leader carries on; both are refused while the swarm is already playing. The
+leader's log (`scripts/swarm.sh logs`) shows the hosted match's id and name, which other bots join
+with `POST /api/v1/matches/{id}/join`.

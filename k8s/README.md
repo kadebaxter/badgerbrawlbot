@@ -39,7 +39,7 @@ kubectl -n netrts exec -it swarm-0 -- bin/swarm remote
 ```
 
 `bin/swarm remote` is an `iex` on that node, inside the cluster: `Swarm.status()`,
-`Swarm.play(opponents: ["rusher"])`, `Swarm.join("season-week3")`, `Swarm.enemies()`.
+`Swarm.play(opponents: ["rusher"])`, `Swarm.join("season-week3")` (a name or id), `Swarm.enemies()`.
 
 ## Starting over
 

@@ -281,7 +281,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    reports for every player) of our two nearest opponents, never across the map; a wave sticks to
    that opponent, and comes home whenever home can't hold on its own. In the last 300 ticks, if we are behind on score, every fighter
    attacks; if ahead, we don't throw units away, since living units count toward the score.
-League matches: `Swarm.join(name)` commits the league to the replicated state. The leader joins
+Joining: `Swarm.join(name_or_id)` commits the request to the replicated state; the leader finds
+the match, and a league match goes on as below, any other is played once. League matches: the
+league is kept in the replicated state. The leader joins
 (idempotent, so a new leader simply joins again), long-polls `state?waitForTick=0` for each round,
 plays the heat with a fresh brain and its own map, then waits again until `MATCH_FINISHED`.
 

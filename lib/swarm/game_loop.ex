@@ -313,26 +313,34 @@ defmodule Swarm.GameLoop do
     end
   end
 
-  # Join someone's match by id. A league match goes to the league flow (every round).
-  defp join_match(id, st) do
-    case Match.enter(st.client, id) do
-      {:ok, :joined} ->
-        Logger.info("Joined match #{id}; waiting for it to fill and start")
+  # Join a match by name or id (`Swarm.join/1`). A league match goes to the league flow (every
+  # round); any other is played once. A name that isn't there yet is looked for again.
+  defp join_match(name_or_id, st) do
+    case Match.enter(st.client, name_or_id) do
+      {:ok, :joined, id} ->
+        Logger.info("Joined match #{name_or_id}; waiting for it to fill and start. Watch: #{Match.config(:server)}/#/match/#{id}")
         {:ok, :ok, _} = Ra.command({:match_started, id})
-        play(id, nil, st)
+        play(id, nil, %{st | waiting: false})
 
       {:ok, :league} ->
-        Logger.info("Match #{id} is a league match: joining it round by round")
-        Ra.command({:join_league, id})
+        Logger.info("Match #{name_or_id} is a league match: joining it round by round")
+        Ra.command({:join_league, name_or_id})
         Ra.command(:request_failed)
         send(self(), :start)
-        {:noreply, st}
+        {:noreply, %{st | waiting: false}}
+
+      # Not created yet (an admin or host about to make it), or a typo: keep looking until
+      # `Swarm.leave()`. The server says NOT_FOUND here, though the guide lists MATCH_NOT_FOUND.
+      {:error, code, _} when code in ["NOT_FOUND", "MATCH_NOT_FOUND"] ->
+        unless st.waiting, do: Logger.warning("No match called #{name_or_id} yet; looking again every 10 s (Swarm.leave() stops)")
+        Process.send_after(self(), :start, 10_000)
+        {:noreply, %{st | waiting: true}}
 
       {:error, code, message} ->
-        Logger.error("Can't join match #{id}: #{code}: #{message}")
+        Logger.error("Can't join match #{name_or_id}: #{code}: #{message}")
         Ra.command(:request_failed)
         send(self(), :start)
-        {:noreply, st}
+        {:noreply, %{st | waiting: false}}
     end
   end
 
