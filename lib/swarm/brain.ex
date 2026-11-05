@@ -138,6 +138,10 @@ defmodule Swarm.Brain do
   @workers_per_deposit 3
   # Workers mining one far field (no drop-off within reach) that get a depot by it right away.
   @remote_miners 3
+  # A depot is built by up to this many of the workers who will use it; the first Barracks by this
+  # many (see `builders/4`).
+  @depot_builders 5
+  @first_barracks_builders 3
   @short_for_ticks 30
 
   # Each tier 2 comes after its tier 1, and a TechLab researches one at a time.
@@ -650,20 +654,52 @@ defmodule Swarm.Brain do
     end
   end
 
-  # The closest free worker goes (the two closest when rich, to build it twice as fast); we
-  # remember the first so we can tell if the order fails. With no free worker, keep the ore aside
-  # and try again next tick.
+  # Free workers go build it (see `builders/4`); we remember the first so we can tell if the order
+  # fails. With no free worker, keep the ore aside and try again next tick.
   defp order({cmds, mem, ore}, v, type, site) do
     case free_workers(v, mem) do
       [] ->
         {cmds, mem, ore - @costs[type]}
 
       free ->
-        builders = free |> Enum.sort_by(&{View.dist(View.pos(&1), site), &1["id"]}) |> Enum.take(if rich?(v), do: 2, else: 1)
+        builders = builders(v, free, type, site)
         pending = %{type: type, builder: hd(builders)["id"], at: v.tick, had: count(v, type)}
         {[build_cmd(builders, type, site) | cmds], %{mem | pending: pending}, ore - @costs[type]}
     end
   end
+
+  # Every worker next to a site adds 1 work a tick, so builders add up. Who builds:
+  # - a depot: the workers mining ore it will serve (within reach of the site), up to
+  #   `@depot_builders`. They are there already and are the ones it saves the walk, so it goes up
+  #   in a few ticks. With nobody mining there yet, as below.
+  # - the first Barracks: the `@first_barracks_builders` closest; everything military waits on it.
+  # - anything else: the closest (the two closest when rich).
+  defp builders(v, free, "ResourceDepot", site) do
+    by_id = Map.new(v.deposits, &{&1["id"], &1})
+
+    users =
+      for w <- free,
+          w["activity"] in ["Gathering", "Returning"],
+          d = by_id[w["targetId"]],
+          d != nil and View.dist(View.pos(d), site) <= View.drop_off_reach(),
+          do: w
+
+    case users do
+      [] -> closest_first(free, site) |> Enum.take(usual_builders(v))
+      users -> closest_first(users, site) |> Enum.take(@depot_builders)
+    end
+  end
+
+  defp builders(v, free, "Barracks", site) do
+    n = if count(v, "Barracks") == 0, do: @first_barracks_builders, else: usual_builders(v)
+    closest_first(free, site) |> Enum.take(n)
+  end
+
+  defp builders(v, free, _type, site), do: closest_first(free, site) |> Enum.take(usual_builders(v))
+
+  defp usual_builders(v), do: if(rich?(v), do: 2, else: 1)
+
+  defp closest_first(workers, site), do: Enum.sort_by(workers, &{View.dist(View.pos(&1), site), &1["id"]})
 
   defp rich?(v), do: v.ore >= @rich and Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"])
 

@@ -260,7 +260,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    With 500+ ore on hand once the first Barracks is up ("rich"): the build order stops waiting
    for workers, except for depots; once it is done,
    extras follow (a 3rd and 4th Barracks, up to 5 Guard Towers); each building gets two
-   builders; Barracks queue up to 5. Siege is only for the waves (at home a 350-ore Trebuchet is
+   builders; Barracks queue up to 5. Builders add up (each worker by a site adds 1 work a tick),
+   so a depot is built by the workers mining the ore it will serve, up to 5 (a co-op in about 5
+   ticks, by the miners it saves the walk), and the first Barracks by the 3 closest workers. Siege is only for the waves (at home a 350-ore Trebuchet is
    a fifth as strong as the 3.5 Soldiers it costs): at 25 fighters, with the build order done,
    SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets. They wait
    at the rally point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of

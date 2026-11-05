@@ -17,7 +17,8 @@ defmodule Swarm.BrainTest do
 
   test "builds a Barracks with seven workers and 150 ore, and waits for it" do
     {_, commands, memory} = plan(units: workers(7), ore: 150, tick: 100)
-    assert [%{"type" => "Build", "buildingType" => "Barracks", "unitIds" => [builder]}] = commands
+    # The first Barracks gets three builders.
+    assert [%{"type" => "Build", "buildingType" => "Barracks", "unitIds" => [builder, _, _]}] = commands
     assert %{type: "Barracks", builder: ^builder, at: 100} = memory.pending
 
     # Not again while the worker walks there, and its 150 ore stays set aside.
@@ -614,6 +615,35 @@ defmodule Swarm.BrainTest do
     miner = unit(101, "Worker", 42, 40, activity: "Gathering")
     enemies = for i <- 1..10, do: unit(900 + i, "Soldier", 40, 40, owner: 1)
     assert {%{mode: :defend, wave: nil}, _, _} = plan(units: [miner | enemies ++ soldiers(25)])
+  end
+
+  describe "who builds" do
+    defp build_of(commands, type), do: Enum.find(commands, &match?(%{"type" => "Build", "buildingType" => ^type}, &1))
+
+    test "a depot: the workers mining the ore it will serve, up to five" do
+      # Seven mining the field at (40, 40); the depot goes by it.
+      {_, commands, _} = plan(units: far_miners(7), deposits: far_field(), ore: 200)
+      assert %{"unitIds" => ids} = build_of(commands, "ResourceDepot")
+      assert length(ids) == 5 and Enum.all?(ids, &(&1 in 101..107))
+    end
+
+    test "a depot with nobody mining there yet: the closest worker" do
+      # Ten workers by the Command Center, short of ore at home: a depot by the closest other ore.
+      deposits = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 100}, %{"id" => 60, "x" => 20, "y" => 20, "remaining" => 900}]
+      memory = %{Brain.new_memory() | ore_short_since: 50}
+      {_, commands, _} = plan([units: workers(10), deposits: deposits, ore: 200, tick: 100], memory)
+      assert %{"unitIds" => [_]} = build_of(commands, "ResourceDepot")
+    end
+
+    test "the second Barracks: the usual one builder" do
+      barracks = building(2, "Barracks", 11, 7)
+      depot = building(3, "ResourceDepot", 4, 11)
+      tower = building(5, "GuardTower", 12, 12)
+      lab = building(6, "TechLab", 7, 12)
+      # Soldiers enough to be past the army floor, which would take the ore first.
+      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab], ore: 160)
+      assert %{"unitIds" => [_]} = build_of(commands, "Barracks")
+    end
   end
 
   describe "co-ops where the workers are" do
