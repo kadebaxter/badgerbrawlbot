@@ -30,6 +30,8 @@ defmodule Swarm.View do
     enemy_starts: [],
     # start position => player slot, for the opponents still in
     start_owner: %{},
+    # How many players the game started with (eliminated ones too).
+    players: 2,
     # player slot => survival score (the ore value of everything they have alive), opponents only
     enemy_survival: %{}
   ]
@@ -59,6 +61,7 @@ defmodule Swarm.View do
       # Siege shots in flight: ours, and any landing where we can see.
       shells: state["shells"] || [],
       map_width: state["mapWidth"],
+      players: length(state["players"]),
       map_height: state["mapHeight"],
       max_ticks: state["maxTicks"] || 1800,
       my_score: mine |> Enum.map(score) |> Enum.max(fn -> 0 end),

@@ -242,7 +242,13 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13)
-   → 2nd Barracks (15) → 2nd Guard Tower (17). The ore for the next building is
+   → 2nd Barracks (15) → 2nd Guard Tower (17). In a big game (6 players or more) we turtle up:
+   Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Guard Tower (12) → TechLab (13) →
+   2nd Barracks (14) → 3rd Guard Tower (16) → 3rd Barracks (18), the towers ringing the Command
+   Center toward the neighbors; a co-op away from home waits for 20 fighters, and its tower comes
+   before the rest of the build order. Barracks and the TechLab go behind the Command Center,
+   away from the neighbors, so the towers and the ore line stand between them and our production.
+   The ore for the next building is
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
    Harvesting1, Weapons1, Armor1, then tier 2. Barracks train Soldiers and Archers with the rest.
@@ -272,7 +278,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
    back from anything inside their 3-tile blind spot.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
-   point. While it is out, attackers trained later follow it in batches of 5 or more and become
+   point (25 for the first in a big game), and never with fewer than 12 (15 in a big game),
+   counterattacks included. While it is out, attackers trained later follow it in batches of 5 or more and become
    part of it, so it goes out and comes back as one. The members are kept in the replicated
    memory, so a new leader knows who is out. The wave is recalled when fewer than 5 of it are
    left, when home can't hold without it, or when the strongest single enemy player at its front

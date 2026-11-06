@@ -16,7 +16,8 @@ defmodule Swarm.Brain do
   Army: fighters work out their own roles (`Swarm.Roles`). A Scout per opponent explores. The leader
   remembers every enemy fighter it has seen, and launches a wave once the attackers waiting at
   the rally point are `@margin` times as strong as the enemy army and towers we know of (at
-  least `@min_wave` of them; `@first_wave` while we know nothing). While it is out, later ones
+  least `@min_wave` of them; `@first_wave` while we know nothing; in a big game, `@big_first_wave`
+  for the first and `@big_min_wave` after, with a ring of towers and a third Barracks first). While it is out, later ones
   follow it in batches of `@batch`, and count as part of it. The wave is recalled when it meets a stronger force, when fewer than
   `@recall_below` are left, or when whatever is hitting us at home (any base, or our workers) is
   stronger than what is home. A wave only leaves if what stays home can hold the raid going on
@@ -37,7 +38,17 @@ defmodule Swarm.Brain do
   # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
   @scouts 2
   @first_wave 15
-  @min_wave 8
+  # Every wave, counterattacks too, needs at least this many attackers: a handful sent at a
+  # neighbor gets turned back and picked off. In a big game (`@big_game` players or more), where
+  # neighbors are close and armies big, we turtle up first: no wave before `@big_first_wave`, then
+  # at least `@big_min_wave` each.
+  @min_wave 12
+  @big_game 6
+  @big_first_wave 25
+  @big_min_wave 15
+  # In a big game, no new co-op (Resource Depot away from home) before this many fighters: one
+  # with nobody to hold it is lost.
+  @expand_army 20
   @margin 1.5
   @recall_below 5
   # While a wave is out, attackers at the rally point go after it this many at a time.
@@ -138,6 +149,18 @@ defmodule Swarm.Brain do
     {"TechLab", 1, 13, :base},
     {"Barracks", 2, 15, :base},
     {"GuardTower", 2, 17, :front}
+  ]
+
+  # In a big game: a ring of three towers early, and a third Barracks to mass-produce behind them.
+  @big_build_order [
+    {"Barracks", 1, 7, :base},
+    {"ResourceDepot", 1, 9, :ore},
+    {"GuardTower", 1, 10, :front},
+    {"GuardTower", 2, 12, :front},
+    {"TechLab", 1, 13, :base},
+    {"Barracks", 2, 14, :base},
+    {"GuardTower", 3, 16, :front},
+    {"Barracks", 3, 18, :base}
   ]
 
   @needs_barracks ["GuardTower", "TechLab"]
@@ -543,10 +566,12 @@ defmodule Swarm.Brain do
     ours = Roles.strength(staged ++ siege)
     theirs = enemy_strength(v, memory, owner)
 
+    want = wave_min(v, memory)
+
     ready? =
       if scouted?,
-        do: length(staged) >= @min_wave and ours >= @margin * theirs,
-        else: length(staged) >= @first_wave
+        do: length(staged) >= want and ours >= @margin * theirs,
+        else: length(staged) >= max(@first_wave, want)
 
     leaving = %{members: Enum.map(staged ++ siege, & &1["id"])}
     home = Roles.recall(v, leaving)
@@ -558,10 +583,10 @@ defmodule Swarm.Brain do
           "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"
 
         not scouted? and not ready? ->
-          "#{at_rally}, want #{@first_wave} while nothing is scouted"
+          "#{at_rally}, want #{max(@first_wave, want)} while nothing is scouted"
 
-        length(staged) < @min_wave ->
-          "#{at_rally}, want #{@min_wave}"
+        length(staged) < want ->
+          "#{at_rally}, want #{want}"
 
         not counter? and looking?(memory.look, owner) ->
           "#{at_rally}, scout looking at player #{owner} (#{v.tick - memory.look.at} ticks)"
@@ -692,6 +717,16 @@ defmodule Swarm.Brain do
   end
 
   defp center(%View{} = v), do: {div(v.map_width, 2), div(v.map_height, 2)}
+
+  # Where attacks come from: our neighbors' starts, or the middle of the map with none left.
+  defp threat_points(v) do
+    case Roles.neighbors(v) do
+      [] -> [center(v)]
+      neighbors -> Enum.map(neighbors, &elem(&1, 0))
+    end
+  end
+
+  defp dist2({x1, y1}, {x2, y2}), do: (x1 - x2) ** 2 + (y1 - y2) ** 2
 
   # Which way the next tower faces: the start of the nearest neighbor still in that no tower of
   # ours faces yet (or faces the least), so towers spread over the ways in. The middle of the
@@ -848,12 +883,38 @@ defmodule Swarm.Brain do
   defp next_build(%View{cc: nil}, _terrain, _mem), do: nil
 
   defp next_build(%View{} = v, terrain, mem) do
-    case remote_depot(v, terrain, mem) || expansion(v, terrain, mem) do
-      nil ->
-        from_build_order(v, terrain, Map.keys(mem.lost)) || outpost_tower(v, terrain) ||
-          siege_workshop(v, terrain) || extra(v, terrain)
+    depot = if may_expand?(v), do: remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
 
-      site -> {"ResourceDepot", site}
+    case depot do
+      nil ->
+        # In a big game a co-op's tower comes before the rest: outposts are where raiders go.
+        if big?(v),
+          do:
+            outpost_tower(v, terrain) || from_build_order(v, terrain, Map.keys(mem.lost)) ||
+              siege_workshop(v, terrain) || extra(v, terrain),
+          else:
+            from_build_order(v, terrain, Map.keys(mem.lost)) || outpost_tower(v, terrain) ||
+              siege_workshop(v, terrain) || extra(v, terrain)
+
+      site ->
+        {"ResourceDepot", site}
+    end
+  end
+
+  # A big game: started with `@big_game` players or more.
+  defp big?(%View{players: players}), do: players >= @big_game
+
+  defp build_order(v), do: if(big?(v), do: @big_build_order, else: @build_order)
+
+  # A new co-op away from home, in a big game only with an army to hold it.
+  defp may_expand?(v), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army
+
+  # The fewest attackers a wave may leave with (see `@min_wave`).
+  defp wave_min(v, memory) do
+    cond do
+      big?(v) and memory.next_wave == 1 -> @big_first_wave
+      big?(v) -> @big_min_wave
+      true -> @min_wave
     end
   end
 
@@ -925,7 +986,8 @@ defmodule Swarm.Brain do
   defp from_build_order(v, terrain, avoid) do
     workers = length(View.units_of(v, "Worker"))
 
-    @build_order
+    v
+    |> build_order()
     |> Enum.filter(fn {type, wanted, _, _} -> count(v, type) < wanted end)
     |> Enum.reduce_while(nil, fn {type, _wanted, min_workers, where}, nil ->
       gated? = workers < min_workers
@@ -967,13 +1029,13 @@ defmodule Swarm.Brain do
   end
 
   defp siege_time?(v) do
-    build_order_done? = Enum.all?(@build_order, fn {type, wanted, _, _} -> count(v, type) >= wanted end)
+    build_order_done? = Enum.all?(build_order(v), fn {type, wanted, _, _} -> count(v, type) >= wanted end)
     build_order_done? and length(Roles.fighters(v)) >= @siege_after_fighters
   end
 
   # Rich, with the build order done: the first extra we are short of and have room for.
   defp extra(v, terrain) do
-    done? = Enum.all?(@build_order, fn {type, wanted, _, _} -> count(v, type) >= wanted end)
+    done? = Enum.all?(build_order(v), fn {type, wanted, _, _} -> count(v, type) >= wanted end)
 
     if rich?(v) and done? do
       Enum.find_value(@extras, fn {type, wanted, where} ->
@@ -1089,7 +1151,8 @@ defmodule Swarm.Brain do
   @doc """
   Where to put a building, or nil if there is no room:
 
-  - `:base`: 3–6 tiles from the Command Center, away from the ore so the miners aren't blocked
+  - `:base`: 3–6 tiles from the Command Center, behind it (away from our neighbors), off the ore
+    so the miners aren't blocked
   - `{:outpost, pos}`: 2–4 tiles from that outpost, toward the middle of the map
   - `:front`: a Guard Tower 3–4 tiles from the Command Center (so it covers the base), toward the
     nearest neighbor no tower faces yet: towers spread over the ways in
@@ -1104,12 +1167,17 @@ defmodule Swarm.Brain do
   def site(terrain, view, where, avoid \\ [])
 
   def site(terrain, %View{cc: cc} = v, :base, _avoid) do
-    {mx, my} = center(v)
+    home = View.pos(cc)
+    threats = threat_points(v)
+    from_threat = fn pos -> threats |> Enum.map(&dist2(&1, pos)) |> Enum.min() end
 
-    best_site(terrain, v, View.pos(cc), 3..6, fn {x, y} = tile, d ->
+    best_site(terrain, v, home, 3..6, fn tile, d ->
       near_ore = v.deposits |> Enum.map(&View.dist(View.pos(&1), tile)) |> Enum.min(fn -> 99 end)
-      # On a tie, the side facing the middle rather than whichever tile was scanned first.
-      {d - min(near_ore, 4), (x - mx) ** 2 + (y - my) ** 2}
+      # Behind the Command Center first (farther from the nearest neighbor than it is), so the
+      # towers and the ore line stand between them and our production; then close in and off the
+      # ore; then as far from them as can be.
+      behind = if from_threat.(tile) > from_threat.(home), do: 0, else: 1
+      {behind, d - min(near_ore, 4), -from_threat.(tile)}
     end)
   end
 

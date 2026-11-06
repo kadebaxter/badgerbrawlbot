@@ -585,10 +585,10 @@ defmodule Swarm.BrainTest do
       strong = %{Brain.new_memory() | enemies: seen_enemies(12)}
       assert {%{wave: nil}, _, _} = plan([units: soldiers(22)], strong)
 
-      # 8 attackers (7 guards stay) against 2 soldiers: go.
+      # 12 attackers (7 guards stay) against 2 soldiers: go.
       weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
-      assert {%{wave: %{members: members}}, _, _} = plan([units: soldiers(15)], weak)
-      assert length(members) == 8
+      assert {%{wave: %{members: members}}, _, _} = plan([units: soldiers(19)], weak)
+      assert length(members) == 12
     end
 
     test "with several opponents, only the one we attack counts" do
@@ -609,10 +609,10 @@ defmodule Swarm.BrainTest do
 
     test "launches and recalls say why" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(2)}
-      {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(15)], weak)
-      assert why == "wave 1 at player 1: 8 attackers, strength 7920 vs 1980 known"
+      {%{why: [{:wave_launched, why}]}, _, memory} = plan([units: soldiers(19)], weak)
+      assert why == "wave 1 at player 1: 12 attackers, strength 11880 vs 1980 known"
 
-      four_left = Enum.slice(soldiers(15), 0..3) ++ Enum.drop(soldiers(15), 8)
+      four_left = Enum.slice(soldiers(19), 0..3) ++ Enum.drop(soldiers(19), 12)
       assert {%{why: [{:wave_recalled, "wave 1: only 4 left"}]}, _, _} = plan([units: four_left], memory)
     end
 
@@ -681,9 +681,11 @@ defmodule Swarm.BrainTest do
       refute 301 in members
     end
 
-    test "never fewer than eight in a wave" do
+    test "never fewer than twelve in a wave" do
       weak = %{Brain.new_memory() | enemies: seen_enemies(1)}
-      assert {%{wave: nil}, _, _} = plan([units: soldiers(10)], weak)
+      # 18 soldiers: 7 guards, 11 attackers.
+      assert {%{wave: nil, hold: hold}, _, _} = plan([units: soldiers(18)], weak)
+      assert hold =~ "want 12"
     end
 
     test "the wave pulls back when it meets a stronger force" do
@@ -770,6 +772,80 @@ defmodule Swarm.BrainTest do
       # Only a worker sent to finish that one, no second depot.
       assert Enum.all?(depot_builds(commands), &({&1["x"], &1["y"]} == {41, 43}))
     end
+  end
+
+  describe "a big game (six players or more)" do
+    # Eight players: us at (7, 7), player 1 at (56, 56), and six more around the edge.
+    defp big(state) do
+      more = [{2, 31, 7}, {3, 56, 7}, {4, 7, 31}, {5, 56, 31}, {6, 7, 56}, {7, 31, 56}]
+
+      Map.update!(state, "players", fn ps ->
+        ps ++ for({slot, x, y} <- more, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})
+      end)
+    end
+
+    defp big_plan(opts, memory \\ Brain.new_memory()), do: Brain.plan(View.new(big(state(opts))), memory, terrain())
+
+    test "no first wave before twenty-five attackers" do
+      # 31 soldiers: 7 guards, 24 attackers.
+      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(31))
+      assert hold =~ "want 25"
+
+      # 32: a scout looks first, then the wave of 25 goes.
+      {_, _, memory} = big_plan(units: soldiers(32))
+      memory = %{memory | look: %{memory.look | done: 100}}
+      assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(32)], memory)
+      assert length(members) == 25
+    end
+
+    test "after the first, at least fifteen a wave" do
+      # 21 soldiers: 7 guards, 14 attackers; wave 1 has been and gone.
+      {_, _, memory} = big_plan(units: soldiers(21))
+      memory = %{memory | next_wave: 2, look: memory.look && %{memory.look | done: 100}}
+      assert {%{wave: nil, hold: hold}, _, _} = big_plan([units: soldiers(21)], memory)
+      assert hold =~ "want 15"
+    end
+
+    test "a ring of towers before the TechLab, and a third Barracks" do
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+      {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: start, ore: 1000)
+      assert [%{"buildingType" => "GuardTower"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+
+      tower = building(4, "GuardTower", 10, 10)
+      {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: [tower | start], ore: 1000)
+      assert [%{"buildingType" => "GuardTower"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+
+      built = start ++ [tower, building(5, "GuardTower", 4, 4), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 3, 10)]
+      {_, commands, _} = big_plan(units: workers(18) ++ soldiers(10), buildings: built, ore: 300)
+      assert [%{"buildingType" => "Barracks"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+    end
+
+    test "no co-op away from home before twenty fighters" do
+      deposits = for i <- 0..2, do: %{"id" => 60 + i, "x" => 40 + i, "y" => 40, "remaining" => 900}
+      miners = for i <- 1..3, do: unit(100 + i, "Worker", 41, 41, activity: "Gathering", target_id: 60)
+      depots = fn commands -> for %{"type" => "Build", "buildingType" => "ResourceDepot"} = c <- commands, do: c end
+
+      {_, commands, _} = big_plan(units: miners ++ soldiers(19), deposits: deposits, ore: 200)
+      assert depots.(commands) == []
+
+      {_, commands, _} = big_plan(units: miners ++ soldiers(20), deposits: deposits, ore: 200)
+      assert [_] = depots.(commands)
+    end
+
+    test "a co-op's tower comes before the rest of the build order" do
+      outpost = building(20, "ResourceDepot", 30, 30)
+      miners = for i <- 1..6, do: unit(100 + i, "Worker", 31, 31, activity: "Gathering")
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+      {_, commands, _} = big_plan(units: miners ++ workers(6) ++ soldiers(10), buildings: [outpost | start], ore: 300)
+      assert [%{"buildingType" => "GuardTower", "x" => x, "y" => y}] = for(%{"type" => "Build"} = c <- commands, do: c)
+      assert View.dist({x, y}, {30, 30}) <= 4
+    end
+  end
+
+  test "Barracks and the TechLab go behind the Command Center, away from the neighbors" do
+    # Us at (7, 7), the enemy at (56, 56): behind is up and to the left.
+    {x, y} = Brain.site(terrain(), View.new(state()), :base)
+    assert (x - 56) ** 2 + (y - 56) ** 2 > (7 - 56) ** 2 + (7 - 56) ** 2
   end
 
   describe "with plenty of ore" do
