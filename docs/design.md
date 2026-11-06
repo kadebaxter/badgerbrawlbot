@@ -305,6 +305,10 @@ the match, and a league match goes on as below, any other is played once. League
 league is kept in the replicated state. The leader joins
 (idempotent, so a new leader simply joins again), long-polls `state?waitForTick=0` for each round,
 plays the heat with a fresh brain and its own map, then waits again until `MATCH_FINISHED`.
+The wait for a round runs in a process of its own (the server holds that poll up to 30 s), and the
+leader checks every second that we are still in the league: after `Swarm.leave()` between rounds
+it moves on at once, to a match `Swarm.join` asked for, say. During a heat, leaving means no more
+rounds after this one.
 
 Watching it: every node serves Prometheus metrics at `:9568/metrics` (`Swarm.Metrics`: game
 figures from the leader, and each node's own share of the swarm), and the leader logs each

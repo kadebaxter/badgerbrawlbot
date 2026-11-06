@@ -20,6 +20,9 @@ defmodule Swarm.GameLoop do
   """
 
   use GenServer, restart: :transient
+
+  # While waiting for a league round, how often to check that we are still in that league.
+  @league_check_ms 1_000
   require Logger
   alias Swarm.{Brain, Decisions, Match, Metrics, NetRts, Ra, Units, View}
 
@@ -40,7 +43,9 @@ defmodule Swarm.GameLoop do
        waiting: false,
        mode: nil,
        # Logged as a decision once our first tick commits: only then do we really lead.
-       announce: nil
+       announce: nil,
+       # The league round long-poll going on (its ref), or nil: see `{:league_wait, ...}`.
+       poll: nil
      }}
   end
 
@@ -84,24 +89,54 @@ defmodule Swarm.GameLoop do
 
   # Between league rounds: one long poll at a time (the server holds it), so this process stays
   # responsive and can be stopped if we lose leadership.
+  # Between league rounds. The server holds the long poll for up to 30 s, so it runs in a process
+  # of its own: this one stays free to notice, every `@league_check_ms`, that we left the league
+  # (Swarm.leave/0) and go on to whatever comes next (a match to join, say) without waiting for it.
   def handle_info({:league_wait, name, id}, st) do
-    case NetRts.state(st.client, id, 0) do
-      {:ok, state} ->
-        {:ok, shared, _} = Ra.state()
+    if in_league?(name) do
+      me = self()
+      ref = make_ref()
+      client = st.client
 
-        # The same heat we were playing when the old leader stopped: carry on with its brain. A
-        # new round starts its tick over, so an earlier tick means a heat that ended without us.
-        memory =
-          if shared.match_id == id and state["tick"] >= shared.last_tick do
-            Logger.info("Resuming the heat in league match #{name}")
-            shared.brain
-          else
-            Logger.info("League match #{name}: a round has started")
-            {:ok, :ok, _} = Ra.command({:match_started, id})
-            nil
+      spawn_link(fn ->
+        result =
+          try do
+            NetRts.state(client, id, 0)
+          rescue
+            e -> {:error, e}
+          catch
+            :exit, reason -> {:error, reason}
           end
 
-        play(id, memory, %{st | waiting: false}, state)
+        send(me, {:league_poll, ref, name, id, result})
+      end)
+
+      Process.send_after(self(), {:league_check, ref, name}, @league_check_ms)
+      {:noreply, %{st | poll: ref}}
+    else
+      left_league(name, st)
+    end
+  end
+
+  def handle_info({:league_check, ref, name}, %{poll: ref} = st) do
+    if in_league?(name) do
+      Process.send_after(self(), {:league_check, ref, name}, @league_check_ms)
+      {:noreply, st}
+    else
+      left_league(name, st)
+    end
+  end
+
+  # A check or poll result for a wait that is over.
+  def handle_info({:league_check, _ref, _name}, st), do: {:noreply, st}
+  def handle_info({:league_poll, ref, _name, _id, _result}, %{poll: poll} = st) when ref != poll, do: {:noreply, st}
+
+  def handle_info({:league_poll, _ref, name, id, result}, st) do
+    st = %{st | poll: nil}
+
+    case result do
+      {:ok, _state} ->
+        if in_league?(name), do: round_started(name, id, result, st), else: left_league(name, st)
 
       {:error, %{code: "MATCH_NOT_STARTED"}} ->
         unless st.waiting, do: Logger.info("League match #{name}: waiting for the admin to start the round...")
@@ -282,6 +317,39 @@ defmodule Swarm.GameLoop do
   end
 
   # Join (again: that is harmless) and wait for a round.
+  defp round_started(name, id, {:ok, state}, st) do
+    {:ok, shared, _} = Ra.state()
+
+    # The same heat we were playing when the old leader stopped: carry on with its brain. A
+    # new round starts its tick over, so an earlier tick means a heat that ended without us.
+    memory =
+      if shared.match_id == id and state["tick"] >= shared.last_tick do
+        Logger.info("Resuming the heat in league match #{name}")
+        shared.brain
+      else
+        Logger.info("League match #{name}: a round has started")
+        {:ok, :ok, _} = Ra.command({:match_started, id})
+        nil
+      end
+
+    play(id, memory, %{st | waiting: false}, state)
+  end
+
+  # Whether we are still in the league match `name`. If the replicated state can't be read right
+  # now, assume we are: keep waiting rather than drop out.
+  defp in_league?(name) do
+    case Ra.state() do
+      {:ok, shared, _} -> Map.get(shared, :league) == name
+      _ -> true
+    end
+  end
+
+  defp left_league(name, st) do
+    Logger.info("Left league match #{name}: no longer waiting for its next round")
+    send(self(), :start)
+    {:noreply, %{st | poll: nil, waiting: false}}
+  end
+
   defp league(name, st) do
     case Match.join_league(st.client, name) do
       {:ok, id} ->

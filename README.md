@@ -45,7 +45,7 @@ doesn't start a practice match first, then:
 ```bash
 scripts/swarm.sh join season-week3   # the name the admin gave it (or its id)
 scripts/swarm.sh status              # league: season-week3
-scripts/swarm.sh leave               # no more rounds after the current one
+scripts/swarm.sh leave               # between rounds: out at once; during a heat: after it
 ```
 
 The leader joins, waits for each round, plays the heat with a fresh brain, and waits again until
