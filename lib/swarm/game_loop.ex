@@ -111,24 +111,24 @@ defmodule Swarm.GameLoop do
         send(me, {:league_poll, ref, name, id, result})
       end)
 
-      Process.send_after(self(), {:league_check, ref, name}, @league_check_ms)
+      Process.send_after(self(), {:league_check, ref, name, id}, @league_check_ms)
       {:noreply, %{st | poll: ref}}
     else
-      left_league(name, st)
+      left_league(name, id, st)
     end
   end
 
-  def handle_info({:league_check, ref, name}, %{poll: ref} = st) do
+  def handle_info({:league_check, ref, name, id}, %{poll: ref} = st) do
     if in_league?(name) do
-      Process.send_after(self(), {:league_check, ref, name}, @league_check_ms)
+      Process.send_after(self(), {:league_check, ref, name, id}, @league_check_ms)
       {:noreply, st}
     else
-      left_league(name, st)
+      left_league(name, id, st)
     end
   end
 
   # A check or poll result for a wait that is over.
-  def handle_info({:league_check, _ref, _name}, st), do: {:noreply, st}
+  def handle_info({:league_check, _ref, _name, _id}, st), do: {:noreply, st}
   def handle_info({:league_poll, ref, _name, _id, _result}, %{poll: poll} = st) when ref != poll, do: {:noreply, st}
 
   def handle_info({:league_poll, _ref, name, id, result}, st) do
@@ -136,7 +136,13 @@ defmodule Swarm.GameLoop do
 
     case result do
       {:ok, _state} ->
-        if in_league?(name), do: round_started(name, id, result, st), else: left_league(name, st)
+        if in_league?(name), do: round_started(name, id, result, st), else: left_league(name, id, st)
+
+      # Joining is for one round: our heat is over (or we never got in), so join again for the next.
+      {:error, %{code: code}} when code in ["JOIN_NEXT_ROUND", "NOT_A_PARTICIPANT"] ->
+        Logger.info("League match #{name}: #{code}, joining again for the next round")
+        Process.send_after(self(), :start, 1_000)
+        {:noreply, %{st | waiting: false}}
 
       {:error, %{code: "MATCH_NOT_STARTED"}} ->
         unless st.waiting, do: Logger.info("League match #{name}: waiting for the admin to start the round...")
@@ -344,8 +350,30 @@ defmodule Swarm.GameLoop do
     end
   end
 
-  defp left_league(name, st) do
-    Logger.info("Left league match #{name}: no longer waiting for its next round")
+  # We left between rounds. Joining is for one round, so we are still in the next one on the
+  # server: give up that place too, or we'd be seated in a heat we never play. Once that round is
+  # split into heats the server won't let us (CANNOT_LEAVE): we are in a heat either way, so we
+  # play it rather than leave the seat empty (`leave` during it then means after it).
+  defp left_league(name, id, st) do
+    case NetRts.leave(st.client, id) do
+      {:ok, _} ->
+        Logger.info("Left league match #{name}: out of its next round")
+
+      {:error, %{code: "CANNOT_LEAVE"}} ->
+        Logger.warning(
+          "League match #{name}: already seated in a heat of the next round, so we play it; " <>
+            "leave again during it to stop after it"
+        )
+
+        Ra.command({:join_league, name})
+
+      {:error, %{code: code}} ->
+        Logger.info("Left league match #{name}; the server says #{code} to leaving its next round")
+
+      {:error, other} ->
+        Logger.warning("Left league match #{name}; leaving its next round failed: #{inspect(other)}")
+    end
+
     send(self(), :start)
     {:noreply, %{st | poll: nil, waiting: false}}
   end

@@ -54,9 +54,9 @@ defmodule Swarm.Match do
   end
 
   @doc """
-  Joins the league match called `name` and returns its id. Joining again once in is fine, which
-  is how a new leader takes over. Errors are the server's codes, e.g. `MATCH_CLOSED` (a round is
-  being played; try again between rounds) or `MATCH_FINISHED`.
+  Joins the league match called `name` for its next round and returns its id. Joining is for one
+  round: we join again after every heat. Joining again once in is fine, which is how a new leader
+  takes over. Errors are the server's codes, e.g. `MATCH_FINISHED` (closed: no more rounds).
   """
   def join_league(client, name_or_id) do
     with {:ok, id} <- resolve(client, name_or_id),

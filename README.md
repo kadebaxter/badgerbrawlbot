@@ -48,8 +48,10 @@ scripts/swarm.sh status              # league: season-week3
 scripts/swarm.sh leave               # between rounds: out at once; during a heat: after it
 ```
 
-The leader joins, waits for each round, plays the heat with a fresh brain, and waits again until
-the admin closes the match. The league lives in the replicated state, so if the leader's node dies
+The leader joins, waits for the round, plays the heat with a fresh brain, then joins again (the
+server's joins are for one round each) and waits for the next, until the admin closes the match.
+Leaving between rounds also gives up our place in the next round on the server; once that round
+is split into heats it can't, so the bot plays that heat rather than leave its seat empty. The league lives in the replicated state, so if the leader's node dies
 another node rejoins (joining twice is harmless) and picks up the same heat. If the admin hasn't
 created the match yet, the leader keeps looking every 10 s (`leave` stops it). The bot must be
 Discord-verified.
