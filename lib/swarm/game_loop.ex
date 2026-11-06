@@ -394,25 +394,15 @@ defmodule Swarm.GameLoop do
     {strategy, commands, memory} = Brain.plan(view, st.memory, st.terrain)
 
     if memory != st.memory, do: Ra.command({:brain, memory})
+    planned = System.monotonic_time(:millisecond)
 
     # Ask every unit, wherever it runs, and give them part of the tick to answer.
     ref = make_ref()
     for {_id, pid} <- units, do: send(pid, {:tick, ref, self(), view, strategy})
     deadline_ms = max(100, div((st.state["tickIntervalMs"] || 1000) * 2, 5))
     replies = collect(ref, map_size(units), System.monotonic_time(:millisecond) + deadline_ms, [])
-    unit_commands = Enum.reject(replies, &(&1 == :no_change))
-
-    if rem(view.tick, 10) == 0 do
-      per_node =
-        units |> Map.values() |> Enum.frequencies_by(&node/1)
-        |> Enum.map_join(" ", fn {n, c} -> "#{short(n)}:#{c}" end)
-
-      Logger.info(
-        "tick #{view.tick} | ore #{view.ore} | #{map_size(units)} units (#{per_node}) | " <>
-          "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
-          "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}#{scout_info(view, strategy)}"
-      )
-    end
+    answered = System.monotonic_time(:millisecond)
+    unit_commands = for {_id, cmd} <- replies, cmd != :no_change, do: cmd
 
     me = Ra.server_id()
 
@@ -421,6 +411,18 @@ defmodule Swarm.GameLoop do
         # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
         Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands)
         send(self(), :poll)
+
+        if rem(view.tick, 10) == 0 do
+          done = System.monotonic_time(:millisecond)
+
+          Logger.info(
+            "tick #{view.tick} | ore #{view.ore} | #{map_size(units)} units (#{per_node(units)}) | " <>
+              "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
+              "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}" <>
+              timing_info(st, done - started, planned - started, answered - planned, deadline_ms, units, replies) <>
+              scout_info(view, strategy)
+          )
+        end
 
         if st.announce, do: Decisions.log(:leader, view.tick, st.announce)
 
@@ -444,16 +446,39 @@ defmodule Swarm.GameLoop do
     end
   end
 
+  # The replies that come in before the deadline, as {unit id, command}.
   defp collect(_ref, 0, _deadline, acc), do: acc
 
   defp collect(ref, waiting, deadline, acc) do
     remaining = max(0, deadline - System.monotonic_time(:millisecond))
 
     receive do
-      {:command, ^ref, _id, cmd} -> collect(ref, waiting - 1, deadline, [cmd | acc])
+      {:command, ^ref, id, cmd} -> collect(ref, waiting - 1, deadline, [{id, cmd} | acc])
     after
       remaining -> acc
     end
+  end
+
+  # How many units each node runs: "swarm-0:26 swarm-1:27 swarm-2:26".
+  defp per_node(units) do
+    units |> Map.values() |> Enum.frequencies_by(&node/1) |> Enum.sort()
+    |> Enum.map_join(" ", fn {n, c} -> "#{host(n)}:#{c}" end)
+  end
+
+  # How long this tick took, the part the brain and the units took (against the time units are
+  # given), and how many units on each node answered in time:
+  # " | took 143ms of 200 (brain 12, units 100 of 100) | on time: swarm-0 0/26 swarm-1 27/27 swarm-2 26/26"
+  defp timing_info(st, total, brain, waited, deadline_ms, units, replies) do
+    tick_ms = st.state["tickIntervalMs"] || 1000
+    on_time = MapSet.new(replies, &elem(&1, 0))
+
+    by_node =
+      units
+      |> Enum.group_by(fn {_id, pid} -> node(pid) end, fn {id, _pid} -> id end)
+      |> Enum.sort()
+      |> Enum.map_join(" ", fn {n, ids} -> "#{host(n)} #{Enum.count(ids, &MapSet.member?(on_time, &1))}/#{length(ids)}" end)
+
+    " | took #{total}ms of #{tick_ms} (brain #{brain}, units #{waited} of #{deadline_ms}) | on time: #{by_node}"
   end
 
   defp finish(st) do
@@ -489,5 +514,11 @@ defmodule Swarm.GameLoop do
   defp wave_info(%{all_in: true} = wave), do: " (ALL IN: #{length(wave.members)})"
   defp wave_info(wave), do: " (wave #{wave.id}: #{length(wave.members)} out)"
 
-  defp short(node), do: node |> to_string() |> String.split("@") |> hd()
+  # "swarm-0" for swarm@swarm-0.swarm.netrts.svc.cluster.local (the pod); the node itself otherwise.
+  defp host(node) do
+    case node |> to_string() |> String.split(["@", "."]) do
+      [_name, host | _] -> host
+      [name] -> name
+    end
+  end
 end
