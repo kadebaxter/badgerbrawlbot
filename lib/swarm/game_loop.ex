@@ -486,8 +486,9 @@ defmodule Swarm.GameLoop do
           Logger.info(
             "tick #{view.tick} | ore #{view.ore} | #{map_size(units)} units (#{per_node(units)}) | " <>
               "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
+              "#{economy_info(view)} | " <>
               "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}" <>
-              timing_info(st, done - started, planned - started, answered - planned, deadline_ms, units, replies) <>
+              timing_info(view, st, done - started, planned - started, answered - planned, deadline_ms, units, replies) <>
               scout_info(view, strategy)
           )
         end
@@ -534,9 +535,10 @@ defmodule Swarm.GameLoop do
   end
 
   # How long this tick took, the part the brain and the units took (against the time units are
-  # given), and how many units on each node answered in time:
-  # " | took 143ms of 200 (brain 12, units 100 of 100) | on time: swarm-0 0/26 swarm-1 27/27 swarm-2 26/26"
-  defp timing_info(st, total, brain, waited, deadline_ms, units, replies) do
+  # given), how many units on each node answered in time, and of what type the late ones were:
+  # " | took 143ms of 200 (brain 12, units 100 of 100) | on time: swarm-0 0/26 swarm-1 27/27
+  # swarm-2 26/26 | late: 4 Soldier, 22 Worker"
+  defp timing_info(view, st, total, brain, waited, deadline_ms, units, replies) do
     tick_ms = st.state["tickIntervalMs"] || 1000
     on_time = MapSet.new(replies, &elem(&1, 0))
 
@@ -546,7 +548,23 @@ defmodule Swarm.GameLoop do
       |> Enum.sort()
       |> Enum.map_join(" ", fn {n, ids} -> "#{host(n)} #{Enum.count(ids, &MapSet.member?(on_time, &1))}/#{length(ids)}" end)
 
-    " | took #{total}ms of #{tick_ms} (brain #{brain}, units #{waited} of #{deadline_ms}) | on time: #{by_node}"
+    late =
+      for(u <- view.my_units, Map.has_key?(units, u["id"]), not MapSet.member?(on_time, u["id"]), do: u["type"])
+      |> Enum.frequencies()
+      |> Enum.sort()
+      |> Enum.map_join(", ", fn {type, n} -> "#{n} #{type}" end)
+
+    late = if late == "", do: "", else: " | late: " <> late
+
+    " | took #{total}ms of #{tick_ms} (brain #{brain}, units #{waited} of #{deadline_ms}) | on time: #{by_node}" <> late
+  end
+
+  # How the economy is doing: "workers 22 (3 idle) | ore in sight 14 (6 in reach)". Ore in reach
+  # is within reach of a finished drop-off; all idle with none in sight means nothing left to mine.
+  defp economy_info(view) do
+    workers = View.units_of(view, "Worker")
+    idle = Enum.count(workers, &(&1["activity"] == "Idle"))
+    "workers #{length(workers)} (#{idle} idle) | ore in sight #{length(view.deposits)} (#{length(View.near_deposits(view))} in reach)"
   end
 
   defp finish(st) do
