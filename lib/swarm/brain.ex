@@ -92,7 +92,7 @@ defmodule Swarm.Brain do
   # `@look_sight` of that spot. The launch waits at most `@look_timeout` ticks for it.
   @look_at 5
   @look_fresh 60
-  @look_from 6
+  @look_from 7
   @look_sight 3
   @look_timeout 40
   # How far our units see, for forgetting enemies we should see and don't (one less, as they move).

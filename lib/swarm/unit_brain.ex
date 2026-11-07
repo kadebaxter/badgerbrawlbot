@@ -26,9 +26,11 @@ defmodule Swarm.UnitBrain do
   there, then comes back to its post; the other stays. While a wave is out, the scout watching
   the side of its target works in front of it: `@scout_ahead` tiles ahead of its lead unit for up
   to `@ahead_ticks` ticks, then `@scout_behind` tiles behind it for `@behind_ticks`, out of the
-  fight, and again; the wave doesn't wait for it. A scout runs toward home once an enemy could reach it or it is taking
-  damage, and waits `@scout_rest` ticks before going back. Its memory holds its HP last tick and
-  when it last ran.
+  fight, and again; the wave doesn't wait for it. A scout steps back once an enemy could reach it
+  or it is taking damage: just out of reach, straight away from it (with the wave, behind the
+  wave), not all the way home, and waits `@scout_rest` ticks before going back. A post or a spot to
+  look from that an enemy we can see covers is pulled back out of its reach first. Its memory holds
+  its HP last tick and when it last stepped back.
 
   Any unit standing on a tile where an enemy shell is about to land steps off it first: a
   Trebuchet's shell hits whatever is on the tile when it lands, and it aims at units standing
@@ -61,8 +63,10 @@ defmodule Swarm.UnitBrain do
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
-  # How long a scout that ran stays back before returning to its post.
-  @scout_rest 15
+  # How far past a threat's reach a scout steps back to.
+  @scout_clear 2
+  # How long a scout that stepped back stays there before returning to its job.
+  @scout_rest 6
   # A scout with the wave: this far ahead of its lead unit, for at most this long (less once it is
   # there), then this far behind its middle, for this long.
   @scout_ahead 6
@@ -307,7 +311,7 @@ defmodule Swarm.UnitBrain do
 
     {intent, fled_at, phase} =
       cond do
-        from = danger(v, here, hurt?) -> run(v, s, here, from, job)
+        threat = danger(v, here, hurt?) -> run(v, s, here, threat, hurt?, job)
         fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at, Map.get(memory, :phase)}
         true -> scout_post(v, s, here, job, Map.get(memory, :phase))
       end
@@ -341,22 +345,51 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # A threatened scout runs: with the wave, back behind it (and stays behind it a while), if that
-  # takes it away from the threat; otherwise toward home.
-  defp run(v, s, here, from, {:wave, {_lead, middle}}) do
+  # A threatened scout steps back: with the wave, behind it (and stays behind it a while), if that
+  # takes it away from the threat; otherwise just out of the threat's reach (`step_back/4`).
+  defp run(v, s, here, threat, hurt?, {:wave, {_lead, middle}}) do
+    from = View.pos(threat)
     behind = toward(middle, s.rally, @scout_behind)
 
     if View.dist(behind, from) > View.dist(here, from),
       do: {{:move, behind}, v.tick, {:behind, v.tick}},
-      else: {{:move, flee(v, here, from)}, v.tick, {:behind, v.tick}}
+      else: {{:move, step_back(v, here, threat, hurt?)}, v.tick, {:behind, v.tick}}
   end
 
-  defp run(v, _s, here, from, _job), do: {{:move, flee(v, here, from)}, v.tick, nil}
+  defp run(v, _s, here, threat, hurt?, _job), do: {{:move, step_back(v, here, threat, hurt?)}, v.tick, nil}
 
-  # Returns {intent, nil, its phase with the wave}.
-  defp scout_post(_v, _s, _here, {:look, spot}, _phase), do: {{:move, spot}, nil, nil}
+  # Returns {intent, nil, its phase with the wave}. A post or a spot to look from that an enemy we
+  # can see covers is pulled back out of its reach, or the scout would walk into it again.
+  defp scout_post(v, _s, _here, {:look, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
   defp scout_post(v, s, here, {:wave, front}, phase), do: with_wave(v, s, here, front, phase)
-  defp scout_post(_v, _s, _here, {:post, spot}, _phase), do: {{:move, spot}, nil, nil}
+  defp scout_post(v, _s, _here, {:post, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
+
+  # A little past the threat's reach (`@scout_clear` tiles), straight away from it: the scout keeps
+  # watching, not running home. Taking damage, at least 3 tiles farther than now (something we
+  # may not even see is hitting us). Toward home only if the threat is right on top of us.
+  defp step_back(v, {x, y} = here, threat, hurt?) do
+    {fx, fy} = from = View.pos(threat)
+    d = View.dist(here, from)
+    clear = if hurt?, do: max(reach(threat) + @scout_clear, d + 3), else: reach(threat) + @scout_clear
+
+    if d == 0,
+      do: flee(v, here, from),
+      else: {clamp(fx + div((x - fx) * clear, d), v.map_width), clamp(fy + div((y - fy) * clear, d), v.map_height)}
+  end
+
+  # How close a threat may come before a scout steps back: its range plus `@scout_margin`, plus one.
+  defp reach(threat), do: Roles.range(threat) + @scout_margin + 1
+
+  # `spot`, or, if an enemy we can see covers it, back toward home (2 tiles at a time) until none does.
+  defp safe_spot(%View{cc: nil}, spot), do: spot
+
+  defp safe_spot(%View{cc: cc} = v, spot) do
+    covered? = fn tile -> Enum.any?(threats(v), &(View.dist(View.pos(&1), tile) <= reach(&1))) end
+
+    Stream.iterate(spot, &toward(&1, View.pos(cc), 2))
+    |> Stream.take(15)
+    |> Enum.find(spot, &(not covered?.(&1)))
+  end
 
   # Ahead of the wave's lead unit for a while (or until it is there), then behind the wave's
   # middle for a while, and again. `phase` is {:ahead | :behind, since tick}. Not ahead into a
@@ -447,7 +480,7 @@ defmodule Swarm.UnitBrain do
   end
 
   # The closest enemy fighter or tower that could reach us. Taking damage, the closest one we
-  # can see at all: something is hitting us.
+  # can see at all: something is hitting us. The unit or tower itself.
   defp danger(v, here, hurt?) do
     close =
       Enum.filter(threats(v), fn t ->
@@ -457,7 +490,7 @@ defmodule Swarm.UnitBrain do
 
     case close do
       [] -> nil
-      near -> near |> Enum.min_by(&View.dist(View.pos(&1), here)) |> View.pos()
+      near -> Enum.min_by(near, &View.dist(View.pos(&1), here))
     end
   end
 

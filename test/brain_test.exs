@@ -314,9 +314,9 @@ defmodule Swarm.BrainTest do
 
     test "once five attackers wait, a scout is sent to look, and the wave waits for it" do
       {s, _, memory} = fresh(units: soldiers(22))
-      assert %{wave: nil, look: {50, 50}, why: [{:scout_sent, "scout looking at player 1 by (50,50)"}]} = s
+      assert %{wave: nil, look: {49, 49}, why: [{:scout_sent, "scout looking at player 1 by (49,49)"}]} = s
       assert s.hold =~ "scout looking at player 1"
-      assert %{look: %{owner: 1, pos: {50, 50}, at: 100, done: nil}} = memory
+      assert %{look: %{owner: 1, pos: {49, 49}, at: 100, done: nil}} = memory
     end
 
     test "not with fewer than five waiting" do

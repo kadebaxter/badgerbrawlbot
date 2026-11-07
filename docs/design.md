@@ -330,9 +330,12 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    target's side works in front of it: 6 tiles ahead of its lead unit for up to 8 ticks, then 5
    tiles behind its middle for 10 ticks, out of the fight, and again, through every new target;
    the wave never waits for it. With enemies already by the spot ahead, the wave is at them, so
-   the scout stays behind it. A scout runs once an enemy could reach it (its range + 2) or it is
-   taking damage: with the wave, back behind the wave; otherwise toward home (straight away when
-   the enemy is between it and home). It stays back 15 ticks before returning. The leader's
+   the scout stays behind it. A scout steps back once an enemy could reach it (its range + 2) or
+   it is taking damage: with the wave, behind the wave; otherwise straight away from the enemy to 2
+   tiles past its reach (at least 3 tiles farther when it is taking damage), not all the way home.
+   It waits 6 ticks before going back, and a post or spot to look from that an enemy we can see
+   covers is pulled back out of its reach first. The spot to look from is 7 tiles short of the
+   target (the scout sees 8). The leader's
    10-tick log line says what each scout is doing and where (`scouts: 288 wave (51,16), …`). The
    leader remembers every enemy fighter seen (dropped when we kill it, after 300 ticks unseen, or
    when one of our units or buildings should see it where we last saw it and doesn't) and

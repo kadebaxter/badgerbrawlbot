@@ -391,24 +391,34 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 50, 50), @gather)
     end
 
-    test "it runs toward home from enemy fighters" do
+    test "it steps back just out of reach, straight away from the enemy, not home" do
+      # A soldier reaches 4 (range 1, margin 2, plus one): the scout goes to 6 from it.
       enemy = unit(900, "Soldier", 33, 30, owner: 1)
-      assert %{"type" => "Move", "x" => 24, "y" => 24} = cmd(unit(5, "Scout", 30, 30), @gather, [enemy])
+      assert %{"type" => "Move", "x" => 27, "y" => 30} = cmd(unit(5, "Scout", 30, 30), @gather, [enemy])
     end
 
     test "it keeps out of an archer's reach, but not a soldier's next step" do
-      soldier = unit(900, "Soldier", 29, 30, owner: 1)
+      # A soldier four tiles off: no danger, it heads for its post at (31, 31).
+      soldier = unit(900, "Soldier", 21, 30, owner: 1)
       assert %{"x" => 31, "y" => 31} = cmd(unit(5, "Scout", 25, 30), @gather, [soldier])
 
+      # An archer five off reaches us: step back away from it.
       archer = unit(900, "Archer", 30, 30, owner: 1)
-      assert %{"x" => x, "y" => y} = cmd(unit(5, "Scout", 25, 30), @gather, [archer])
-      assert x < 25 and y < 30
+      assert %{"x" => x, "y" => _} = cmd(unit(5, "Scout", 25, 30), @gather, [archer])
+      assert x < 25
     end
 
-    test "it runs when it is taking damage" do
+    test "a post an enemy covers is pulled back out of its reach" do
+      # A soldier camped by the post (31, 31): the scout waits short of it instead.
+      soldier = unit(900, "Soldier", 32, 32, owner: 1)
+      assert %{"x" => x, "y" => y} = cmd(unit(5, "Scout", 10, 10), @gather, [soldier])
+      assert View.dist({x, y}, {32, 32}) > 4 and View.dist({x, y}, {7, 7}) < View.dist({31, 31}, {7, 7})
+    end
+
+    test "taking damage, it steps back farther: three tiles more than now" do
       scout = Map.put(unit(5, "Scout", 30, 30), "hp", 40)
       soldier = unit(900, "Soldier", 36, 30, owner: 1)
-      assert {%{"x" => 24, "y" => 24}, _} = decide(scout, @gather, [soldier], %{intent: nil, hp: 55})
+      assert {%{"x" => 27, "y" => 30}, _} = decide(scout, @gather, [soldier], %{intent: nil, hp: 55})
     end
 
     test "with the enemy between it and home, it runs straight away instead" do
@@ -417,12 +427,12 @@ defmodule Swarm.UnitBrainTest do
       assert x > 30 and y > 30
     end
 
-    test "after running, it stays back a while before returning to its post" do
-      at = fn tick -> View.new(state(units: [unit(5, "Scout", 24, 24)], tick: tick)) end
+    test "after stepping back, it waits a few ticks, then goes back to its post" do
+      at = fn tick -> View.new(state(units: [unit(5, "Scout", 27, 30)], tick: tick)) end
       {_, memory} = decide(unit(5, "Scout", 30, 30), @gather, [unit(900, "Soldier", 33, 30, owner: 1)])
 
-      assert {:no_change, memory} = UnitBrain.decide(5, at.(105), @gather, memory)
-      assert {%{"x" => 31, "y" => 31}, _} = UnitBrain.decide(5, at.(115), @gather, memory)
+      assert {:no_change, memory} = UnitBrain.decide(5, at.(103), @gather, memory)
+      assert {%{"x" => 31, "y" => 31}, _} = UnitBrain.decide(5, at.(106), @gather, memory)
     end
 
     # Us at (7, 7). Neighbors at (56, 7) and (7, 56); across the map at (56, 56).
