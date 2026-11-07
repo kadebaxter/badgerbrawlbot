@@ -10,6 +10,7 @@
 #   scripts/swarm.sh leave                  # no more league rounds after this one, or stop looking for the match
 #   scripts/swarm.sh host 6 [--name kaden-brawl] [house bots...]   # host a match others join
 #   scripts/swarm.sh unhost                 # give up our seat before it starts (joined or hosted)
+#   scripts/swarm.sh serum practice|on|off  # when to take the serum: practice games only, always, never
 #   scripts/swarm.sh shell                  # an iex on a swarm node (leave with Ctrl+C, a)
 #   scripts/swarm.sh logs                   # follow the leader's log
 #
@@ -19,7 +20,7 @@ set -euo pipefail
 ns=${SWARM_NAMESPACE:-netrts}
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -72,6 +73,11 @@ case "$cmd" in
     echo "the leader's log has the match id and how others join (scripts/swarm.sh logs)"
     ;;
   unhost | leave-match) rpc 'IO.inspect(Swarm.leave_match())' ;;
+  serum)
+    mode=${1:?usage: serum practice|on|off}
+    [[ $mode =~ ^(practice|on|off)$ ]] || { echo "serum takes practice, on or off" >&2; exit 1; }
+    rpc "IO.inspect(Swarm.serum(:$mode))"
+    ;;
   shell) kubectl -n "$ns" exec -it "$(pod)" -- bin/swarm remote ;;
   logs)
     leader=$(kubectl -n "$ns" exec "$(pod)" -- bin/swarm rpc \

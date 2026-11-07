@@ -12,6 +12,7 @@ defmodule Swarm do
       Swarm.host(6, name: "kaden-brawl", bots: ["rusher"])   # host a match others join
       Swarm.leave_match()          # give up our seat in a match that hasn't started
       Swarm.leave()    # stop after the current league round, or stop looking for a match to join
+      Swarm.serum(:practice)   # take the serum in practice games only (default); :on everywhere, :off never
       Swarm.client()   # a NetRts client for the configured server and key
       Swarm.enemies()  # the enemy fighters the leader remembers, per opponent
   """
@@ -38,6 +39,7 @@ defmodule Swarm do
     IO.puts("""
     leader:  #{leader}
     league:  #{shared[:league] || "none"}#{pending(shared)}
+    serum:   #{Map.get(shared, :serum_mode, :practice)}
     match:   #{shared[:match_id] || "none"}  (played #{shared[:matches_played]} of #{shared[:matches_wanted]})
     nodes:
     #{Enum.map_join(Units.nodes(), "\n", &"  #{&1}#{if &1 == leader, do: " ★", else: ""}  #{Map.get(per_node, &1, 0)} units")}
@@ -62,6 +64,18 @@ defmodule Swarm do
 
   @doc false
   def join_match(name_or_id), do: join(name_or_id)
+
+  @doc """
+  When the leader may take the serum (a once-a-match superpower: Soldiers double damage and
+  speed for 30 ticks; everyone is told): `:practice` (the default) in practice games but not
+  league heats, `:on` in every game, `:off` never. Kept in the replicated state.
+  """
+  def serum(mode) when mode in [:on, :off, :practice] do
+    {:ok, :ok, _} = Ra.command({:serum_mode, mode})
+    :ok
+  end
+
+  def serum(_mode), do: {:error, :mode_is_on_off_or_practice}
 
   @doc "No more practice matches after the one being played: clears the queue `play` built up."
   def stop do

@@ -45,7 +45,9 @@ defmodule Swarm.GameLoop do
        # Logged as a decision once our first tick commits: only then do we really lead.
        announce: nil,
        # The league round long-poll going on (its ref), or nil: see `{:league_wait, ...}`.
-       poll: nil
+       poll: nil,
+       # Our serum key for this match, once fetched (see `serum/4`).
+       serum_key: nil
      }}
   end
 
@@ -478,7 +480,8 @@ defmodule Swarm.GameLoop do
        | match_id: match_id,
          terrain: terrain,
          state: state,
-         memory: memory || Brain.new_memory(),
+         memory: memory || new_memory(),
+         serum_key: nil,
          idle: false,
          announce: "#{node()} #{how}"
      }}
@@ -504,8 +507,11 @@ defmodule Swarm.GameLoop do
 
     case Ra.command({:tick_submitted, view.tick}) do
       {:ok, :ok, ^me} ->
+        {memory, st} = serum(view, strategy, memory, st)
+        {key, st} = serum_on(view, memory, st)
+
         # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
-        Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands)
+        Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands, key)
         send(self(), :poll)
 
         if rem(view.tick, 10) == 0 do
@@ -540,6 +546,71 @@ defmodule Swarm.GameLoop do
       other ->
         Logger.warning("Lost leadership before tick #{view.tick} (#{inspect(other)}); not sending orders")
         {:stop, :normal, st}
+    end
+  end
+
+  # A new game's brain memory: the serum is off for it unless `Swarm.serum/1` allows it here
+  # (:practice, the default, leaves it out of league heats).
+  defp new_memory do
+    memory = Brain.new_memory()
+
+    allowed? =
+      case Ra.state() do
+        {:ok, shared, _} ->
+          case Map.get(shared, :serum_mode, :practice) do
+            :on -> true
+            :off -> false
+            :practice -> Map.get(shared, :league) == nil
+          end
+
+        _ ->
+          false
+      end
+
+    if allowed?, do: memory, else: %{memory | serum: :off}
+  end
+
+  # The brain says now's the moment: take the serum (once a match). Soldiers have sent their orders
+  # again this tick, so they all go out with the key and all get it.
+  defp serum(view, %{serum: :take}, %{serum: nil} = memory, st) do
+    with {:ok, key} <- serum_key(st),
+         {:ok, %{"untilTick" => until}} <- NetRts.take_serum(st.client, st.match_id) do
+      memory = %{memory | serum: {:until, until}}
+      Ra.command({:brain, memory})
+      Decisions.log(:serum, view.tick, "took the serum: Soldiers double damage and speed until tick #{until}")
+      {memory, %{st | serum_key: key}}
+    else
+      {:error, %{code: code}} when code in ["SERUM_GONE", "MATCH_NOT_ACTIVE"] ->
+        Logger.warning("Serum: #{code}; not trying again this game")
+        memory = %{memory | serum: :spent}
+        Ra.command({:brain, memory})
+        {memory, st}
+
+      other ->
+        Logger.warning("Serum: couldn't take it (#{inspect(other)}); trying again")
+        {memory, st}
+    end
+  end
+
+  defp serum(_view, _strategy, memory, st), do: {memory, st}
+
+  # The key to send commands with while the serum lasts (fetched once, kept), else nil.
+  defp serum_on(view, %{serum: {:until, until}}, st) when view.tick <= until do
+    case serum_key(st) do
+      {:ok, key} -> {key, %{st | serum_key: key}}
+      _ -> {nil, st}
+    end
+  end
+
+  defp serum_on(_view, _memory, st), do: {nil, st}
+
+  # Our serum key for this match: the same every time we ask, so a new leader just asks again.
+  defp serum_key(%{serum_key: key}) when is_binary(key), do: {:ok, key}
+
+  defp serum_key(st) do
+    case NetRts.serum_key(st.client, st.match_id) do
+      {:ok, key} when is_binary(key) -> {:ok, String.trim(key)}
+      other -> other
     end
   end
 

@@ -310,6 +310,18 @@ defmodule Swarm.UnitBrainTest do
     end
   end
 
+  test "the tick the serum is taken, a soldier sends its order again even if nothing changed" do
+    moving = unit(2, "Soldier", 20, 20, activity: "Moving")
+    {_, memory} = decide(moving, @attack)
+    assert {:no_change, _} = decide(moving, @attack, [], memory)
+    assert {%{"type" => "Attack"}, _} = decide(moving, Map.put(@attack, :serum, :take), [], memory)
+
+    # Not other units.
+    archer = unit(3, "Archer", 20, 20, activity: "Moving")
+    {_, memory} = decide(archer, @attack)
+    assert {:no_change, _} = decide(archer, Map.put(@attack, :serum, :take), [], memory)
+  end
+
   describe "scouts" do
     # Us at (7, 7), the enemy at (56, 56): halfway is (31, 31).
     test "a scout waits halfway to its neighbor" do

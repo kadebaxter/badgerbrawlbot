@@ -31,7 +31,9 @@ defmodule Swarm.Machine do
       # The name of the practice match a leader has claimed and is creating, until its id is
       # recorded. Claiming before creating is what keeps two leaders in a handover from both
       # creating one: only one claim is applied, and a new leader finds the match by its name.
-      creating: nil
+      creating: nil,
+      # When to take the serum (`Swarm.serum/1`): :on, :off, or :practice (not in league heats).
+      serum_mode: :practice
     }
   end
 
@@ -106,6 +108,9 @@ defmodule Swarm.Machine do
   # We gave up our seat before the match started: it doesn't count as played.
   def apply(_meta, {:left, id}, %{match_id: id} = state), do: {%{state | match_id: nil, brain: nil}, :ok}
   def apply(_meta, {:left, _other}, state), do: {state, :ok}
+
+  def apply(_meta, {:serum_mode, mode}, state) when mode in [:on, :off, :practice],
+    do: {Map.put(state, :serum_mode, mode), :ok}
 
   def apply(_meta, {:join_league, name}, state), do: {Map.put(state, :league, name), :ok}
 

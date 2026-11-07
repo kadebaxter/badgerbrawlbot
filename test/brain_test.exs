@@ -229,7 +229,7 @@ defmodule Swarm.BrainTest do
     tower = Map.put(building(14, "GuardTower", 12, 12), "completed", false)
     builders = for w <- workers(12), do: %{w | "activity" => "Building", "targetId" => 14}
     miner = unit(50, "Worker", 30, 30, activity: "Gathering", target_id: 6)
-    buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), tower]
+    buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), tower, backup_cc()]
 
     {_, commands, _} = plan(units: [miner | builders] ++ soldiers(7), buildings: buildings, ore: 150)
     assert [%{"type" => "Build", "buildingType" => "TechLab", "unitIds" => [50]}] =
@@ -742,7 +742,7 @@ defmodule Swarm.BrainTest do
       tower = building(5, "GuardTower", 12, 12)
       lab = building(6, "TechLab", 7, 12)
       # Soldiers enough to be past the army floor, which would take the ore first.
-      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab], ore: 160)
+      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab, backup_cc()], ore: 160)
       assert %{"unitIds" => [_]} = build_of(commands, "Barracks")
     end
   end
@@ -774,6 +774,63 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  describe "a backup Command Center" do
+    test "goes up after the first tower, with two builders, far from every base and off the ore" do
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
+      {_, commands, _} = plan(units: workers(12) ++ soldiers(10), buildings: start, ore: 1000)
+      assert [%{"buildingType" => "CommandCenter", "unitIds" => [_, _], "x" => x, "y" => y}] =
+               for(%{"type" => "Build"} = c <- commands, do: c)
+
+      # Us at (7, 7), the enemy at (56, 56): far from both, so out toward a free corner.
+      assert View.dist({x, y}, {7, 7}) >= 30 and View.dist({x, y}, {56, 56}) >= 30
+    end
+
+    test "is rebuilt if lost" do
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(10), buildings: start ++ [backup_cc()], ore: 1000)
+      refute Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
+
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(10), buildings: start, ore: 1000)
+      assert Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
+    end
+
+    test "workers don't mine by it: it isn't one of our drop-offs while our base stands" do
+      v = View.new(state(buildings: [backup_cc()]))
+      assert View.drop_offs(v) == [{7, 7}]
+    end
+  end
+
+  describe "the serum" do
+    # A wave of ten soldiers at (45, 45).
+    defp wave_at_front, do: for(s <- soldiers(10), do: %{s | "x" => 45, "y" => 45})
+    defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum}
+    defp enemy_army(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 47, 47, owner: 1))
+
+    test "taken when the wave's front meets a player at least half as strong" do
+      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory())
+    end
+
+    test "not for a skirmish, not with too few soldiers, not twice, not when it's off" do
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(2)], wave_memory())
+
+      few = Enum.take(wave_at_front(), 7)
+      memory = %{wave_memory() | wave: %{wave_memory().wave | members: Enum.to_list(201..207)}}
+      assert {%{serum: nil}, _, _} = plan([units: few ++ enemy_army(4)], memory)
+
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory(:spent))
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory({:until, 140}))
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory(:off))
+    end
+
+    test "taken for a real raid on home" do
+      raiders = for i <- 1..8, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
+      assert {%{serum: :take}, _, _} = plan(units: soldiers(10) ++ raiders)
+    end
+  end
+
+  # A backup Command Center out of the way, as the build order puts one.
+  defp backup_cc, do: building(19, "CommandCenter", 40, 20)
+
   describe "a big game (six players or more)" do
     # Eight players: us at (7, 7), player 1 at (56, 56), and six more around the edge.
     defp big(state) do
@@ -786,15 +843,22 @@ defmodule Swarm.BrainTest do
 
     defp big_plan(opts, memory \\ Brain.new_memory()), do: Brain.plan(View.new(big(state(opts))), memory, terrain())
 
+    # Ten towers around the base at (7, 7).
+    defp square, do: for({x, y} <- [{1, 1}, {7, 1}, {13, 1}, {1, 7}, {13, 7}, {1, 13}, {7, 13}, {13, 13}, {4, 13}, {13, 4}], do: building(500 + x * 20 + y, "GuardTower", x, y))
+
     test "no first wave before twenty-five attackers" do
       # 31 soldiers: 7 guards, 24 attackers.
       assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(31))
       assert hold =~ "want 25"
 
-      # 32: a scout looks first, then the wave of 25 goes.
-      {_, _, memory} = big_plan(units: soldiers(32))
+      # 32, but no tower square yet: still waiting.
+      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(32))
+      assert hold =~ "tower square first (0 of 10)"
+
+      # With the square up: a scout looks first, then the wave of 25 goes.
+      {_, _, memory} = big_plan(units: soldiers(32), buildings: square())
       memory = %{memory | look: %{memory.look | done: 100}}
-      assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(32)], memory)
+      assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(32), buildings: square()], memory)
       assert length(members) == 25
     end
 
@@ -815,9 +879,19 @@ defmodule Swarm.BrainTest do
       {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: [tower | start], ore: 1000)
       assert [%{"buildingType" => "GuardTower"}] = for(%{"type" => "Build"} = c <- commands, do: c)
 
-      built = start ++ [tower, building(5, "GuardTower", 4, 4), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 3, 10)]
+      built = start ++ [tower, building(5, "GuardTower", 4, 4), backup_cc(), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 3, 10)]
       {_, commands, _} = big_plan(units: workers(18) ++ soldiers(10), buildings: built, ore: 300)
       assert [%{"buildingType" => "Barracks"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+    end
+
+    test "towers go on a square around the whole base, spread out" do
+      v = View.new(big(state()))
+      {x1, y1} = first = Brain.site(terrain(), v, :square)
+      assert View.dist(first, {7, 7}) in 5..6
+
+      v = View.new(big(state(buildings: [building(4, "GuardTower", x1, y1)])))
+      second = Brain.site(terrain(), v, :square)
+      assert View.dist(second, {7, 7}) in 5..6 and View.dist(second, first) >= 5
     end
 
     test "no co-op away from home before twenty fighters" do
@@ -842,6 +916,13 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  test "a co-op goes two tiles from as much of its ore as it can: mining with no walking" do
+    # A row of ore at (18..20, 7), 11 tiles from the Command Center at (7, 7).
+    ore = for x <- 18..20, do: %{"id" => 40 + x, "x" => x, "y" => 7, "remaining" => 900}
+    {x, y} = Brain.site(terrain(), View.new(state(deposits: ore)), :ore)
+    assert Enum.all?(ore, &(View.dist({&1["x"], &1["y"]}, {x, y}) == 2))
+  end
+
   test "Barracks and the TechLab go behind the Command Center, away from the neighbors" do
     # Us at (7, 7), the enemy at (56, 56): behind is up and to the left.
     {x, y} = Brain.site(terrain(), View.new(state()), :base)
@@ -858,7 +939,8 @@ defmodule Swarm.BrainTest do
         building(6, "TechLab", 7, 12),
         building(7, "Barracks", 12, 3),
         building(8, "GuardTower", 14, 9),
-        building(9, "ResourceDepot", 3, 3)
+        building(9, "ResourceDepot", 3, 3),
+        backup_cc()
       ]
     end
 

@@ -39,10 +39,25 @@ defmodule Swarm.NetRts do
   def commands(client, match_id, commands),
     do: request(client, :post, "/api/v1/matches/#{match_id}/commands", %{commands: commands})
 
+  @doc "The same, with soldiers boosted by the serum: `key` is ours for this match (`serum_key/2`)."
+  def commands(client, match_id, commands, serum_key),
+    do: request(client, :post, "/api/v1/matches/#{match_id}/commands", %{commands: commands}, [], [{"x-superpower-superserum", serum_key}])
+
+  @doc """
+  Our serum key for this match (the same every time we ask). The serum is a superpower the game
+  keeps out of its published docs: once a match, Soldiers deal double damage and move twice as fast
+  for 30 ticks, as long as every command to them carries this key. Everyone is told when we take it.
+  """
+  def serum_key(client, match_id), do: request(client, :get, "/api/v1/matches/#{match_id}/superpower/superserum")
+
+  @doc "Takes the serum: `{:ok, %{\"untilTick\" => last tick it lasts}}`, or 410 SERUM_GONE once taken."
+  def take_serum(client, match_id),
+    do: request(client, :post, "/api/v1/matches/#{match_id}/superpower/superserum", %{ifGrenadeThrown: "jump on it"})
+
   def result(client, match_id), do: request(client, :get, "/api/v1/matches/#{match_id}/result")
 
-  defp request(client, method, url, body \\ nil, params \\ []) do
-    opts = [method: method, url: url, params: params] ++ if(body, do: [json: body], else: [])
+  defp request(client, method, url, body \\ nil, params \\ [], headers \\ []) do
+    opts = [method: method, url: url, params: params, headers: headers] ++ if(body, do: [json: body], else: [])
 
     case Req.request(client, opts) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->

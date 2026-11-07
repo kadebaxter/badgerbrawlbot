@@ -316,8 +316,10 @@ defmodule Swarm.Roles do
   Enemy fighters come first, shared out so none is overkilled: those where the enemy can already
   hit us before anything else, then Trebuchets (expensive, and helpless up close), then a pair
   keeps going if our unit is already on that enemy, then the closest. An enemy takes attackers until their damage covers its current HP,
-  and at most `@melee_slots` melee ones. A fighter left without one hits towers, then workers,
-  then other buildings.
+  and at most `@melee_slots` melee ones. A fighter left without one hits finished towers (they
+  shoot back), then construction sites (worth their full cost to us at a tenth of the HP and no
+  armor), then workers, then other buildings, and Command Centers last: a player is eliminated
+  with their last one, and everything they had left goes with no score for anyone.
 
   Fighters at home only go after enemies inside one of our bases or by our workers, so they
   can't be lured away, and fight back against any enemy fighter that can hit them. They never
@@ -377,10 +379,12 @@ defmodule Swarm.Roles do
     |> Enum.min_by(
       fn t ->
         kind =
-          case t["type"] do
-            "GuardTower" -> 0
-            "Worker" -> 1
-            _ -> 2
+          cond do
+            t["type"] == "Worker" -> 2
+            t["completed"] == false -> 1
+            t["type"] == "GuardTower" -> 0
+            t["type"] == "CommandCenter" -> 4
+            true -> 3
           end
 
         {kind, if(unit["targetId"] == t["id"], do: 0, else: 1), View.dist(View.pos(t), here), t["id"]}

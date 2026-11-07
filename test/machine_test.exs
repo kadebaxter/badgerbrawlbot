@@ -141,6 +141,12 @@ defmodule Swarm.MachineTest do
     end
   end
 
+  test "the serum mode: practice games only by default, then on, off or back" do
+    assert %{serum_mode: :practice} = Machine.init(%{matches: 1})
+    assert %{serum_mode: :on} = run([{:serum_mode, :on}])
+    assert {_, {:error, :unknown_command}} = Machine.apply(@meta, {:serum_mode, :sometimes}, Machine.init(%{}))
+  end
+
   test "becoming leader starts the game loop, anything else stops it" do
     assert [{:mod_call, Swarm.Leader, :lead, []}] = Machine.state_enter(:leader, %{})
     assert [{:mod_call, Swarm.Leader, :follow, []}] = Machine.state_enter(:follower, %{})

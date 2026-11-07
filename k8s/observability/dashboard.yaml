@@ -48,7 +48,7 @@ data:
             },
             "enable": true,
             "iconColor": "orange",
-            "expr": "{namespace=\"netrts\"} |~ \"decision kind=(wave_launched|wave_reinforced|wave_released|wave_recalled|scout_sent|scouted|all_in|leader)\" | logfmt",
+            "expr": "{namespace=\"netrts\"} |~ \"decision kind=(wave_launched|wave_reinforced|wave_released|wave_recalled|scout_sent|scouted|serum|all_in|leader)\" | logfmt",
             "titleFormat": "{{kind}}",
             "textFormat": "{{msg}}"
           }

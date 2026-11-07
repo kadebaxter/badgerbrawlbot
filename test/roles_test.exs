@@ -243,5 +243,22 @@ defmodule Swarm.RolesTest do
       v = View.new(state(units: [ours], buildings: buildings))
       assert %{"id" => 801} = Roles.target(v, nil, ours)
     end
+
+    test "then construction sites, then other buildings, and Command Centers last" do
+      ours = unit(201, "Soldier", 12, 11)
+      site = Map.put(building(802, "Barracks", 14, 14, 1), "completed", false)
+      barracks = building(800, "Barracks", 12, 12, 1)
+      cc = building(803, "CommandCenter", 12, 13, 1)
+
+      # The closest is the Command Center, then the Barracks; the site, farther, goes first.
+      v = View.new(state(units: [ours], buildings: [cc, barracks, site]))
+      assert %{"id" => 802} = Roles.target(v, nil, ours)
+
+      v = View.new(state(units: [ours], buildings: [cc, barracks]))
+      assert %{"id" => 800} = Roles.target(v, nil, ours)
+
+      v = View.new(state(units: [ours], buildings: [cc]))
+      assert %{"id" => 803} = Roles.target(v, nil, ours)
+    end
   end
 end

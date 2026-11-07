@@ -220,12 +220,24 @@ for home. Right after we beat a raid (3 of its fighters killed at home, the last
 30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
 counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
+The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
+`/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
+ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and
+every player is told when we take it. The brain asks for it (`strategy.serum`) once a big fight is
+on with 8 Soldiers or more: the wave's front up against a player at least half as strong as the
+wave, or a raid at home at least half of what can meet it. That tick every Soldier sends its order
+again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
+`Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
+
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
 first. Pairs are taken closest first, with enemies that can already hit us ahead of the rest,
 and a unit already on an enemy stays on it. An enemy takes attackers until their damage
 (`max(1, damage + Weapons - armor)`) covers its current HP, with at most 8 melee attackers. Enemy
 armor is assumed +1 once we have seen an enemy TechLab, since their research is hidden. Units
-left over hit towers, then workers, then other buildings. Fighters at home only go after
+left over hit finished towers (they shoot back), then construction sites (worth their full cost
+in destruction at a tenth of the HP and no armor), then workers, then other buildings, and
+Command Centers last (a player is eliminated with their last one, and everything they had left
+is removed with no destruction score for anyone). Fighters at home only go after
 enemies inside a base (within 10 of the Command Center or an outpost) or within 5 of one of our
 workers, and fight back against any enemy fighter in range either way (never a building, so a
 recalled wave walks home); the
@@ -241,11 +253,17 @@ remembers the order it is carrying out, so it sends nothing while that order sti
 Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
-   (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13)
-   → 2nd Barracks (15) → 2nd Guard Tower (17). In a big game (6 players or more) we turtle up:
-   Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Guard Tower (12) → TechLab (13) →
-   2nd Barracks (14) → 3rd Guard Tower (16) → 3rd Barracks (18), the towers ringing the Command
-   Center toward the neighbors; a co-op away from home waits for 20 fighters, and its tower comes
+   (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → backup Command Center (12)
+   → TechLab (13) → 2nd Barracks (15) → 2nd Guard Tower (17). The backup Command Center goes as
+   far from every base (ours too) as there is open ground, away from ore and known enemy
+   buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
+   Command Center at all, and elimination would wipe our survival score. It isn't a drop-off while
+   our base stands, so workers never go mining by it. In a big game (6 players or more) we turtle
+   up: Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Guard Tower (12) → backup
+   Command Center (12) → TechLab (13) → 2nd Barracks (14) → 3rd Guard Tower (16) → 3rd Barracks
+   (18) → Guard Towers 4–10 (20), all on a square 5–6 tiles around the base, spread at least 5
+   apart (their reaches meet), the side facing our neighbors first; the first wave waits for the
+   square of 10 (until tick 900 at most); a co-op away from home waits for 20 fighters, and its tower comes
    before the rest of the build order. Barracks and the TechLab go behind the Command Center,
    away from the neighbors, so the towers and the ore line stand between them and our production.
    The ore for the next building is
@@ -270,7 +288,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    for workers, except for depots; once it is done,
    extras follow (a 3rd and 4th Barracks, up to 5 Guard Towers); each building gets two
    builders; Barracks queue up to 5. Builders add up (each worker by a site adds 1 work a tick),
-   so a depot is built by the workers mining the ore it will serve, up to 5 (a co-op in about 5
+   so a depot (placed two tiles from as many deposits of its field as possible: a worker on the tile
+   between depot and deposit mines and banks without a step) is built by the workers mining the
+   ore it will serve, up to 5 (a co-op in about 5
    ticks, by the miners it saves the walk), and the first Barracks by the 3 closest workers. Siege is only for the waves (at home a 350-ore Trebuchet is
    a fifth as strong as the 3.5 Soldiers it costs): at 25 fighters, with the build order done,
    SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets. They wait

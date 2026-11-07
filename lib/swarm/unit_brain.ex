@@ -194,10 +194,13 @@ defmodule Swarm.UnitBrain do
     Enum.find(ranked, hd(ranked), &(Map.get(load, &1["id"], 0) < @crowd))
   end
 
+  # The tick the leader takes the serum, every Soldier sends its order again, so that it goes out
+  # with the serum key: the serum only boosts Soldiers a command with the key reaches.
   defp fighter(unit, v, strategy, memory) do
     intent = intent(unit, v, strategy)
+    serum? = Map.get(strategy, :serum) == :take and unit["type"] == "Soldier"
 
-    if carrying_out?(unit, intent, memory.intent),
+    if carrying_out?(unit, intent, memory.intent) and not serum?,
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
   end

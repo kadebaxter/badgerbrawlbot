@@ -112,8 +112,10 @@ defmodule Swarm.View do
   def military(%__MODULE__{my_units: units}), do: Enum.reject(units, &(&1["type"] == "Worker"))
 
   @doc "Where ore can be dropped off: our finished Command Center and Resource Depots."
-  def drop_offs(%__MODULE__{my_buildings: buildings}) do
-    for b <- buildings, b["type"] in ["CommandCenter", "ResourceDepot"], b["completed"], do: pos(b)
+  # Our Command Center and our depots; not a backup Command Center (another one, far from home),
+  # so workers never go mining by it and give it away. It becomes the Command Center if we lose ours.
+  def drop_offs(%__MODULE__{my_buildings: buildings, cc: cc}) do
+    for b <- buildings, b["completed"], b["type"] == "ResourceDepot" or b == cc, do: pos(b)
   end
 
   @doc "How far a deposit is from the nearest drop-off: the walk a miner repeats. Nil with none."

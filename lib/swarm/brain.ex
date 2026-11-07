@@ -49,6 +49,12 @@ defmodule Swarm.Brain do
   # In a big game, no new co-op (Resource Depot away from home) before this many fighters: one
   # with nobody to hold it is lost.
   @expand_army 20
+  # The serum (once a match, Soldiers ×2 for 30 ticks): only with this many soldiers, and a raid at
+  # home must be at least this strong (about four soldiers) to be worth it.
+  @serum_soldiers 8
+  @serum_raid 4000
+  # The first wave in a big game waits for the tower square, but not past this tick.
+  @square_deadline 900
   @margin 1.5
   @recall_below 5
   # While a wave is out, attackers at the rally point go after it this many at a time.
@@ -91,6 +97,7 @@ defmodule Swarm.Brain do
     "Soldier" => 100,
     "Archer" => 125,
     "Scout" => 75,
+    "CommandCenter" => 400,
     "Barracks" => 150,
     "ResourceDepot" => 100,
     "GuardTower" => 125,
@@ -142,26 +149,33 @@ defmodule Swarm.Brain do
   @tower_ring 3..4
 
   # {building, how many we want, workers we need first, where it goes}, built one at a time.
+  # The second Command Center is the backup: built far from every base (`:hideout`), so that losing
+  # the main one doesn't eliminate us (a player is out only with no Command Center at all), which
+  # would also wipe our survival score. Rebuilt if lost.
   @build_order [
     {"Barracks", 1, 7, :base},
     {"ResourceDepot", 1, 9, :ore},
     {"GuardTower", 1, 11, :front},
+    {"CommandCenter", 2, 12, :hideout},
     {"TechLab", 1, 13, :base},
     {"Barracks", 2, 15, :base},
     {"GuardTower", 2, 17, :front}
   ]
 
-  # In a big game: a ring of three towers early, and a third Barracks to mass-produce behind them.
+  # In a big game: a square of `@big_towers` towers around the whole base (`:square`), three
+  # Barracks to mass-produce behind it, and no first wave until it is up.
   @big_build_order [
-    {"Barracks", 1, 7, :base},
-    {"ResourceDepot", 1, 9, :ore},
-    {"GuardTower", 1, 10, :front},
-    {"GuardTower", 2, 12, :front},
-    {"TechLab", 1, 13, :base},
-    {"Barracks", 2, 14, :base},
-    {"GuardTower", 3, 16, :front},
-    {"Barracks", 3, 18, :base}
-  ]
+                     {"Barracks", 1, 7, :base},
+                     {"ResourceDepot", 1, 9, :ore},
+                     {"GuardTower", 1, 10, :square},
+                     {"GuardTower", 2, 12, :square},
+                     {"CommandCenter", 2, 12, :hideout},
+                     {"TechLab", 1, 13, :base},
+                     {"Barracks", 2, 14, :base},
+                     {"GuardTower", 3, 16, :square},
+                     {"Barracks", 3, 18, :base}
+                   ] ++ for(n <- 4..10, do: {"GuardTower", n, 20, :square})
+  @big_towers 10
 
   @needs_barracks ["GuardTower", "TechLab"]
 
@@ -200,7 +214,8 @@ defmodule Swarm.Brain do
           wave: Roles.wave(),
           why: [{atom(), String.t()}],
           hold: String.t() | nil,
-          look: pos() | nil
+          look: pos() | nil,
+          serum: :take | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -227,7 +242,10 @@ defmodule Swarm.Brain do
       lost: %{},
       recalled_at: nil,
       raid: nil,
-      look: nil
+      look: nil,
+      # The serum: nil (not taken yet), :off (not in this game), :spent, or {:until, last tick}.
+      # Taken by the game loop when the strategy asks for it (`strategy.serum`).
+      serum: nil
     }
   end
 
@@ -257,7 +275,7 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil}, memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -293,7 +311,8 @@ defmodule Swarm.Brain do
       wave: wave,
       why: looked ++ why,
       hold: hold,
-      look: if(look && look.done == nil, do: look.pos)
+      look: if(look && look.done == nil, do: look.pos),
+      serum: if(memory.serum == nil and serum_moment?(v, wave, target), do: :take)
     }
 
     {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
@@ -505,20 +524,43 @@ defmodule Swarm.Brain do
   # The front: the members within `@wave_sight` of the one nearest the target (reinforcements
   # walking up behind are counted in the wave, not in where it is fighting).
   defp outmatched(v, alive, target) do
+    case facing(v, alive, target) do
+      {_player, theirs} = top when theirs > 0 -> if Roles.strength(alive) < theirs, do: top
+      _ -> nil
+    end
+  end
+
+  # The strongest single enemy player at the wave's front, as {player, strength}, or nil.
+  defp facing(v, alive, target) do
     lead = if target, do: Enum.min_by(alive, &View.dist(View.pos(&1), target)), else: hd(alive)
     front = Enum.filter(alive, &(View.dist(View.pos(&1), View.pos(lead)) <= @wave_sight))
     n = length(front)
     center = {div(Enum.sum_by(front, & &1["x"]), n), div(Enum.sum_by(front, & &1["y"]), n)}
     near? = &(View.dist(View.pos(&1), center) <= @wave_sight)
 
-    facing =
-      Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
-        Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1)))
+    (Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
+       Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1))))
+    |> strongest_player()
+  end
 
-    case strongest_player(facing) do
-      {_player, theirs} = top when theirs > 0 -> if Roles.strength(alive) < theirs, do: top
-      _ -> nil
-    end
+  # The moment for the serum (once a match): a real fight with soldiers in it. The wave's front is
+  # up against a player at least half as strong as the whole wave, or a raid at least half as
+  # strong as what can meet it is at home, and we have `@serum_soldiers` soldiers or more.
+  defp serum_moment?(v, wave, target) do
+    alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
+
+    front? =
+      alive != [] and
+        case facing(v, alive, target) do
+          {_player, theirs} -> theirs >= Roles.strength(alive) / 2
+          nil -> false
+        end
+
+    raiders = Roles.raiders(v)
+    raid = Roles.strength(raiders)
+    home? = raiders != [] and raid >= @serum_raid and raid >= Roles.home_strength(v, wave, raiders) / 2
+
+    length(View.units_of(v, "Soldier")) >= @serum_soldiers and (front? or home?)
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.
@@ -587,6 +629,9 @@ defmodule Swarm.Brain do
 
         length(staged) < want ->
           "#{at_rally}, want #{want}"
+
+        (towers = towers_short(v, memory)) != nil ->
+          "#{at_rally}, building the tower square first (#{towers} of #{@big_towers})"
 
         not counter? and looking?(memory.look, owner) ->
           "#{at_rally}, scout looking at player #{owner} (#{v.tick - memory.look.at} ticks)"
@@ -847,6 +892,9 @@ defmodule Swarm.Brain do
     end
   end
 
+  # The backup Command Center: 80 work, two builders.
+  defp builders(_v, free, "CommandCenter", site), do: closest_first(free, site) |> Enum.take(2)
+
   defp builders(v, free, "Barracks", site) do
     n = if count(v, "Barracks") == 0, do: @first_barracks_builders, else: usual_builders(v)
     closest_first(free, site) |> Enum.take(n)
@@ -899,6 +947,13 @@ defmodule Swarm.Brain do
       site ->
         {"ResourceDepot", site}
     end
+  end
+
+  # In a big game the first wave waits for the square of towers: how many we have (finished or
+  # going up) while short of it, else nil. Not forever: past `@square_deadline`, it goes anyway.
+  defp towers_short(v, memory) do
+    n = count(v, "GuardTower")
+    if big?(v) and memory.next_wave == 1 and n < @big_towers and v.tick < @square_deadline, do: n
   end
 
   # A big game: started with `@big_game` players or more.
@@ -1181,6 +1236,51 @@ defmodule Swarm.Brain do
     end)
   end
 
+  # A tower on the square around the whole base: 5–6 tiles from the Command Center, at least 5
+  # from our other towers there if it can (their 5-tile reaches meet with no gap), the side facing
+  # our neighbors first.
+  def site(terrain, %View{cc: cc} = v, :square, _avoid) do
+    home = View.pos(cc)
+    threats = threat_points(v)
+    towers = for t <- View.buildings_of(v, "GuardTower"), View.dist(View.pos(t), home) <= 9, do: View.pos(t)
+
+    best_site(terrain, v, home, 5..6, fn tile, _d ->
+      spread = towers |> Enum.map(&View.dist(&1, tile)) |> Enum.min(fn -> 99 end) |> min(5)
+      {-spread, threats |> Enum.map(&dist2(&1, tile)) |> Enum.min()}
+    end)
+  end
+
+  # The backup Command Center: open ground as far as can be from every base, enemies' and ours
+  # (if our base falls, it should still stand), not by the edge of the map, an enemy building we
+  # know of, or ore (nobody mines there, so nobody comes). Every third tile is enough, and keeps
+  # this quick on a big map.
+  def site(terrain, %View{cc: cc} = v, :hideout, _avoid) do
+    rows = List.to_tuple(terrain)
+    bases = [View.pos(cc) | v.enemy_starts]
+    enemy = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1)
+    taken = MapSet.new(Enum.map(v.my_buildings ++ v.enemy_buildings ++ v.deposits, &View.pos/1))
+    margin = 3
+
+    open? = fn {x, y} ->
+      y in 0..(tuple_size(rows) - 1)//1 and x in 0..(byte_size(elem(rows, y)) - 1)//1 and
+        :binary.at(elem(rows, y), x) == ?.
+    end
+
+    clear? = fn {x, y} ->
+      open?.({x, y}) and not Enum.any?(for(dx <- -1..1, dy <- -1..1, do: {x + dx, y + dy}), &MapSet.member?(taken, &1))
+    end
+
+    candidates =
+      for x <- margin..(v.map_width - margin - 1)//3,
+          y <- margin..(v.map_height - margin - 1)//3,
+          clear?.({x, y}),
+          not Enum.any?(enemy, &(View.dist(&1, {x, y}) <= 8)),
+          not Enum.any?(v.deposits, &(View.dist(View.pos(&1), {x, y}) <= 4)),
+          do: {x, y}
+
+    Enum.max_by(candidates, fn tile -> {bases |> Enum.map(&dist2(&1, tile)) |> Enum.min(), tile} end, fn -> nil end)
+  end
+
   # By an outpost, on the side facing the middle of the map, like `:front`.
   def site(terrain, %View{} = v, {:outpost, {ox, oy}}, _avoid) do
     {mx, my} = center(v)
@@ -1236,12 +1336,15 @@ defmodule Swarm.Brain do
       not Enum.any?(avoid, &(View.dist(&1, pos) <= 4))
   end
 
-  # Close to the whole field around `target`; on our side of it when that's a tie.
+  # By the field around `target`, two tiles from as many of its deposits as possible: a worker
+  # on the tile between depot and deposit mines and banks without a step (units stack, so they
+  # all can). Then close to the whole field; on our side of it when that's a tie.
   defp by_field(terrain, %View{cc: cc} = v, target) do
     field = Enum.filter(v.deposits, &(View.dist(View.pos(&1), View.pos(target)) <= 4))
 
     best_site(terrain, v, View.pos(target), 2..3, fn tile, _d ->
-      {Enum.sum_by(field, &View.dist(View.pos(&1), tile)), View.dist(tile, View.pos(cc))}
+      {-Enum.count(field, &(View.dist(View.pos(&1), tile) == 2)), Enum.sum_by(field, &View.dist(View.pos(&1), tile)),
+       View.dist(tile, View.pos(cc))}
     end)
   end
 

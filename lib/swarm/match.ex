@@ -165,11 +165,17 @@ defmodule Swarm.Match do
     terrain
   end
 
-  @doc "Posts commands and logs any that were rejected."
-  def submit(_client, _match_id, _tick, []), do: :ok
+  @doc "Posts commands and logs any that were rejected. With `serum_key`, they carry the serum."
+  def submit(client, match_id, tick, commands, serum_key \\ nil)
+  def submit(_client, _match_id, _tick, [], _serum_key), do: :ok
 
-  def submit(client, match_id, tick, commands) do
-    case NetRts.commands(client, match_id, commands) do
+  def submit(client, match_id, tick, commands, serum_key) do
+    sent =
+      if serum_key,
+        do: NetRts.commands(client, match_id, commands, serum_key),
+        else: NetRts.commands(client, match_id, commands)
+
+    case sent do
       {:ok, %{"results" => results}} ->
         rejected =
           for %{"accepted" => false, "index" => i, "error" => err} <- results do
