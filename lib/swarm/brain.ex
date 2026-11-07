@@ -53,6 +53,12 @@ defmodule Swarm.Brain do
   # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
   @serum_raid 4000
+  # A strike at an enemy tower by our base: at least this many fighters, as strong as this (about
+  # seven soldiers: what kills a tower before it kills them) plus `@margin` times the strongest
+  # player's units by it; given up after `@strike_ticks`.
+  @strike_min 8
+  @strike_tower 7000
+  @strike_ticks 120
   # How far the backup Command Center goes from ours (see `site/4`, `:hideout`).
   @backup_from 10
   @backup_to 25
@@ -165,19 +171,21 @@ defmodule Swarm.Brain do
     {"GuardTower", 2, 17, :front}
   ]
 
-  # In a big game: a square of `@big_towers` towers around the whole base (`:square`), three
-  # Barracks to mass-produce behind it, and no first wave until it is up.
+  # In a big game: three Barracks early to mass-produce, a square of `@big_towers` towers around
+  # the whole base (`:square`), and no first wave until it is up. The army comes first: an entry's
+  # optional fifth number is the fighters we must have before it is built (the backup Command
+  # Center at 10, the rest of the square at 15), so the ore goes into soldiers until then.
   @big_build_order [
                      {"Barracks", 1, 7, :base},
                      {"ResourceDepot", 1, 9, :ore},
                      {"GuardTower", 1, 10, :square},
-                     {"GuardTower", 2, 12, :square},
-                     {"CommandCenter", 2, 12, :hideout},
+                     {"Barracks", 2, 12, :base},
                      {"TechLab", 1, 13, :base},
-                     {"Barracks", 2, 14, :base},
+                     {"GuardTower", 2, 14, :square},
+                     {"Barracks", 3, 16, :base},
                      {"GuardTower", 3, 16, :square},
-                     {"Barracks", 3, 18, :base}
-                   ] ++ for(n <- 4..10, do: {"GuardTower", n, 20, :square})
+                     {"CommandCenter", 2, 16, :hideout, 10}
+                   ] ++ for(n <- 4..10, do: {"GuardTower", n, 20, :square, 15})
   @big_towers 10
 
   @needs_barracks ["GuardTower", "TechLab"]
@@ -218,7 +226,8 @@ defmodule Swarm.Brain do
           why: [{atom(), String.t()}],
           hold: String.t() | nil,
           look: pos() | nil,
-          serum: :take | nil
+          serum: :take | nil,
+          raze: integer() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -278,7 +287,7 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil}, memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -297,6 +306,8 @@ defmodule Swarm.Brain do
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
     # A raid answered with a counterattack is done with.
     raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
+    # A strike goes for its tower.
+    target = if wave && Map.get(wave, :kind) == :strike, do: wave.tower_pos, else: target
 
     mode =
       cond do
@@ -315,7 +326,8 @@ defmodule Swarm.Brain do
       why: looked ++ why,
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
-      serum: if(memory.serum == nil and serum_moment?(v, wave), do: :take)
+      serum: if(memory.serum == nil and serum_moment?(v, wave), do: :take),
+      raze: raze(v)
     }
 
     {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
@@ -422,8 +434,82 @@ defmodule Swarm.Brain do
   defp wave(v, memory, rally, calm?, owner, target) do
     cond do
       all_in?(v) -> Tuple.insert_at(all_in(v, memory, owner), 3, nil)
+      memory.wave && Map.get(memory.wave, :kind) == :strike -> keep_strike(v, memory)
       memory.wave -> keep_wave(v, memory, rally, target)
+      strike = strike(v, memory) -> strike
       true -> launch(v, memory, rally, calm?, owner, target)
+    end
+  end
+
+  # A finished enemy tower at our door (`Swarm.Roles.towers_near_home/1`): one sent at a time, our
+  # fighters only feed it, so we hit it with everyone at home at once, once that is at least
+  # `@strike_min` fighters strong enough for the tower and the strongest player's units by it. It
+  # comes before any wave; until it can go, nobody walks into the tower's reach
+  # (`Swarm.Roles.covered?/2`).
+  defp strike(v, memory) do
+    case Roles.towers_near_home(v) do
+      [] ->
+        nil
+
+      [tower | _] ->
+        pos = View.pos(tower)
+        roles = Roles.home_roles(v, nil)
+        group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], do: u
+        guards = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @wave_sight))
+        {_, theirs} = strongest_player(guards) || {nil, 0}
+        need = @strike_tower + @margin * theirs
+        ours = Roles.strength(group)
+        at = "player #{tower["owner"]}'s tower at #{fmt(pos)}"
+
+        if length(group) >= @strike_min and ours >= need do
+          wave = %{
+            id: 0,
+            kind: :strike,
+            members: group |> Enum.map(& &1["id"]) |> Enum.sort(),
+            owner: tower["owner"],
+            tower: tower["id"],
+            tower_pos: pos,
+            released: true,
+            staging: nil,
+            at: v.tick
+          }
+
+          why = "strike at #{at}: #{length(group)} fighters, strength #{round(ours)} vs #{round(need)} for it"
+          {wave, memory.next_wave, [{:wave_launched, why}], nil}
+        else
+          hold = "strike at #{at}: #{length(group)} fighters at home, want #{@strike_min} and strength #{round(need)} (have #{round(ours)})"
+          {nil, memory.next_wave, [], hold}
+        end
+    end
+  end
+
+  # A strike stays on its tower until the tower is down (we are by its tile and it is gone), too
+  # few are left, the strongest player there outmatches it, or it has taken `@strike_ticks`.
+  defp keep_strike(v, %{wave: wave} = memory) do
+    alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
+    at = "player #{wave.owner}'s tower at #{fmt(wave.tower_pos)}"
+
+    gone? =
+      not Enum.any?(v.enemy_buildings, &(&1["id"] == wave.tower)) and
+        Enum.any?(v.my_units, &(View.dist(View.pos(&1), wave.tower_pos) <= 4))
+
+    cond do
+      gone? ->
+        {nil, memory.next_wave, [{:wave_recalled, "strike: #{at} is down"}], nil}
+
+      length(alive) < @recall_below ->
+        {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: only #{length(alive)} left"}], nil}
+
+      facing = outmatched(v, alive, wave.tower_pos) ->
+        {player, theirs} = facing
+        why = "strike at #{at}: outmatched by player #{player}, #{round(Roles.strength(alive))} vs #{round(theirs)}"
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
+
+      v.tick - wave.at > @strike_ticks ->
+        {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: given up after #{@strike_ticks} ticks"}], nil}
+
+      true ->
+        {%{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave, [], nil}
     end
   end
 
@@ -544,6 +630,15 @@ defmodule Swarm.Brain do
     (Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
        Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1))))
     |> strongest_player()
+  end
+
+  # An enemy building going up at our door, for home fighters to kill now (its id), unless an enemy
+  # tower covers it: then it waits for a strike.
+  defp raze(v) do
+    case Enum.reject(Roles.sites_near_home(v), &Roles.covered?(v, View.pos(&1))) do
+      [site | _] -> site["id"]
+      [] -> nil
+    end
   end
 
   # The moment for the serum (once a match): home is being overrun. A raid of at least
@@ -956,7 +1051,15 @@ defmodule Swarm.Brain do
   # A big game: started with `@big_game` players or more.
   defp big?(%View{players: players}), do: players >= @big_game
 
-  defp build_order(v), do: if(big?(v), do: @big_build_order, else: @build_order)
+  # The build order as {type, how many, workers first, where, fighters first}.
+  defp build_order(v) do
+    for entry <- if(big?(v), do: @big_build_order, else: @build_order) do
+      case entry do
+        {type, wanted, workers, where} -> {type, wanted, workers, where, 0}
+        full -> full
+      end
+    end
+  end
 
   # A new co-op away from home, in a big game only with an army to hold it.
   defp may_expand?(v), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army
@@ -1038,13 +1141,17 @@ defmodule Swarm.Brain do
   defp from_build_order(v, terrain, avoid) do
     workers = length(View.units_of(v, "Worker"))
 
+    fighters = length(Roles.fighters(v))
+
     v
     |> build_order()
-    |> Enum.filter(fn {type, wanted, _, _} -> count(v, type) < wanted end)
-    |> Enum.reduce_while(nil, fn {type, _wanted, min_workers, where}, nil ->
+    |> Enum.filter(fn {type, wanted, _, _, _} -> count(v, type) < wanted end)
+    |> Enum.reduce_while(nil, fn {type, _wanted, min_workers, where, min_fighters}, nil ->
       gated? = workers < min_workers
 
       cond do
+        # Not before the army is this big: skip it, and keep the ore for soldiers.
+        fighters < min_fighters -> {:cont, nil}
         not prerequisites?(v, type) -> {:halt, nil}
         gated? and not rich?(v) -> {:halt, nil}
         # Rich, a depot still waits for its workers; the rest of the order goes on.
@@ -1081,13 +1188,13 @@ defmodule Swarm.Brain do
   end
 
   defp siege_time?(v) do
-    build_order_done? = Enum.all?(build_order(v), fn {type, wanted, _, _} -> count(v, type) >= wanted end)
+    build_order_done? = Enum.all?(build_order(v), fn {type, wanted, _, _, _} -> count(v, type) >= wanted end)
     build_order_done? and length(Roles.fighters(v)) >= @siege_after_fighters
   end
 
   # Rich, with the build order done: the first extra we are short of and have room for.
   defp extra(v, terrain) do
-    done? = Enum.all?(build_order(v), fn {type, wanted, _, _} -> count(v, type) >= wanted end)
+    done? = Enum.all?(build_order(v), fn {type, wanted, _, _, _} -> count(v, type) >= wanted end)
 
     if rich?(v) and done? do
       Enum.find_value(@extras, fn {type, wanted, where} ->

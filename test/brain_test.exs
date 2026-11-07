@@ -871,6 +871,44 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  describe "an enemy tower at our door" do
+    # Player 1's finished tower at (16, 12), 9 tiles from our Command Center at (7, 7).
+    defp their_tower, do: building(800, "GuardTower", 16, 12, 1)
+
+    test "no strike with fewer than eight: it says so, and no wave leaves meanwhile" do
+      # 7 soldiers at home: not enough to go at it.
+      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(7), buildings: [their_tower()])
+      assert hold =~ "strike at player 1's tower at (16,12): 7 fighters at home, want 8"
+    end
+
+    test "then everyone at home goes at it together, and it is the target" do
+      assert {%{wave: %{kind: :strike, members: members}, target: {16, 12}, why: [{:wave_launched, "strike at " <> _}]}, _, _} =
+               plan(units: soldiers(10), buildings: [their_tower()])
+
+      assert length(members) == 10
+    end
+
+    test "more when it is guarded" do
+      guards = for i <- 1..6, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
+      assert {%{wave: nil, hold: "strike at" <> _}, _, _} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
+    end
+
+    test "the strike comes home once the tower is down" do
+      {_, _, memory} = plan(units: soldiers(10), buildings: [their_tower()])
+      at_it = for s <- soldiers(10), do: %{s | "x" => 15, "y" => 11}
+      assert {%{wave: nil, why: [{:wave_recalled, "strike: player 1's tower at (16,12) is down"}]}, _, _} =
+               plan([units: at_it, tick: 130], memory)
+    end
+
+    test "a site going up by our base is razed now, unless a tower covers it" do
+      site = Map.put(building(801, "Barracks", 18, 7, 1), "completed", false)
+      assert {%{raze: 801}, _, _} = plan(units: soldiers(5), buildings: [site])
+
+      covered = Map.put(building(802, "Barracks", 16, 14, 1), "completed", false)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(5), buildings: [their_tower(), covered])
+    end
+  end
+
   # A backup Command Center out of the way, as the build order puts one.
   defp backup_cc, do: building(19, "CommandCenter", 40, 20)
 
@@ -913,18 +951,33 @@ defmodule Swarm.BrainTest do
       assert hold =~ "want 15"
     end
 
-    test "a ring of towers before the TechLab, and a third Barracks" do
+    test "army first: Barracks early, the backup at 10 fighters, the rest of the square at 15" do
+      builds = fn commands -> for %{"type" => "Build", "buildingType" => t} <- commands, do: t end
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+
+      # A first tower, then a second Barracks before more towers.
       {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: start, ore: 1000)
-      assert [%{"buildingType" => "GuardTower"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+      assert builds.(commands) == ["GuardTower"]
 
       tower = building(4, "GuardTower", 10, 10)
       {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: [tower | start], ore: 1000)
-      assert [%{"buildingType" => "GuardTower"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+      assert builds.(commands) == ["Barracks"]
 
-      built = start ++ [tower, building(5, "GuardTower", 4, 4), backup_cc(), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 3, 10)]
-      {_, commands, _} = big_plan(units: workers(18) ++ soldiers(10), buildings: built, ore: 300)
-      assert [%{"buildingType" => "Barracks"}] = for(%{"type" => "Build"} = c <- commands, do: c)
+      # The early part done: nothing more until the army is 10 strong, then the backup.
+      early = start ++ [tower, building(5, "Barracks", 12, 3), building(6, "TechLab", 7, 12), building(7, "GuardTower", 4, 4),
+                        building(8, "Barracks", 3, 7), building(9, "GuardTower", 13, 4)]
+      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(9), buildings: early, ore: 300)
+      assert builds.(commands) == []
+
+      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(10), buildings: early, ore: 1000)
+      assert builds.(commands) == ["CommandCenter"]
+
+      # With the backup: the rest of the square only from 15 fighters.
+      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(14), buildings: [backup_cc() | early], ore: 300)
+      assert builds.(commands) == []
+
+      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(15), buildings: [backup_cc() | early], ore: 300)
+      assert builds.(commands) == ["GuardTower"]
     end
 
     test "towers go on a square around the whole base, spread out" do

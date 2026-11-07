@@ -322,6 +322,25 @@ defmodule Swarm.UnitBrainTest do
     assert {:no_change, _} = decide(archer, Map.put(@attack, :serum, :take), [], memory)
   end
 
+  describe "an enemy tower by our base" do
+    test "home fighters go kill a site going up by the base" do
+      raze = Map.put(@gather, :raze, 801)
+      site = Map.put(building(801, "Barracks", 25, 25, 1), "completed", false)
+      v = View.new(state(units: [unit(2, "Soldier", 10, 10)], buildings: [site]))
+      assert {%{"type" => "Attack", "targetId" => 801}, _} = UnitBrain.decide(2, v, raze)
+    end
+
+    test "they don't walk into a tower's reach to meet enemies standing by it" do
+      tower = building(800, "GuardTower", 16, 12, 1)
+      enemy = unit(900, "Soldier", 15, 12, owner: 1)
+      defend = %{@gather | mode: :defend, threat: %{pos: {15, 12}, size: 1}}
+      v = View.new(state(units: [unit(2, "Soldier", 10, 10), enemy], buildings: [tower]))
+      {cmd, _} = UnitBrain.decide(2, v, defend)
+      refute match?(%{"type" => "Attack", "x" => 15, "y" => 12}, cmd)
+      refute match?(%{"targetId" => 900}, cmd)
+    end
+  end
+
   describe "scouts" do
     # Us at (7, 7), the enemy at (56, 56): halfway is (31, 31).
     test "a scout waits halfway to its neighbor" do

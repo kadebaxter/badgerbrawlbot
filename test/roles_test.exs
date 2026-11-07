@@ -170,6 +170,27 @@ defmodule Swarm.RolesTest do
     end
   end
 
+  describe "enemy towers and sites by our base" do
+    test "a tower covers its reach plus one; only finished ones" do
+      tower = building(800, "GuardTower", 16, 12, 1)
+      v = view([], [tower])
+      assert Roles.covered?(v, {22, 12})
+      refute Roles.covered?(v, {23, 12})
+
+      site = Map.put(tower, "completed", false)
+      refute Roles.covered?(view([], [site]), {16, 13})
+    end
+
+    test "towers and sites within 12 of a base, closest first" do
+      near = building(800, "GuardTower", 16, 12, 1)
+      far = building(801, "GuardTower", 40, 40, 1)
+      site = Map.put(building(802, "Barracks", 12, 7, 1), "completed", false)
+      v = view([], [far, near, site])
+      assert [%{"id" => 800}] = Roles.towers_near_home(v)
+      assert [%{"id" => 802}] = Roles.sites_near_home(v)
+    end
+  end
+
   describe "who fights whom" do
     # Our soldiers in a ring around an enemy archer at (12, 12), inside the base.
     defp around(n), do: for(i <- 1..n, do: unit(200 + i, "Soldier", 11 + rem(i, 3), 11 + div(i, 3)))
@@ -237,11 +258,14 @@ defmodule Swarm.RolesTest do
       assert %{"id" => 900} = Roles.target(v, nil, ours)
     end
 
-    test "leftovers hit buildings, towers first" do
+    test "leftovers in the wave hit buildings, towers first; one at home leaves a tower alone" do
       ours = unit(201, "Soldier", 12, 11)
       buildings = [building(800, "Barracks", 12, 12, 1), building(801, "GuardTower", 13, 14, 1)]
       v = View.new(state(units: [ours], buildings: buildings))
-      assert %{"id" => 801} = Roles.target(v, nil, ours)
+      assert %{"id" => 801} = Roles.target(v, %{id: 1, members: [201]}, ours)
+
+      # Not alone into a tower's reach: everything there waits for a strike.
+      assert Roles.target(v, nil, ours) == nil
     end
 
     test "then construction sites, then other buildings, and Command Centers last" do

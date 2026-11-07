@@ -35,6 +35,9 @@ defmodule Swarm.Roles do
   # The base is everything this close to the Command Center. Fighters at home don't chase
   # enemies out of it.
   @base_radius 10
+  # Enemy buildings this close to one of our bases are at our door: a tower there gets a strike,
+  # a site gets razed.
+  @home_reach 12
   # Defenders this close to a raider can meet it; a finished tower is worth this many Soldiers.
   @defend_reach 12
   @tower_worth 2
@@ -398,10 +401,46 @@ defmodule Swarm.Roles do
   defp may_chase?(%View{cc: nil}, _wave, _ours, _enemy), do: true
 
   defp may_chase?(%View{} = v, wave, ours, enemy) do
-    ours["id"] in members(wave) or
-      Enum.any?(bases(v), &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
+    in_wave? = ours["id"] in members(wave)
+
+    # Not into an enemy tower's reach, one by one: only the wave goes there (a strike at that
+    # tower is a wave). Fighting back is still allowed (`fight_back?/2`).
+    (in_wave? or not covered?(v, View.pos(enemy))) and
+      (in_wave? or
+         Enum.any?(bases(v), &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
       Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(enemy)) <= @worker_cover)) or
-      siege_on_us?(v, enemy)
+      siege_on_us?(v, enemy))
+  end
+
+  @doc """
+  Whether `pos` is within reach of a finished enemy Guard Tower (its range plus one: a unit
+  stepping up to hit something there is shot). Home units don't go there on their own.
+  """
+  def covered?(%View{} = v, pos) do
+    Enum.any?(v.enemy_buildings, fn b ->
+      b["type"] == "GuardTower" and b["completed"] != false and View.dist(View.pos(b), pos) <= range(b) + 1
+    end)
+  end
+
+  @doc "Finished enemy Guard Towers within `@home_reach` of one of our bases: the closest first."
+  def towers_near_home(%View{} = v) do
+    near_home(v, &(&1["type"] == "GuardTower" and &1["completed"] != false))
+  end
+
+  @doc """
+  Enemy buildings going up within `@home_reach` of one of our bases, the closest first: a tower
+  or anything else built at our door. Killed while they are sites: a tenth of the HP, no armor,
+  and worth their full cost to us.
+  """
+  def sites_near_home(%View{} = v), do: near_home(v, &(&1["completed"] == false))
+
+  defp near_home(v, pick?) do
+    bases = bases(v)
+    from_home = fn b -> bases |> Enum.map(&View.dist(&1, View.pos(b))) |> Enum.min(fn -> 99 end) end
+
+    v.enemy_buildings
+    |> Enum.filter(&(pick?.(&1) and from_home.(&1) <= @home_reach))
+    |> Enum.sort_by(&{from_home.(&1), &1["id"]})
   end
 
   # An enemy fighter in range either way (it can hit us, or we can hit it where we stand): anyone

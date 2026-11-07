@@ -14,9 +14,11 @@ defmodule Swarm.UnitBrain do
      none is overkilled; fighters at home don't chase out of the base): attack it
   2. in the wave: attack-move to the target, or to the threat if the wave turns back
   3. an escort: fight enemies at its outpost, else stand by it
-  4. guards and attackers, with enemies at the main base: attack-move to the threat
-  5. an attacker, with an outpost or our workers under attack: go help (the closest)
-  6. otherwise go to its spot: guards to the post, attackers to the rally point
+  4. guards and attackers, with an enemy building going up by one of our bases: kill the site
+  5. guards and attackers, with enemies at the main base: attack-move to the threat, unless it
+     is under an enemy tower (a strike deals with that, not one unit at a time)
+  6. an attacker, with an outpost or our workers under attack: go help (the closest)
+  7. otherwise go to its spot: guards to the post, attackers to the rally point
 
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
   Command Center and its neighbor's start, where an attack from them comes through. When the leader
@@ -214,7 +216,8 @@ defmodule Swarm.UnitBrain do
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
-      s.threat -> {:attack_move, s.threat.pos}
+      raze = role in [:attacker, :guard] && Map.get(s, :raze) -> {:attack, raze}
+      s.threat && not Roles.covered?(v, s.threat.pos) -> {:attack_move, s.threat.pos}
       help = role == :attacker && closest_help(v, unit) -> {:attack_move, help}
       role == :guard -> {:move, s.post}
       true -> {:move, s.rally}
@@ -263,8 +266,9 @@ defmodule Swarm.UnitBrain do
     end
   end
 
+  # Not under an enemy tower: a strike goes there, not one unit at a time.
   defp closest_help(v, unit) do
-    case Roles.help_wanted(v) do
+    case Enum.reject(Roles.help_wanted(v), &Roles.covered?(v, &1)) do
       [] -> nil
       spots -> Enum.min_by(spots, &View.dist(&1, View.pos(unit)))
     end

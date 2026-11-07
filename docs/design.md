@@ -220,6 +220,15 @@ for home. Right after we beat a raid (3 of its fighters killed at home, the last
 30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
 counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
+An enemy tower at our door (finished, within 12 of one of our bases): home fighters never walk
+into its reach (its range + 1) one at a time, not even to meet enemy units standing by it
+(`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
+any wave: everyone at home (guards and attackers) at once, when that is at least 8 fighters with
+the strength of about seven soldiers plus 1.5× the strongest player's units by it. The strike is a
+wave whose target is the tower, and comes home once the tower is down (or too few are left, it is
+outmatched, or after 120 ticks). An enemy building still going up within 12 of one of our bases,
+and not under a tower, is razed at once by home fighters (`strategy.raze`).
+
 The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
 `/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
 ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and
@@ -261,9 +270,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    room), away from ore and known enemy buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
    Command Center at all, and elimination would wipe our survival score. It isn't a drop-off while
    our base stands, so workers never go mining by it. In a big game (6 players or more) we turtle
-   up: Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Guard Tower (12) → backup
-   Command Center (12) → TechLab (13) → 2nd Barracks (14) → 3rd Guard Tower (16) → 3rd Barracks
-   (18) → Guard Towers 4–10 (20), all on a square 5–6 tiles around the base, spread at least 5
+   up, army first: Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Barracks (12) →
+   TechLab (13) → 2nd Guard Tower (14) → 3rd Barracks (16) → 3rd Guard Tower (16) → backup Command
+   Center (once we have 10 fighters) → Guard Towers 4–10 (20 workers and 15 fighters), all on a square 5–6 tiles around the base, spread at least 5
    apart (their reaches meet), the side facing our neighbors first; the first wave waits for the
    square of 10 (until tick 900 at most); a co-op away from home waits for 20 fighters, and its tower comes
    before the rest of the build order. Barracks and the TechLab go behind the Command Center,
