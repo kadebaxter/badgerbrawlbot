@@ -209,9 +209,12 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Attacker | Wait at the rally point |
 
 Every strength comparison (launching, recalling, strikes, sorties, the serum, home's defense) uses
-one measure, `Swarm.Roles.strength/1`, so they always agree: a unit is its HP × damage per tick,
-and a Guard Tower is 2 Soldiers at full HP, less as it is hurt (by HP × damage it would be 5, but
-it can't move, gets focused down and is outranged by Trebuchets).
+one measure, `Swarm.Roles.strength/2`, so they always agree: a unit is its HP × damage per tick,
+and a Guard Tower at full HP (less as it is hurt) is worth some Soldiers. In a straight fight it
+takes about three and a half (four kill it and lose one or two; three lose), so it is counted on
+the safe side both ways: ours as 3, so we never trust home's defense too much, theirs as 4, so we
+never go at one too light. Whose it is decides, not who asks: a strike's launch and its recall
+both see an enemy tower and agree.
 
 The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
 or our workers are stronger than what can meet them: our fighters not in the wave within 12 tiles
@@ -227,8 +230,7 @@ An enemy tower at our door (finished, within 12 of one of our bases): home fight
 into its reach (its range + 1) one at a time, not even to meet enemy units standing by it
 (`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
 any wave: everyone at home (guards and attackers) at once, when that is at least 8 fighters with
-the strength of the tower plus 1.5× the strongest player's units by it (eight soldiers take a tower
-down in about nine ticks: the eight is what makes it safe). The strike is a wave whose target is
+the strength of the tower (4 soldiers) plus 1.5× the strongest player's units by it. The strike is a wave whose target is
 the tower, and comes home once the tower is down (or too few are left, it is outmatched by the same
 measure, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
 and not under a tower, is razed at once by home fighters (`strategy.raze`).

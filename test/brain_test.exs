@@ -922,8 +922,9 @@ defmodule Swarm.BrainTest do
     end
 
     test "a strike that just qualified isn't called back the next tick (one measure for both)" do
-      # The tower (1980) and five of their soldiers by it (4950): it needs 1980 + 1.5 x 4950 = 9405.
-      guards = for i <- 1..5, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
+      # The tower (3960: theirs, four soldiers) and three of their soldiers by it (2970): it needs
+      # 3960 + 1.5 x 2970 = 8415; we have ten (9900).
+      guards = for i <- 1..3, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
       {s, _, memory} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
       assert %{wave: %{kind: :strike}} = s
 

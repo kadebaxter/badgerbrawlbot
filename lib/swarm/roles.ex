@@ -40,7 +40,9 @@ defmodule Swarm.Roles do
   @home_reach 12
   # Defenders this close to a raider can meet it; a finished tower is worth this many Soldiers.
   @defend_reach 12
-  @tower_worth 2
+  # A Guard Tower in Soldiers (see `strength/2`): ours low, theirs high.
+  @own_tower_worth 3
+  @enemy_tower_worth 4
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
@@ -179,17 +181,21 @@ defmodule Swarm.Roles do
   @doc """
   How much fight a group has: the one measure every comparison uses (launching, recalling, strikes,
   sorties, the serum, home's defense), so they always agree. A unit is its HP × damage per tick.
-  A Guard Tower is `@tower_worth` Soldiers at full HP, less as it is hurt: by HP × damage it would
-  be five, but it can't move, gets focused down, and Trebuchets outrange it. (Taking one down is
-  safe because a strike also needs `@strike_min` fighters in `Swarm.Brain`, not because of this.)
-  Takes units or buildings, ours or theirs.
+  A Guard Tower at full HP, less as it is hurt, is worth some Soldiers: in a straight fight it
+  takes about three and a half (four kill it and lose one or two; three lose). We count it on the
+  safe side both ways: ours (owner `me`) as `@own_tower_worth`, so we never trust home's defense too
+  much, and the enemy's as `@enemy_tower_worth`, so we never go at one too light. Whose it is, not
+  who asks, decides: a strike's launch and its recall both see an enemy tower and agree.
+  Takes units or buildings, ours or theirs; pass `me` (our slot) when ours may be among them.
   """
-  def strength(units), do: Enum.sum_by(units, &strength_of/1)
+  def strength(units, me \\ nil), do: Enum.sum_by(units, &strength_of(&1, me))
 
-  defp strength_of(%{"type" => "GuardTower"} = tower),
-    do: @tower_worth * strength_of(%{"type" => "Soldier"}) * hp(tower) / stats(tower).hp
+  defp strength_of(%{"type" => "GuardTower"} = tower, me) do
+    worth = if me != nil and tower["owner"] == me, do: @own_tower_worth, else: @enemy_tower_worth
+    worth * strength_of(%{"type" => "Soldier"}, me) * hp(tower) / stats(tower).hp
+  end
 
-  defp strength_of(u), do: hp(u) * stats(u).damage / stats(u).cooldown
+  defp strength_of(u, _me), do: hp(u) * stats(u).damage / stats(u).cooldown
 
   @doc """
   Enemies near the Command Center: where the closest one is, and how many fighters (not
@@ -284,7 +290,7 @@ defmodule Swarm.Roles do
     units = Enum.filter(home(v, wave) ++ siege, &near?.(View.pos(&1), @defend_reach))
 
     towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and near?.(View.pos(&1), range(&1) + 1)))
-    strength(units ++ towers)
+    strength(units ++ towers, v.me)
   end
 
   @doc """

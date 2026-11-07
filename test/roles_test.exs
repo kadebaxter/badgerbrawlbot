@@ -152,7 +152,7 @@ defmodule Swarm.RolesTest do
       assert Roles.recall(view(ours ++ raiders(6, 12, 9), towers), wave) == nil
     end
 
-    test "only defenders near the raid count, and a tower is worth two soldiers", %{wave: wave} do
+    test "only defenders near the raid count, and our towers are worth three soldiers", %{wave: wave} do
       # Twenty raiders at the base. Home: seven guards and three towers there, and nine fighters
       # away at an outpost, which don't count.
       raiders = for i <- 1..20, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
@@ -161,8 +161,8 @@ defmodule Swarm.RolesTest do
       towers = for {id, x} <- [{2, 12}, {3, 13}, {4, 11}], do: building(id, "GuardTower", x, 10)
       far_tower = building(5, "GuardTower", 40, 42)
 
-      # 20 x 990 against 7 x 990 + 3 x 2 x 990.
-      assert {19800.0, 12870.0} = Roles.recall(view(raiders ++ guards ++ away, [far_tower | towers]), wave)
+      # 20 x 990 against 7 x 990 + 3 x 3 x 990.
+      assert {19800.0, 15840.0} = Roles.recall(view(raiders ++ guards ++ away, [far_tower | towers]), wave)
     end
 
     test "not for enemies nowhere near anything of ours", %{wave: wave, ours: ours} do
@@ -170,10 +170,13 @@ defmodule Swarm.RolesTest do
     end
   end
 
-  test "one measure for everything: a tower is two soldiers at full HP, less as it is hurt" do
+  test "one measure for everything: their towers four soldiers, ours three, less as they are hurt" do
     soldier = Roles.strength([unit(1, "Soldier", 0, 0)])
-    assert Roles.strength([building(800, "GuardTower", 0, 0)]) == 2 * soldier
-    assert Roles.strength([Map.put(building(800, "GuardTower", 0, 0), "hp", 250)]) == soldier
+    theirs = building(800, "GuardTower", 0, 0, 1)
+    ours = building(801, "GuardTower", 0, 0, 0)
+    assert Roles.strength([theirs]) == 4 * soldier
+    assert Roles.strength([ours], 0) == 3 * soldier
+    assert Roles.strength([Map.put(theirs, "hp", 250)]) == 2 * soldier
   end
 
   describe "enemy towers and sites by our base" do
