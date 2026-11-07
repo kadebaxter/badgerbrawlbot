@@ -3,7 +3,8 @@ defmodule Swarm.UnitBrain do
   One unit's decision. Pure: given the view, the team strategy and this unit's own memory,
   return the command for this unit only (or `:no_change`) and its updated memory.
 
-  Workers mine the closest ore to a drop-off that isn't crowded, and ore farther away on our side
+  Workers mine the ore with the shortest walk to a drop-off, stacked as deep as it takes (moving
+  over when a new depot makes another walk 2 tiles shorter), and ore farther away on our side
   (remembered deposits too) only when that is all unsafe. They run for cover by our towers when an
   enemy is about to hit them, or is coming at them out of our towers' reach while we are losing
   there or home is falling back; with nothing safe to mine they wait by a tower. A fighter first works out its role (`Swarm.Roles`), then, in order:
@@ -59,8 +60,8 @@ defmodule Swarm.UnitBrain do
   # Where a unit steps to get off a tile: sideways first, then diagonally.
   @steps [{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}]
 
-  # Workers on one deposit before the next one over is better.
-  @crowd 3
+  # A miner moves to other ore once its walk to a drop-off is this much longer than the best's.
+  @better_trip 2
   # Ore with an enemy fighter this close is unsafe to mine.
   @unsafe_ore 5
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
@@ -171,8 +172,11 @@ defmodule Swarm.UnitBrain do
     Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
   end
 
-  # An idle worker picks a deposit. So does one mining a deposit too far from any drop-off (once
-  # there is a closer one), or one with enemies by it. With no ore by a drop-off, ore by a depot
+  # An idle worker picks a deposit: the shortest walk to a drop-off, stacked as deep as it takes
+  # (the game has no limit on miners per deposit, and every one mines at full speed). So does one
+  # mining a deposit too far from any drop-off (once there is a closer one), one with enemies by
+  # it, and one whose walk is `@better_trip` tiles longer than the best there is now (a new depot
+  # went up by fresh ore: everyone moves to it). With no ore by a drop-off, ore by a depot
   # being built comes first: the brain put it by the field it expects miners at, so they don't
   # scatter to another far one. With all of that unsafe, safe ore farther away on our side
   # (deposits we remember count: a Gather may name one in the fog), where the brain puts a depot
@@ -187,20 +191,21 @@ defmodule Swarm.UnitBrain do
     current = Enum.find(v.deposits, &(&1["id"] == unit["targetId"]))
     mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
 
-    move? =
-      unit["activity"] == "Idle" or
-        (mining? and near != [] and current not in near) or
-        (mining? and unsafe?(current, v))
-
     choices =
       case Enum.reject(near, &unsafe?(&1, v)) do
         [] -> far_ore(v, near)
         safe -> safe
       end
 
+    move? =
+      unit["activity"] == "Idle" or
+        (mining? and near != [] and current not in near) or
+        (mining? and unsafe?(current, v)) or
+        (mining? and choices != [] and trip(v, unit, current) >= trip(v, unit, best(unit, v, choices)) + @better_trip)
+
     case move? && choices do
       [_ | _] ->
-        best = pick_deposit(unit, v, choices)
+        best = best(unit, v, choices)
         if best["id"] == unit["targetId"], do: :no_change, else: %{"type" => "Gather", "unitIds" => [unit["id"]], "targetId" => best["id"]}
 
       [] ->
@@ -236,23 +241,12 @@ defmodule Swarm.UnitBrain do
 
   defp take_cover(_unit, _v), do: :no_change
 
-  # The shortest trip to a drop-off (closest to the worker on a tie) that has room; if every
-  # one is crowded, the shortest anyway. Crowding a close field beats walking far.
-  defp pick_deposit(unit, v, deposits) do
-    here = View.pos(unit)
+  # The deposit with the shortest walk to a drop-off (closest to the worker on a tie). No limit
+  # on how many mine one: units stack, and each mines at full speed.
+  defp best(unit, v, deposits), do: Enum.min_by(deposits, &{trip(v, unit, &1), View.dist(View.pos(unit), View.pos(&1)), &1["id"]})
 
-    load =
-      for w <- View.units_of(v, "Worker"), w["id"] != unit["id"], reduce: %{} do
-        acc -> Map.update(acc, w["targetId"], 1, &(&1 + 1))
-      end
-
-    ranked =
-      Enum.sort_by(deposits, fn d ->
-        {View.trip(v, d) || View.dist(here, View.pos(d)), View.dist(here, View.pos(d)), d["id"]}
-      end)
-
-    Enum.find(ranked, hd(ranked), &(Map.get(load, &1["id"], 0) < @crowd))
-  end
+  # The walk a miner of `deposit` repeats: to the closest drop-off, or to the worker with none.
+  defp trip(v, unit, deposit), do: View.trip(v, deposit) || View.dist(View.pos(unit), View.pos(deposit))
 
   # The tick the leader takes the serum, every Soldier sends its order again, so that it goes out
   # with the serum key: the serum only boosts Soldiers a command with the key reaches.

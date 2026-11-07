@@ -42,9 +42,25 @@ defmodule Swarm.UnitBrainTest do
       assert %{"targetId" => 4} = pick(unit(1, "Worker", 8, 8), [@home, @far], miners(6, 4))
     end
 
-    test "spreads to the next closest deposit once one has three" do
-      assert %{"targetId" => 4} = pick(unit(1, "Worker", 8, 8), [@home, @home2, @far], miners(2, 4))
-      assert %{"targetId" => 6} = pick(unit(1, "Worker", 8, 8), [@home, @home2, @far], miners(3, 4))
+    test "stacks on the shortest walk, however many are on it already" do
+      # The game has no limit on miners per deposit: (2, 7) is 5 from the Command Center, (1, 10) 6.
+      assert %{"targetId" => 4} = pick(unit(1, "Worker", 8, 8), [@home, @home2, @far], miners(10, 4))
+    end
+
+    test "a miner moves to ore with a walk two tiles shorter: a new depot by fresh ore" do
+      # Mining (2, 7), a walk of 5 to the Command Center; the depot at (1, 12) is 2 from (1, 10).
+      miner = unit(1, "Worker", 3, 7, activity: "Gathering", target_id: 4)
+      depot = building(50, "ResourceDepot", 1, 12)
+      v = View.new(state(units: [miner], deposits: [@home, @home2], buildings: [depot]))
+      assert {%{"type" => "Gather", "targetId" => 6}, _} = UnitBrain.decide(1, v, @gather)
+    end
+
+    test "not for a walk only a tile shorter: no flip-flopping" do
+      miner = unit(1, "Worker", 3, 7, activity: "Gathering", target_id: 4)
+      # (1, 10) is 4 from this depot, against 5 for (2, 7) from the Command Center.
+      depot = building(50, "ResourceDepot", 1, 14)
+      v = View.new(state(units: [miner], deposits: [@home, @home2], buildings: [depot]))
+      assert {:no_change, _} = UnitBrain.decide(1, v, @gather)
     end
 
     test "a worker mining far away comes back to close ore" do

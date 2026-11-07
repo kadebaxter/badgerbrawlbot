@@ -326,8 +326,10 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    from one within 6 tiles when the enemies there are stronger than our fighters and towers there
    or home is falling back (below). Cover is next to the closest of our Guard Towers on their side
    of the enemy (else the closest of our fighters or drop-offs on their side of it). They don't
-   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
-   workers on it, else the shortest. With all of that unsafe, safe ore farther away on our side
+   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip, stacked as deep as it
+   takes (the game has no limit on miners per deposit, and each mines at full speed), so with a
+   depot two tiles from its field they mine and bank without walking. A miner moves over once
+   another deposit's trip is 2 tiles shorter than its own (a new depot went up by fresh ore). With all of that unsafe, safe ore farther away on our side
    (where the rule below puts a depot); with no safe ore at all, an idle worker waits next to the
    closest of our towers instead of standing in the field.
    **Ore is remembered:** the server only sends the deposits in sight, but deposits never move and a
