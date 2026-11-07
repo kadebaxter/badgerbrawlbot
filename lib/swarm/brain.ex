@@ -8,7 +8,7 @@ defmodule Swarm.Brain do
   - The **memory** is the little the leader remembers between ticks. It is replicated through
     `ra`, so a new leader picks up where the old one stopped.
 
-  Economy: grow to ~20 workers while following `@build_order` (Barracks, a Resource Depot by the
+  Economy: grow to ~20 workers (30 in a big game) while following `@build_order` (Barracks, a Resource Depot by the
   ore, Guard Towers toward the enemy, a TechLab, ...), research upgrades, and train soldiers and
   archers with what is left. Ore for the next building is set aside first, so the rest of the
   spending never makes it late.
@@ -35,6 +35,8 @@ defmodule Swarm.Brain do
   alias Swarm.{Roles, View}
 
   @target_workers 20
+  # A big game needs a bigger economy to out-grow everyone: this many workers there.
+  @big_target_workers 30
   # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
   @scouts 2
   @first_wave 15
@@ -44,11 +46,11 @@ defmodule Swarm.Brain do
   # at least `@big_min_wave` each.
   @min_wave 12
   @big_game 6
-  @big_first_wave 25
+  @big_first_wave 18
   @big_min_wave 15
   # In a big game, no new co-op (Resource Depot away from home) before this many fighters: one
   # with nobody to hold it is lost.
-  @expand_army 20
+  @expand_army 15
   # The serum (once a match, Soldiers ×2 for 30 ticks), for home being overrun: only with this many
   # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
@@ -60,8 +62,10 @@ defmodule Swarm.Brain do
   @strike_tower 7000
   @strike_ticks 120
   # How far the backup Command Center goes from ours (see `site/4`, `:hideout`).
-  @backup_from 10
-  @backup_to 25
+  @backup_from 18
+  @backup_to 30
+  # ... or, with no room that far on our side, from this close.
+  @backup_near 12
   # The first wave in a big game waits for the tower square, but not past this tick.
   @square_deadline 900
   @margin 1.5
@@ -1061,6 +1065,8 @@ defmodule Swarm.Brain do
     end
   end
 
+  defp target_workers(v), do: if(big?(v), do: @big_target_workers, else: @target_workers)
+
   # A new co-op away from home, in a big game only with an army to hold it.
   defp may_expand?(v), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army
 
@@ -1222,7 +1228,7 @@ defmodule Swarm.Brain do
   defp train_workers({cmds, mem, ore} = acc, v) do
     with %{"completed" => true} = cc <- v.cc,
          queued = length(cc["production"]),
-         true <- length(View.units_of(v, "Worker")) + queued < @target_workers and queued < 2,
+         true <- length(View.units_of(v, "Worker")) + queued < target_workers(v) and queued < 2,
          true <- ore >= @costs["Worker"] do
       cmd = %{"type" => "Produce", "buildingId" => cc["id"], "unitType" => "Worker"}
       {[cmd | cmds], mem, ore - @costs["Worker"]}
@@ -1354,11 +1360,12 @@ defmodule Swarm.Brain do
     end)
   end
 
-  # The backup Command Center: hidden behind our base. On our side of the map (no farther from
+  # The backup Command Center: hidden away from our base. On our side of the map (no farther from
   # our Command Center than from any enemy's start), `@backup_from`–`@backup_to` tiles from it (far
-  # enough not to fall with the base, near enough to reach), and as far as can be from the enemy
-  # and from the middle of the map, which everyone crosses: behind our base, toward our own edge or
-  # corner, where there is room (on a crowded map, the quietest spot on our side). Not by
+  # enough not to fall with the base, near enough to reach; `@backup_near` if there is no room that
+  # far, or 6 on a crowded map), and as far as can be from the enemy and from the middle of the map, which everyone
+  # crosses: behind our base where there is room, else along our edge, away from the nearer
+  # neighbor (on a crowded map, the quietest spot on our side). Not by
   # the edge itself, an enemy building we know of, or ore (nobody mines there, so nobody comes).
   # Every third tile is enough, and keeps this quick on a big map.
   def site(terrain, %View{cc: cc} = v, :hideout, _avoid) do
@@ -1378,15 +1385,25 @@ defmodule Swarm.Brain do
       open?.({x, y}) and not Enum.any?(for(dx <- -1..1, dy <- -1..1, do: {x + dx, y + dy}), &MapSet.member?(taken, &1))
     end
 
-    candidates =
+    candidates = fn reach ->
       for x <- margin..(v.map_width - margin - 1)//3,
           y <- margin..(v.map_height - margin - 1)//3,
           clear?.({x, y}),
           not Enum.any?(enemy, &(View.dist(&1, {x, y}) <= 8)),
           not Enum.any?(v.deposits, &(View.dist(View.pos(&1), {x, y}) <= 4)),
-          View.dist(home, {x, y}) in @backup_from..@backup_to,
+          View.dist(home, {x, y}) in reach,
           Enum.all?(v.enemy_starts, &(dist2(home, {x, y}) <= dist2(&1, {x, y}))),
           do: {x, y}
+    end
+
+    # Far enough not to fall with our base; nearer only if our side has no room that far.
+    candidates =
+      Enum.find_value([@backup_from..@backup_to, @backup_near..@backup_to, 6..@backup_to], [], fn reach ->
+        case candidates.(reach) do
+          [] -> nil
+          found -> found
+        end
+      end)
 
     # Behind our base (farther from the middle than it is) first, where there is room for it.
     behind = dist2(home, center(v))

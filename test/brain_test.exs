@@ -803,7 +803,7 @@ defmodule Swarm.BrainTest do
 
       terrain = List.duplicate(String.duplicate(".", 112), 112)
       {x, y} = Brain.site(terrain, View.new(big_map), :hideout)
-      assert View.dist({x, y}, {22, 22}) in 10..25
+      assert View.dist({x, y}, {22, 22}) in 18..30
       # Behind us: farther from the middle (56, 56) than our base, toward the corner.
       assert x < 22 or y < 22
       assert View.dist({x, y}, {56, 56}) > View.dist({22, 22}, {56, 56})
@@ -819,7 +819,7 @@ defmodule Swarm.BrainTest do
         |> View.new()
 
       site = Brain.site(terrain(), v, :hideout)
-      assert View.dist(site, {7, 7}) in 10..25
+      assert View.dist(site, {7, 7}) in 6..30
       assert View.dist(site, {32, 32}) >= 10
       assert Enum.all?([{31, 7}, {7, 31}], &(View.dist(site, &1) >= View.dist(site, {7, 7})))
     end
@@ -927,20 +927,20 @@ defmodule Swarm.BrainTest do
     # Ten towers around the base at (7, 7).
     defp square, do: for({x, y} <- [{1, 1}, {7, 1}, {13, 1}, {1, 7}, {13, 7}, {1, 13}, {7, 13}, {13, 13}, {4, 13}, {13, 4}], do: building(500 + x * 20 + y, "GuardTower", x, y))
 
-    test "no first wave before twenty-five attackers" do
-      # 31 soldiers: 7 guards, 24 attackers.
-      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(31))
-      assert hold =~ "want 25"
+    test "no first wave before eighteen attackers" do
+      # 24 soldiers: 7 guards, 17 attackers.
+      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(24))
+      assert hold =~ "want 18"
 
-      # 32, but no tower square yet: still waiting.
-      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(32))
+      # 25, but no tower square yet: still waiting.
+      assert {%{wave: nil, hold: hold}, _, _} = big_plan(units: soldiers(25))
       assert hold =~ "tower square first (0 of 10)"
 
-      # With the square up: a scout looks first, then the wave of 25 goes.
-      {_, _, memory} = big_plan(units: soldiers(32), buildings: square())
+      # With the square up: a scout looks first, then the wave of 18 goes.
+      {_, _, memory} = big_plan(units: soldiers(25), buildings: square())
       memory = %{memory | look: %{memory.look | done: 100}}
-      assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(32), buildings: square()], memory)
-      assert length(members) == 25
+      assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(25), buildings: square()], memory)
+      assert length(members) == 18
     end
 
     test "after the first, at least fifteen a wave" do
@@ -949,6 +949,19 @@ defmodule Swarm.BrainTest do
       memory = %{memory | next_wave: 2, look: memory.look && %{memory.look | done: 100}}
       assert {%{wave: nil, hold: hold}, _, _} = big_plan([units: soldiers(21)], memory)
       assert hold =~ "want 15"
+    end
+
+    test "thirty workers, not twenty" do
+      trains_worker? = fn commands -> Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Worker"}, &1)) end
+      {_, commands, _} = big_plan(units: workers(25) ++ soldiers(10), ore: 1000)
+      assert trains_worker?.(commands)
+
+      {_, commands, _} = big_plan(units: workers(30) ++ soldiers(10), ore: 1000)
+      refute trains_worker?.(commands)
+
+      # A small game stops at twenty.
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(10), ore: 1000)
+      refute trains_worker?.(commands)
     end
 
     test "army first: Barracks early, the backup at 10 fighters, the rest of the square at 15" do
@@ -990,15 +1003,15 @@ defmodule Swarm.BrainTest do
       assert View.dist(second, {7, 7}) in 5..6 and View.dist(second, first) >= 5
     end
 
-    test "no co-op away from home before twenty fighters" do
+    test "no co-op away from home before fifteen fighters" do
       deposits = for i <- 0..2, do: %{"id" => 60 + i, "x" => 40 + i, "y" => 40, "remaining" => 900}
       miners = for i <- 1..3, do: unit(100 + i, "Worker", 41, 41, activity: "Gathering", target_id: 60)
       depots = fn commands -> for %{"type" => "Build", "buildingType" => "ResourceDepot"} = c <- commands, do: c end
 
-      {_, commands, _} = big_plan(units: miners ++ soldiers(19), deposits: deposits, ore: 200)
+      {_, commands, _} = big_plan(units: miners ++ soldiers(14), deposits: deposits, ore: 200)
       assert depots.(commands) == []
 
-      {_, commands, _} = big_plan(units: miners ++ soldiers(20), deposits: deposits, ore: 200)
+      {_, commands, _} = big_plan(units: miners ++ soldiers(15), deposits: deposits, ore: 200)
       assert [_] = depots.(commands)
     end
 

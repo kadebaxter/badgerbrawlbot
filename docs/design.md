@@ -262,19 +262,20 @@ remembers the order it is carrying out, so it sends nothing while that order sti
 
 Leader's team strategy (`Swarm.Brain`), built in stages:
 
-1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
+1. **Economy (done):** grow to ~20 workers (30 in a big game) while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → backup Command Center (12)
    → TechLab (13) → 2nd Barracks (15) → 2nd Guard Tower (17). The backup Command Center is hidden
-   behind our base: on our side of the map, 10–25 tiles from our Command Center, as far as can be
-   from the enemy and from the middle of the map (toward our own edge or corner where there is
-   room), away from ore and known enemy buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
+   away from our base: on our side of the map, 18–30 tiles from our Command Center (12, or 6 on a
+   crowded map, if there is no room that far), as far as can be
+   from the enemy and from the middle of the map (behind our base where there is room, else along
+   our edge away from the nearer neighbor), away from ore and known enemy buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
    Command Center at all, and elimination would wipe our survival score. It isn't a drop-off while
    our base stands, so workers never go mining by it. In a big game (6 players or more) we turtle
    up, army first: Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Barracks (12) →
    TechLab (13) → 2nd Guard Tower (14) → 3rd Barracks (16) → 3rd Guard Tower (16) → backup Command
    Center (once we have 10 fighters) → Guard Towers 4–10 (20 workers and 15 fighters), all on a square 5–6 tiles around the base, spread at least 5
    apart (their reaches meet), the side facing our neighbors first; the first wave waits for the
-   square of 10 (until tick 900 at most); a co-op away from home waits for 20 fighters, and its tower comes
+   square of 10 (until tick 900 at most); a co-op away from home waits for 15 fighters, and its tower comes
    before the rest of the build order. Barracks and the TechLab go behind the Command Center,
    away from the neighbors, so the towers and the ore line stand between them and our production.
    The ore for the next building is
@@ -309,7 +310,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
    back from anything inside their 3-tile blind spot.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
-   point (25 for the first in a big game), and never with fewer than 12 (15 in a big game),
+   point (18 for the first in a big game), and never with fewer than 12 (15 in a big game),
    counterattacks included. While it is out, attackers trained later follow it in batches of 5 or more and become
    part of it, so it goes out and comes back as one. The members are kept in the replicated
    memory, so a new leader knows who is out. The wave is recalled when fewer than 5 of it are
