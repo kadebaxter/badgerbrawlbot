@@ -223,9 +223,10 @@ counterattack. When no wave leaves, the leader's 10-tick log line says why (`wai
 The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
 `/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
 ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and
-every player is told when we take it. The brain asks for it (`strategy.serum`) once a big fight is
-on with 8 Soldiers or more: the wave's front up against a player at least half as strong as the
-wave, or a raid at home at least half of what can meet it. That tick every Soldier sends its order
+every player is told when we take it. It is kept for when home is being overrun: the brain asks
+for it (`strategy.serum`) when a raid of at least ~4 soldiers' strength is stronger than all that
+can meet it there without the wave, and we have 8 Soldiers or more. Never for the wave's own fights
+(it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
 

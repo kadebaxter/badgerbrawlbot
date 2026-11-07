@@ -49,8 +49,8 @@ defmodule Swarm.Brain do
   # In a big game, no new co-op (Resource Depot away from home) before this many fighters: one
   # with nobody to hold it is lost.
   @expand_army 20
-  # The serum (once a match, Soldiers ×2 for 30 ticks): only with this many soldiers, and a raid at
-  # home must be at least this strong (about four soldiers) to be worth it.
+  # The serum (once a match, Soldiers ×2 for 30 ticks), for home being overrun: only with this many
+  # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
   @serum_raid 4000
   # The first wave in a big game waits for the tower square, but not past this tick.
@@ -312,7 +312,7 @@ defmodule Swarm.Brain do
       why: looked ++ why,
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
-      serum: if(memory.serum == nil and serum_moment?(v, wave, target), do: :take)
+      serum: if(memory.serum == nil and serum_moment?(v, wave), do: :take)
     }
 
     {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
@@ -543,24 +543,18 @@ defmodule Swarm.Brain do
     |> strongest_player()
   end
 
-  # The moment for the serum (once a match): a real fight with soldiers in it. The wave's front is
-  # up against a player at least half as strong as the whole wave, or a raid at least half as
-  # strong as what can meet it is at home, and we have `@serum_soldiers` soldiers or more.
-  defp serum_moment?(v, wave, target) do
-    alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
-
-    front? =
-      alive != [] and
-        case facing(v, alive, target) do
-          {_player, theirs} -> theirs >= Roles.strength(alive) / 2
-          nil -> false
-        end
-
+  # The moment for the serum (once a match): home is being overrun. A raid of at least
+  # `@serum_raid` hits a base, an outpost or our workers, and it is stronger than all that can meet
+  # it there without the wave (guards, escorts, fighters about, towers), and we have
+  # `@serum_soldiers` soldiers or more. Not for the wave's own fights: it should win those anyway,
+  # and the serum is kept for when we have no other help. (It doubles the soldiers' speed too, so a
+  # recalled wave gets home sooner.)
+  defp serum_moment?(v, wave) do
     raiders = Roles.raiders(v)
     raid = Roles.strength(raiders)
-    home? = raiders != [] and raid >= @serum_raid and raid >= Roles.home_strength(v, wave, raiders) / 2
 
-    length(View.units_of(v, "Soldier")) >= @serum_soldiers and (front? or home?)
+    raiders != [] and raid >= @serum_raid and raid > Roles.home_strength(v, wave, raiders) and
+      length(View.units_of(v, "Soldier")) >= @serum_soldiers
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.

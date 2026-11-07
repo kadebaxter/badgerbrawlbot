@@ -801,30 +801,34 @@ defmodule Swarm.BrainTest do
   end
 
   describe "the serum" do
-    # A wave of ten soldiers at (45, 45).
+    # A wave of ten soldiers out at (45, 45); ten more at home by the rally point.
     defp wave_at_front, do: for(s <- soldiers(10), do: %{s | "x" => 45, "y" => 45})
+    defp at_home, do: for(i <- 11..20, do: unit(200 + i, "Soldier", 10, 10))
     defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum}
-    defp enemy_army(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 47, 47, owner: 1))
+    defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 12, 9, owner: 1))
 
-    test "taken when the wave's front meets a player at least half as strong" do
-      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory())
+    test "taken when home is overrun: the raid is stronger than all that can meet it there" do
+      # Twelve raiders against the ten soldiers at home.
+      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(12)], wave_memory())
     end
 
-    test "not for a skirmish, not with too few soldiers, not twice, not when it's off" do
-      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(2)], wave_memory())
-
-      few = Enum.take(wave_at_front(), 7)
-      memory = %{wave_memory() | wave: %{wave_memory().wave | members: Enum.to_list(201..207)}}
-      assert {%{serum: nil}, _, _} = plan([units: few ++ enemy_army(4)], memory)
-
-      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory(:spent))
-      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory({:until, 140}))
-      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ enemy_army(6)], wave_memory(:off))
+    test "not for the wave's own fights, however big" do
+      army = for i <- 1..20, do: unit(900 + i, "Soldier", 47, 47, owner: 1)
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ army], wave_memory())
     end
 
-    test "taken for a real raid on home" do
-      raiders = for i <- 1..8, do: unit(900 + i, "Soldier", 12, 9, owner: 1)
-      assert {%{serum: :take}, _, _} = plan(units: soldiers(10) ++ raiders)
+    test "not for a raid home can hold, nor twice, nor when it's off" do
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(8)], wave_memory())
+
+      overrun = wave_at_front() ++ at_home() ++ raiders(12)
+      assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory(:spent))
+      assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory({:until, 140}))
+      assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory(:off))
+    end
+
+    test "not with too few soldiers to be worth it" do
+      few = for i <- 1..5, do: unit(200 + i, "Soldier", 10, 10)
+      assert {%{serum: nil}, _, _} = plan(units: few ++ raiders(12))
     end
   end
 
