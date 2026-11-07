@@ -13,6 +13,10 @@ defmodule Swarm.Brain do
   archers with what is left. Ore for the next building is set aside first, so the rest of the
   spending never makes it late.
 
+  The ore we have seen is remembered (`see/2`), and the first scout surveys our side for more
+  (`strategy.survey`), so workers have somewhere to go when the ore by our drop-offs runs out or
+  the enemy sits on it. Once a Barracks is up, `@worker_reserve` ore stays back for workers.
+
   Army: fighters work out their own roles (`Swarm.Roles`). A Scout per opponent explores. The leader
   remembers every enemy fighter it has seen, and launches a wave once the attackers waiting at
   the rally point are `@margin` times as strong as the enemy army and towers we know of (at
@@ -234,6 +238,13 @@ defmodule Swarm.Brain do
   @depot_builders 5
   @first_barracks_builders 3
   @short_for_ticks 30
+  # The survey for ore (see `survey/3`): rings this far around the Command Center, and how long the
+  # scout tries for one spot.
+  @survey_rings [10, 20]
+  @survey_timeout 40
+  # Ore kept back for workers (two of them), and how few workers make training them come first.
+  @worker_reserve 100
+  @rebuild_workers 5
 
   # Each tier 2 comes after its tier 1, and a TechLab researches one at a time.
   @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2"]
@@ -254,7 +265,9 @@ defmodule Swarm.Brain do
           look: pos() | nil,
           serum: :take | nil,
           raze: integer() | nil,
-          check: %{integer() => pos()}
+          check: %{integer() => pos()},
+          fall_back: boolean(),
+          survey: pos() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -290,8 +303,102 @@ defmodule Swarm.Brain do
       strike_back_at: nil,
       # The serum: nil (not taken yet), :off (not in this game), :spent, or {:until, last tick}.
       # Taken by the game loop when the strategy asks for it (`strategy.serum`).
-      serum: nil
+      serum: nil,
+      # Every deposit we have seen and haven't seen gone: id => it as last seen, with "seen" (see
+      # `see/2`).
+      ore: %{},
+      # The survey of our side for ore (see `survey/3`): spots looked at, and the one the scout is
+      # on, %{pos, at}, or nil.
+      surveyed: [],
+      survey: nil,
+      # Whether home was falling back to the towers last tick (`Roles.fall_back?/2`).
+      fall_back: false
     }
+  end
+
+  @doc """
+  Remembers the ore: every deposit in sight as it is now, and forgets one we should see where it
+  was and don't (mined out). Returns the view with the remembered ones added to its deposits
+  (`View.with_known_ore/2`), for the brain and the units alike, and the memory.
+  """
+  @spec see(View.t(), map() | nil) :: {View.t(), map()}
+  def see(%View{} = v, memory) do
+    memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
+
+    seen = for d <- v.deposits, into: %{}, do: {d["id"], d |> Map.take(["id", "x", "y", "remaining"]) |> Map.put("seen", v.tick)}
+
+    ore =
+      memory.ore
+      |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
+      |> Map.merge(seen)
+
+    {View.with_known_ore(v, ore), %{memory | ore: ore}}
+  end
+
+  # The survey: a scout goes round our side of the map looking for ore, spot by spot (`survey_spots/2`),
+  # so we know where to go when the ore by our drop-offs runs out or the enemy sits on it. A spot
+  # is done once anything of ours sees it, or after `@survey_timeout` ticks of trying (a scout
+  # can't get there). Each spot once a game: the ore is remembered, and it doesn't move.
+  # Returns {the spot the scout should go to, or nil; memory; notes for the decision log}.
+  defp survey(%View{cc: nil}, memory, _terrain), do: {nil, memory, []}
+
+  defp survey(%View{} = v, memory, terrain) do
+    spots = survey_spots(v, terrain)
+    seen = for p <- spots, p not in memory.surveyed, View.in_sight?(v, p), do: p
+    surveyed = memory.surveyed ++ seen
+
+    current =
+      case memory.survey do
+        %{pos: pos, at: at} = current -> if pos in surveyed or v.tick - at > @survey_timeout, do: nil, else: current
+        nil -> nil
+      end
+
+    surveyed = if memory.survey && current == nil, do: Enum.uniq([memory.survey.pos | surveyed]), else: surveyed
+    left = Enum.reject(spots, &(&1 in surveyed))
+    scout = surveyor(v)
+
+    {current, notes} =
+      cond do
+        current != nil ->
+          {current, []}
+
+        scout == nil or left == [] ->
+          done = if memory.survey && left == [], do: [{:survey, "survey done: #{map_size(memory.ore)} deposits known"}], else: []
+          {nil, done}
+
+        true ->
+          next = Enum.min_by(left, &{View.dist(&1, View.pos(scout)), &1})
+          {%{pos: next, at: v.tick}, [{:survey, "scout #{scout["id"]} looking for ore at #{fmt(next)}, #{length(left)} spots left"}]}
+      end
+
+    {current && current.pos, %{memory | surveyed: surveyed, survey: current}, notes}
+  end
+
+  # The scout that surveys: the first by id (`Swarm.UnitBrain` gives it the same job).
+  defp surveyor(v), do: v |> View.units_of("Scout") |> Enum.min_by(& &1["id"], fn -> nil end)
+
+  # Spots to look at for ore: rings around the Command Center (`@survey_rings`, at their corners
+  # and the middle of each side; the outer ring also halfway between), on our side of the map, on
+  # open ground (the nearest open tile within 3), and inside the map.
+  defp survey_spots(%View{cc: cc} = v, terrain) do
+    {cx, cy} = View.pos(cc)
+    rows = List.to_tuple(terrain)
+
+    open? = fn {x, y} ->
+      y in 0..(tuple_size(rows) - 1)//1 and x in 0..(byte_size(elem(rows, y)) - 1)//1 and :binary.at(elem(rows, y), x) == ?.
+    end
+
+    for r <- @survey_rings,
+        steps = if(r >= 20, do: [-2, -1, 0, 1, 2], else: [-2, 0, 2]),
+        i <- steps,
+        j <- steps,
+        abs(i) == 2 or abs(j) == 2,
+        {x, y} = {clamp(cx + div(i * r, 2), v.map_width), clamp(cy + div(j * r, 2), v.map_height)},
+        View.ours?(v, {x, y}),
+        spot = Enum.find(for(d <- 0..3, dx <- -d..d, dy <- -d..d, do: {x + dx, y + dy}), open?),
+        spot != nil,
+        uniq: true,
+        do: spot
   end
 
   @spec plan(View.t(), map(), [String.t()]) :: {strategy(), [map()], map()}
@@ -300,15 +407,23 @@ defmodule Swarm.Brain do
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
+    {survey, memory, surveyed} = survey(v, memory, terrain)
+    strategy = %{strategy | survey: survey, why: strategy.why ++ surveyed}
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
 
+    # Ore for a couple of workers stays back from everything else once the army is being trained
+    # (a Barracks is up): with every worker dead and nothing banked, the economy never starts again.
+    # Not in the opening, where every bit of ore goes into the first buildings.
+    reserve = if Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"]), do: min(v.ore, @worker_reserve), else: 0
+
     {commands, memory, _ore} =
-      {[], memory, v.ore}
+      {[], memory, v.ore - reserve}
+      |> rebuild_workers(v, reserve)
       |> finish_sites(v)
       |> army_floor(v)
       |> build(v, terrain)
-      |> train_workers(v)
+      |> with_reserve(reserve, &train_workers(&1, v))
       |> research(v)
       |> train_scout(v)
       |> train_siege(v)
@@ -320,8 +435,8 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{}},
-     memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
+       fall_back: false, survey: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -355,6 +470,10 @@ defmodule Swarm.Brain do
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
 
+    # Home falls back to the towers when the raiders outside their reach are too strong for it.
+    fall_back = Roles.fall_back?(v, wave)
+    why = why ++ fall_back_note(v, wave, fall_back, memory.fall_back)
+
     mode =
       cond do
         attacked? -> :defend
@@ -374,12 +493,36 @@ defmodule Swarm.Brain do
       look: if(look && look.done == nil, do: look.pos),
       serum: if(memory.serum == nil and serum_moment?(v, memory_wave), do: :take),
       raze: raze(v),
-      check: if(check && check.found == nil, do: check.checkers, else: %{})
+      check: if(check && check.found == nil, do: check.checkers, else: %{}),
+      fall_back: fall_back,
+      survey: nil
     }
 
     {strategy,
-     %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid, check: check, strike_back_at: strike_back_at}}
+     %{
+       memory
+       | wave: wave,
+         next_wave: next_wave,
+         recalled_at: recalled_at,
+         raid: raid,
+         check: check,
+         strike_back_at: strike_back_at,
+         fall_back: fall_back
+     }}
   end
+
+  # A line for the decision log when home starts or stops falling back.
+  defp fall_back_note(v, wave, true, false) do
+    exposed = Roles.exposed_raiders(v)
+    {theirs, ours} = {Roles.strength(exposed), Roles.home_strength(v, wave, exposed)}
+
+    [{:fall_back,
+      "#{length(exposed)} raiders out of our towers' reach, strength #{round(theirs)} vs #{round(ours)} at home: " <>
+        "workers and defenders fall back to the towers"}]
+  end
+
+  defp fall_back_note(_v, _wave, false, true), do: [{:fall_back, "holding again: home can meet the raiders"}]
+  defp fall_back_note(_v, _wave, _now, _before), do: []
 
   # The raid on us: when it was last here, and how many of its fighters we have killed at home
   # (a base, an outpost or our workers) going by where we last saw them. Over once it has been gone
@@ -1456,6 +1599,19 @@ defmodule Swarm.Brain do
 
   ## Spending what is left
 
+  # Down to a few workers: workers come before anything else, out of the reserve too.
+  defp rebuild_workers(acc, v, reserve) do
+    if length(View.units_of(v, "Worker")) < @rebuild_workers,
+      do: with_reserve(acc, reserve, &train_workers(&1, v)),
+      else: acc
+  end
+
+  # `spend` may use the reserve too; whatever of it is left stays back afterwards.
+  defp with_reserve({cmds, mem, ore}, reserve, spend) do
+    {cmds, mem, ore} = spend.({cmds, mem, ore + reserve})
+    {cmds, mem, ore - reserve}
+  end
+
   defp train_workers({cmds, mem, ore} = acc, v) do
     with %{"completed" => true} = cc <- v.cc,
          queued = length(cc["production"]),
@@ -1713,12 +1869,9 @@ defmodule Swarm.Brain do
 
   # Ore worth a depot: on our side (closer to our Command Center than to any enemy's start, so
   # never a contested deposit between two players), and not where we just lost a building.
-  defp safe_ore?(%View{cc: cc} = v, deposit, avoid) do
+  defp safe_ore?(%View{} = v, deposit, avoid) do
     pos = View.pos(deposit)
-    ours = View.dist(pos, View.pos(cc))
-
-    Enum.all?(v.enemy_starts, &(ours < View.dist(pos, &1))) and
-      not Enum.any?(avoid, &(View.dist(&1, pos) <= 4))
+    View.ours?(v, pos) and not Enum.any?(avoid, &(View.dist(&1, pos) <= 4))
   end
 
   # By the field around `target`, two tiles from as many of its deposits as possible: a worker

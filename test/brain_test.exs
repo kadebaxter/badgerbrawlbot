@@ -56,7 +56,7 @@ defmodule Swarm.BrainTest do
   end
 
   test "puts the Resource Depot by the ore, on our side of it" do
-    {_, [cmd | _], _} = plan(units: workers(9) ++ soldiers(7), buildings: [building(2, "Barracks", 11, 7)], ore: 100)
+    {_, [cmd | _], _} = plan(units: workers(9) ++ soldiers(7), buildings: [building(2, "Barracks", 11, 7)], ore: 200)
     assert %{"type" => "Build", "buildingType" => "ResourceDepot", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {2, 7}) in 2..3
     assert View.dist({x, y}, {7, 7}) < View.dist({x, y}, {0, 7})
@@ -64,7 +64,7 @@ defmodule Swarm.BrainTest do
 
   test "puts the Guard Tower between our base and the enemy" do
     buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
-    {_, [cmd | _], _} = plan(units: workers(11) ++ soldiers(7), buildings: buildings, ore: 125)
+    {_, [cmd | _], _} = plan(units: workers(11) ++ soldiers(7), buildings: buildings, ore: 225)
     assert %{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {56, 56}) < View.dist({7, 7}, {56, 56})
   end
@@ -157,7 +157,7 @@ defmodule Swarm.BrainTest do
 
   test "below the army floor, the Barracks train before anything is built" do
     {_, [first | _] = commands, _} =
-      plan(units: workers(10), buildings: [building(2, "Barracks", 11, 7)], ore: 250, tick: 300)
+      plan(units: workers(10), buildings: [building(2, "Barracks", 11, 7)], ore: 350, tick: 300)
 
     assert %{"type" => "Produce", "unitType" => "Soldier"} = first
     assert Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
@@ -231,7 +231,7 @@ defmodule Swarm.BrainTest do
     miner = unit(50, "Worker", 30, 30, activity: "Gathering", target_id: 6)
     buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), tower, backup_cc()]
 
-    {_, commands, _} = plan(units: [miner | builders] ++ soldiers(7), buildings: buildings, ore: 150)
+    {_, commands, _} = plan(units: [miner | builders] ++ soldiers(7), buildings: buildings, ore: 250)
     assert [%{"type" => "Build", "buildingType" => "TechLab", "unitIds" => [50]}] =
              Enum.filter(commands, &(&1["type"] == "Build"))
   end
@@ -470,7 +470,7 @@ defmodule Swarm.BrainTest do
 
     test "comes home when the base can't hold" do
       {ours, memory} = wave_out()
-      assert {%{wave: nil, why: [{:wave_recalled, why}]}, _, %{recalled_at: 110}} =
+      assert {%{wave: nil, why: [{:wave_recalled, why} | _]}, _, %{recalled_at: 110}} =
                plan([units: ours ++ raiders(10, 12, 9), tick: 110], memory)
 
       assert why =~ "home under attack"
@@ -742,7 +742,7 @@ defmodule Swarm.BrainTest do
       tower = building(5, "GuardTower", 12, 12)
       lab = building(6, "TechLab", 7, 12)
       # Soldiers enough to be past the army floor, which would take the ore first.
-      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab, backup_cc()], ore: 160)
+      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab, backup_cc()], ore: 260)
       assert %{"unitIds" => [_]} = build_of(commands, "Barracks")
     end
   end
@@ -1263,10 +1263,11 @@ defmodule Swarm.BrainTest do
       lab = Map.put(building(6, "TechLab", 7, 12), "research", %{"upgrade" => "Harvesting2"})
       buildings = [shop, lab | Enum.reject(built(), &(&1["id"] == 6))]
 
-      {_, commands, _} = plan(units: units, buildings: buildings, ore: 300)
+      # 100 of it is kept for workers.
+      {_, commands, _} = plan(units: units, buildings: buildings, ore: 400)
       refute Enum.any?(commands, &(&1["type"] == "Produce" and &1["unitType"] in ["Trebuchet", "Soldier", "Archer"]))
 
-      {_, commands, _} = plan(units: units, buildings: buildings, ore: 360)
+      {_, commands, _} = plan(units: units, buildings: buildings, ore: 460)
       assert Enum.any?(commands, &(&1["unitType"] == "Trebuchet"))
     end
 

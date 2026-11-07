@@ -3,8 +3,10 @@ defmodule Swarm.UnitBrain do
   One unit's decision. Pure: given the view, the team strategy and this unit's own memory,
   return the command for this unit only (or `:no_change`) and its updated memory.
 
-  Workers mine the closest ore to a drop-off that isn't crowded, never ore far from one, and
-  run to the rally point when an enemy is about to hit them. A fighter first works out its role (`Swarm.Roles`), then, in order:
+  Workers mine the closest ore to a drop-off that isn't crowded, and ore farther away on our side
+  (remembered deposits too) only when that is all unsafe. They run for cover by our towers when an
+  enemy is about to hit them, or is coming at them out of our towers' reach while we are losing
+  there or home is falling back; with nothing safe to mine they wait by a tower. A fighter first works out its role (`Swarm.Roles`), then, in order:
 
   0. an archer losing the fight around it (the enemy fighters near it are stronger than ours) with
      an enemy soldier or scout about to reach it: step back toward home, then shoot again from
@@ -61,6 +63,9 @@ defmodule Swarm.UnitBrain do
   @crowd 3
   # Ore with an enemy fighter this close is unsafe to mine.
   @unsafe_ore 5
+  # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
+  # falling back, sends it to cover.
+  @worker_alarm 6
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
@@ -108,41 +113,57 @@ defmodule Swarm.UnitBrain do
   defp act(%{"type" => "Trebuchet"} = unit, v, strategy, memory), do: siege(unit, v, strategy, memory)
   defp act(unit, v, strategy, memory), do: fighter(unit, v, strategy, memory)
 
-  # A miner about to be hit runs toward help. Once it is safe and idle it goes back to mining,
-  # but not to ore with enemies by it. Builders keep building.
-  defp worker(%{"activity" => activity} = unit, v, %{rally: rally})
+  # A miner in danger runs to cover: to the closest of our Guard Towers on our side of the enemy
+  # (else help or a drop-off). Once it is safe and idle it goes back to mining, but not to ore
+  # with enemies by it. Builders keep building.
+  defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning"] and rally != nil do
-    case danger(unit, v) do
+    case worker_danger(unit, v, s) do
       nil ->
         worker(unit, v)
 
       enemy ->
-        {x, y} = refuge(unit, v, enemy) || rally
-        %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+        {x, y} = spot = refuge(unit, v, enemy) || rally
+
+        # Already there: it may mine ore safe from here (`unsafe?/2`), or stays.
+        if View.dist(View.pos(unit), spot) <= 1,
+          do: worker(unit, v),
+          else: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
     end
   end
 
   defp worker(unit, v, _strategy), do: worker(unit, v)
 
-  # The closest enemy fighter that is about to reach this worker, or nil.
-  defp danger(unit, v) do
+  # The closest enemy fighter this worker should run from, or nil: one about to hit it, or, out of
+  # our towers' reach, one coming at it (within `@worker_alarm`) while home is falling back or the
+  # enemies around it are stronger than our fighters there. A miner doesn't wait to be hit.
+  defp worker_danger(unit, v, s) do
     here = View.pos(unit)
+    enemies = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= @worker_alarm))
+    closest = Enum.min_by(enemies, &{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
 
-    v.enemy_units
-    |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= Roles.range(&1) + 1))
-    |> Enum.min_by(&View.dist(View.pos(&1), here), fn -> nil end)
+    cond do
+      closest == nil -> nil
+      View.dist(View.pos(closest), here) <= Roles.range(closest) + 1 -> closest
+      Roles.sheltered?(v, here) -> nil
+      Map.get(s, :fall_back, false) or Roles.losing_at?(v, here, @worker_alarm) -> closest
+      true -> nil
+    end
   end
 
-  # The closest of our fighters or drop-offs that is on our side of the enemy (closer to this
-  # worker than to it, so the way there doesn't go past it): help, or at least a place to drop
-  # ore. Nil if there is none.
+  # Where to run: by the closest of our towers on our side of the enemy (`Roles.shelter/3`); else
+  # the closest of our fighters or drop-offs on our side of it (closer to this worker than to it,
+  # so the way there doesn't go past it). Nil if there is none.
   defp refuge(unit, v, enemy) do
     here = View.pos(unit)
     there = View.pos(enemy)
 
-    (Enum.map(Roles.fighters(v), &View.pos/1) ++ View.drop_offs(v))
-    |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there)))
-    |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
+    tower = if v.cc && Enum.any?(View.buildings_of(v, "GuardTower"), & &1["completed"]), do: Roles.shelter(v, here, there)
+
+    tower ||
+      (Enum.map(Roles.fighters(v), &View.pos/1) ++ View.drop_offs(v))
+      |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there)))
+      |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
   end
 
   # Ore with an enemy fighter this close isn't worth walking into.
@@ -151,9 +172,11 @@ defmodule Swarm.UnitBrain do
   end
 
   # An idle worker picks a deposit. So does one mining a deposit too far from any drop-off (once
-  # there is a closer one), or one with enemies by it. With only unsafe ore left, it waits. With
-  # no ore by a drop-off, ore by a depot being built comes first: the brain put it by the field
-  # it expects miners at, so they don't scatter to another far one.
+  # there is a closer one), or one with enemies by it. With no ore by a drop-off, ore by a depot
+  # being built comes first: the brain put it by the field it expects miners at, so they don't
+  # scatter to another far one. With all of that unsafe, safe ore farther away on our side
+  # (deposits we remember count: a Gather may name one in the fog), where the brain puts a depot
+  # once miners are there. With no safe ore at all, an idle worker waits under our towers.
   defp worker(unit, %View{deposits: [_ | _]} = v) do
     near =
       case View.near_deposits(v) do
@@ -169,19 +192,49 @@ defmodule Swarm.UnitBrain do
         (mining? and near != [] and current not in near) or
         (mining? and unsafe?(current, v))
 
-    choices = Enum.reject(if(near == [], do: v.deposits, else: near), &unsafe?(&1, v))
+    choices =
+      case Enum.reject(near, &unsafe?(&1, v)) do
+        [] -> far_ore(v, near)
+        safe -> safe
+      end
 
     case move? && choices do
       [_ | _] ->
         best = pick_deposit(unit, v, choices)
         if best["id"] == unit["targetId"], do: :no_change, else: %{"type" => "Gather", "unitIds" => [unit["id"]], "targetId" => best["id"]}
 
+      [] ->
+        take_cover(unit, v)
+
       _ ->
         :no_change
     end
   end
 
-  defp worker(_unit, _view), do: :no_change
+  defp worker(unit, v), do: take_cover(unit, v)
+
+  # Safe ore away from our drop-offs: on our side of the map; with none there and none by a
+  # drop-off at all, any we can see (as before we remembered ore).
+  defp far_ore(v, near) do
+    far = Enum.reject(v.deposits, &(&1 in near or unsafe?(&1, v)))
+
+    case Enum.filter(far, &View.ours?(v, View.pos(&1))) do
+      [] when near == [] -> Enum.filter(far, &(not Map.has_key?(&1, "seen")))
+      ours -> ours
+    end
+  end
+
+  # An idle worker with nothing safe to do stands by the tower closest to it, not out in the open.
+  defp take_cover(%{"activity" => "Idle"} = unit, v) do
+    here = View.pos(unit)
+
+    case Roles.shelter(v, here) do
+      {x, y} = spot -> if View.dist(here, spot) > 2, do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}, else: :no_change
+      nil -> :no_change
+    end
+  end
+
+  defp take_cover(_unit, _v), do: :no_change
 
   # The shortest trip to a drop-off (closest to the worker on a tie) that has room; if every
   # one is crowded, the shortest anyway. Crowding a close field beats walking far.
@@ -223,8 +276,8 @@ defmodule Swarm.UnitBrain do
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       raze = role in [:attacker, :guard] && Map.get(s, :raze) -> {:attack, raze}
-      s.threat && not Roles.covered?(v, s.threat.pos) -> {:attack_move, s.threat.pos}
-      help = role == :attacker && closest_help(v, unit) -> {:attack_move, help}
+      s.threat && not Roles.covered?(v, s.threat.pos) -> {:attack_move, cover(v, s, s.threat.pos)}
+      help = role == :attacker && closest_help(v, unit) -> {:attack_move, cover(v, s, help)}
       role == :guard -> {:move, s.post}
       true -> {:move, s.rally}
     end
@@ -268,8 +321,17 @@ defmodule Swarm.UnitBrain do
   defp escort(v, s, outpost) do
     case Roles.threat_at(v, outpost) do
       nil -> {:move, Roles.escort_post(outpost, s.target)}
-      threat -> {:attack_move, threat.pos}
+      threat -> {:attack_move, cover(v, s, threat.pos)}
     end
+  end
+
+  # Where to meet an attack at `pos`: there, unless home is falling back (`Roles.fall_back?/2`) and
+  # none of our towers reaches it. Then by the tower closest to it, where the workers run to: we
+  # cover them there, and whatever follows them fights the towers too.
+  defp cover(v, s, pos) do
+    if Map.get(s, :fall_back, false) and not Roles.sheltered?(v, pos),
+      do: Roles.shelter(v, pos) || pos,
+      else: pos
   end
 
   # Not under an enemy tower: a strike goes there, not one unit at a time.
@@ -327,8 +389,8 @@ defmodule Swarm.UnitBrain do
 
   @doc """
   What each of our scouts is doing, for the leader's log: [{id, job, position}], where the job is
-  `:look` (looking at a target before a wave leaves), `:wave` (working in front of the wave out)
-  or `:post` (watching its side from halfway).
+  `:look` (looking at a target before a wave leaves), `:wave` (working in front of the wave out),
+  `:survey` (looking round our side for ore) or `:post` (watching its side from halfway).
   """
   def scout_jobs(%View{} = v, strategy) do
     for u <- View.units_of(v, "Scout"), do: {u["id"], elem(scout_job(v, strategy, u), 0), View.pos(u)}
@@ -340,12 +402,18 @@ defmodule Swarm.UnitBrain do
     spot = Map.get(s, :look)
     front = s.wave && s.target && s.rally && wave_front(v, s.wave, s.target)
 
+    survey = Map.get(s, :survey)
+
     cond do
       spot && looker(v, spot) == unit["id"] -> {:look, spot}
       front && looker(v, s.target) == unit["id"] -> {:wave, front}
+      survey && surveyor?(v, unit) -> {:survey, survey}
       true -> {:post, watch_post(v, unit)}
     end
   end
+
+  # The scout that looks for ore when the leader asks (`strategy.survey`): the first by id.
+  defp surveyor?(v, unit), do: unit["id"] == v |> View.units_of("Scout") |> Enum.map(& &1["id"]) |> Enum.min()
 
   # A threatened scout steps back: with the wave, behind it (and stays behind it a while), if that
   # takes it away from the threat; otherwise just out of the threat's reach (`step_back/4`).
@@ -365,6 +433,7 @@ defmodule Swarm.UnitBrain do
   defp scout_post(v, _s, _here, {:look, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
   defp scout_post(v, s, here, {:wave, front}, phase), do: with_wave(v, s, here, front, phase)
   defp scout_post(v, _s, _here, {:post, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
+  defp scout_post(v, _s, _here, {:survey, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
 
   # A little past the threat's reach (`@scout_clear` tiles), straight away from it: the scout keeps
   # watching, not running home. Taking damage, at least 3 tiles farther than now (something we

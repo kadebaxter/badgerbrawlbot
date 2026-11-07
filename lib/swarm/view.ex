@@ -26,6 +26,7 @@ defmodule Swarm.View do
     researching: [],
     events: [],
     shells: [],
+    # In sight, plus remembered ones once `with_known_ore/2` has run (those have a "seen" tick).
     deposits: [],
     enemy_starts: [],
     # start position => player slot, for the opponents still in
@@ -144,4 +145,46 @@ defmodule Swarm.View do
   end
 
   def completed?(%__MODULE__{status: status}), do: status == "Completed"
+
+  @doc """
+  The deposits we can see plus those we remember (`known`: id => deposit as last seen, with
+  "seen", the tick) that are out of sight now. The server only sends the ore in sight, but
+  deposits never move and a Gather may name one in the fog. A remembered one keeps its "seen".
+  """
+  def with_known_ore(%__MODULE__{deposits: visible} = v, known) do
+    ids = MapSet.new(visible, & &1["id"])
+    remembered = for {id, d} <- Enum.sort(known), not MapSet.member?(ids, id), do: d
+    %{v | deposits: visible ++ remembered}
+  end
+
+  @doc "Deposits in sight right now (not remembered ones)."
+  def deposits_in_sight(%__MODULE__{deposits: deposits}), do: Enum.reject(deposits, &Map.has_key?(&1, "seen"))
+
+  @doc """
+  Whether we can see `pos` now, by the game's rule (Euclidean, each unit and finished building
+  by its own vision), one tile short to be safe.
+  """
+  def in_sight?(%__MODULE__{} = v, {x, y}) do
+    eyes = v.my_units ++ Enum.filter(v.my_buildings, & &1["completed"])
+
+    Enum.any?(eyes, fn e ->
+      r = sight(e) - 1
+      (e["x"] - x) ** 2 + (e["y"] - y) ** 2 <= r * r
+    end)
+  end
+
+  # From the bot guide's tables.
+  @sight %{"Worker" => 5, "Soldier" => 5, "Archer" => 6, "Scout" => 8, "Trebuchet" => 7, "GuardTower" => 7}
+  defp sight(e), do: Map.get(@sight, e["type"], 6)
+
+  @doc """
+  Whether `pos` is on our side of the map: closer to our Command Center than to any opponent's
+  start. Everything is, with no Command Center.
+  """
+  def ours?(%__MODULE__{cc: nil}, _pos), do: true
+
+  def ours?(%__MODULE__{cc: cc} = v, pos) do
+    home = dist(pos, pos(cc))
+    Enum.all?(v.enemy_starts, &(home < dist(pos, &1)))
+  end
 end

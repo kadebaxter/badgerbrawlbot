@@ -203,8 +203,15 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Something to fight within 6 tiles | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
-| Guard or attacker, enemies near the main base | Attack-move to the threat |
-| Attacker, an outpost or workers in the field under attack | Go help the closest (guards stay home) |
+| Guard or attacker, enemies near the main base | Attack-move to the threat (falling back, if no tower of ours reaches it: to the tower closest to it) |
+| Attacker, an outpost or workers in the field under attack | Go help the closest (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
+
+**Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
+what is home to meet them, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
+`strategy.fall_back`): workers run for cover, defenders gather by the towers nearest the attack to
+cover them and fight whatever follows them there (with the towers), and home fighters don't go
+after those raiders, only fight back against one in range. It is the same comparison that calls
+a wave home, so the wave coming back usually ends it.
 | Guard | Stand at the post (behind the front tower, else the rally point) |
 | Attacker | Wait at the rally point |
 
@@ -305,9 +312,23 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
    Harvesting1, Weapons1, Armor1, then tier 2. Barracks train Soldiers and Archers with the rest.
-   Miners about to be hit run to the closest of our fighters or drop-offs on their side of the
-   enemy, and don't mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
-   workers on it, else the shortest. When home has been short of ore for 30 ticks in a row (under
+   Miners run for cover: from an enemy fighter about to hit them, and, out of our towers' reach,
+   from one within 6 tiles when the enemies there are stronger than our fighters and towers there
+   or home is falling back (below). Cover is next to the closest of our Guard Towers on their side
+   of the enemy (else the closest of our fighters or drop-offs on their side of it). They don't
+   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip with fewer than 3
+   workers on it, else the shortest. With all of that unsafe, safe ore farther away on our side
+   (where the rule below puts a depot); with no safe ore at all, an idle worker waits next to the
+   closest of our towers instead of standing in the field.
+   **Ore is remembered:** the server only sends the deposits in sight, but deposits never move and a
+   Gather may name one in the fog, so the leader keeps every deposit it has seen (forgetting one
+   once it should see it and doesn't: mined out) and adds them to the view the brain and every unit
+   plan with. Once we have a scout, the first one **surveys** our side for ore before taking its post:
+   spots on two rings (10 and 20 tiles) around the Command Center, on our side of the map, each
+   done once anything of ours sees it (or after 40 ticks of trying).
+   **Ore for workers:** once a Barracks is up, 100 ore (two workers) is kept back from everything but
+   workers, and with fewer than 5 workers left, workers are trained before anything else: losing
+   every worker with nothing banked would end the economy for good. When home has been short of ore for 30 ticks in a row (under
    1,500 left within reach of a drop-off, or more than 3 workers per nearby deposit), a Resource
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
    next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.

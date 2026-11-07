@@ -311,6 +311,72 @@ defmodule Swarm.Roles do
 
   def recall(_v, nil), do: nil
 
+  @doc """
+  Raiders (`raiders/1`) that none of our finished Guard Towers reaches, Trebuchets aside (a sortie
+  goes for those): where defenders fight without the towers' help.
+  """
+  def exposed_raiders(%View{} = v) do
+    Enum.reject(raiders(v), &(&1["type"] == "Trebuchet" or sheltered?(v, View.pos(&1))))
+  end
+
+  @doc """
+  Should home fall back to the towers? When the raiders out of our towers' reach are stronger than
+  what is home to meet them (`home_strength/3`). Then fighters at home don't go out to them: they
+  go to the towers by the workers and cover them (`shelter/2`), and fight what follows them there.
+  """
+  def fall_back?(%View{cc: nil}, _wave), do: false
+
+  def fall_back?(%View{} = v, wave) do
+    case exposed_raiders(v) do
+      [] -> false
+      exposed -> strength(exposed) > home_strength(v, wave, exposed)
+    end
+  end
+
+  @doc "Whether one of our finished Guard Towers reaches `pos`."
+  def sheltered?(%View{} = v, pos) do
+    Enum.any?(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+  end
+
+  @doc """
+  Where to take cover from `from`: next to our finished Guard Tower closest to it, on the Command
+  Center's side of the tower. With `away_from` (an enemy's position), only towers on our side of
+  it (closer to `from` than to the enemy), so the way there doesn't go past it. The Command Center
+  with no such tower; nil without one.
+  """
+  def shelter(%View{} = v, from, away_from \\ nil) do
+    towers =
+      for t <- View.buildings_of(v, "GuardTower"),
+          t["completed"],
+          pos = View.pos(t),
+          away_from == nil or View.dist(pos, from) < View.dist(pos, away_from),
+          do: pos
+
+    case {towers, v.cc} do
+      {[_ | _], cc} ->
+        {tx, ty} = Enum.min_by(towers, &{View.dist(&1, from), &1})
+        {cx, cy} = if cc, do: View.pos(cc), else: {tx, ty}
+        {tx + sign(cx - tx), ty + sign(cy - ty)}
+
+      {[], nil} ->
+        nil
+
+      {[], cc} ->
+        View.pos(cc)
+    end
+  end
+
+  @doc """
+  Whether the enemy fighters within `radius` of `pos` are stronger than our fighters there and
+  our towers that reach it.
+  """
+  def losing_at?(%View{} = v, pos, radius) do
+    near? = &(View.dist(View.pos(&1), pos) <= radius)
+    theirs = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    theirs != [] and strength(theirs) > strength(Enum.filter(fighters(v), near?) ++ towers, v.me)
+  end
+
   @doc "The average position of the wave's living members, or nil."
   def wave_center(%View{} = v, wave) do
     case Enum.filter(v.my_units, &(&1["id"] in members(wave))) do
@@ -346,8 +412,12 @@ defmodule Swarm.Roles do
     end
   end
 
-  @doc "Our fighter id => the enemy fighter id it goes after."
+  @doc """
+  Our fighter id => the enemy fighter id it goes after. Falling back (`fall_back?/2`), home
+  fighters don't go after raiders out of our towers' reach: only fight back.
+  """
   def assignments(%View{} = v, wave) do
+    held_back = if fall_back?(v, wave), do: MapSet.new(exposed_raiders(v), & &1["id"]), else: MapSet.new()
     enemies = Enum.reject(v.enemy_units, &(&1["type"] == "Worker"))
     extra_armor = if enemy_tech_lab?(v), do: 1, else: 0
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
@@ -357,7 +427,8 @@ defmodule Swarm.Roles do
           e <- enemies,
           d = View.dist(View.pos(o), View.pos(e)),
           d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius),
-          may_chase?(v, wave, o, e) or fight_back?(e, o) do
+          (may_chase?(v, wave, o, e) and (o["id"] in members(wave) or not MapSet.member?(held_back, e["id"]))) or
+            fight_back?(e, o) do
         can_hit_us = if d in Map.get(stats(e), :min_range, 0)..stats(e).range//1, do: 0, else: 1
         siege = if e["type"] == "Trebuchet", do: 0, else: 1
         already_on_it = if o["targetId"] == e["id"], do: 0, else: 1

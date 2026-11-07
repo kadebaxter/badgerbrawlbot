@@ -490,7 +490,9 @@ defmodule Swarm.GameLoop do
   defp tick(view, st) do
     started = System.monotonic_time(:millisecond)
     {units, recent} = Units.reconcile(view.my_units, view.tick, st.recent)
-    {strategy, commands, memory} = Brain.plan(view, st.memory, st.terrain)
+    # The ore we remember goes into the view first: the brain and every unit plan with it.
+    {view, memory} = Brain.see(view, st.memory)
+    {strategy, commands, memory} = Brain.plan(view, memory, st.terrain)
 
     if memory != st.memory, do: Ra.command({:brain, memory})
     planned = System.monotonic_time(:millisecond)
@@ -658,12 +660,14 @@ defmodule Swarm.GameLoop do
     " | took #{total}ms of #{tick_ms} (brain #{brain}, units #{waited} of #{deadline_ms}) | on time: #{by_node}" <> late
   end
 
-  # How the economy is doing: "workers 22 (3 idle) | ore in sight 14 (6 in reach)". Ore in reach
-  # is within reach of a finished drop-off; all idle with none in sight means nothing left to mine.
+  # How the economy is doing: "workers 22 (3 idle) | ore known 20 (14 in sight, 6 in reach)". Known
+  # counts the deposits we remember out of sight; in reach is within reach of a finished drop-off.
   defp economy_info(view) do
     workers = View.units_of(view, "Worker")
     idle = Enum.count(workers, &(&1["activity"] == "Idle"))
-    "workers #{length(workers)} (#{idle} idle) | ore in sight #{length(view.deposits)} (#{length(View.near_deposits(view))} in reach)"
+
+    "workers #{length(workers)} (#{idle} idle) | ore known #{length(view.deposits)} " <>
+      "(#{length(View.deposits_in_sight(view))} in sight, #{length(View.near_deposits(view))} in reach)"
   end
 
   defp finish(st) do
