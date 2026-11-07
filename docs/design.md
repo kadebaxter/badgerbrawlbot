@@ -201,7 +201,8 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 |---|---|
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | An enemy fighter to fight within 6 tiles | Attack it (see below) |
-| An enemy tower shooting at us (one of our units in its reach) within 6 tiles | With our fighters within 8 of it at least as strong as it and the enemy fighters by it: attack it (walk at it first if we can't see it); else, in its reach, step 2 tiles past it |
+| In the wave, an enemy tower within 6 tiles with one of the wave in its reach | Attack it (walk at it first if we can't see it); whether the wave goes on is the wave's call (it is recalled when outmatched) |
+| At home, in an enemy tower's reach (plus one) | Step 2 tiles past its reach: home fighters never go after towers (a strike does, below) |
 | The one sent to look where we were hit by something unseen | Go there (a scout) or a few tiles from there toward the enemy (a fighter) |
 | Within 7 of a spot where we were hit by something unseen | Step 7 tiles from it toward the rally point |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
@@ -218,10 +219,11 @@ loses HP with nothing we see or know of able to reach it was hit by something un
 always such a tower: the leader marks the spot (`strategy.hidden`) and sends the closest scout
 there (it sees 8, the whole area a tower could shoot from), else the closest fighter a few tiles
 toward the enemy; everyone else steps out of the area. Once the tower is seen the server keeps
-reporting it, and the tower rule above takes over. A spot with no hit for 20 ticks is dropped.
+reporting it, and the tower rule above takes over. A spot with no hit for 20 ticks is dropped. A
+hit with an enemy fighter we can see within 8 tiles is part of a fight, not a hidden attacker.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
-what is home to meet them, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
+everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
 `strategy.fall_back`): workers run for cover, defenders gather by the towers nearest the attack to
 cover them and fight whatever follows them there (with the towers), and home fighters don't go
 after those raiders, only fight back against one in range. It is the same comparison that calls
@@ -250,10 +252,11 @@ counterattack. When no wave leaves, the leader's 10-tick log line says why (`wai
 An enemy tower at our door (finished, within 12 of one of our bases): home fighters never walk
 into its reach (its range + 1) one at a time, not even to meet enemy units standing by it
 (`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
-any wave: everyone at home (guards and attackers) at once, when that is at least 8 fighters with
+any wave, but never while home is being raided: the attackers at home at once (the guards stay, so
+the base is never empty), when that is at least 8 of them with
 the strength of the tower (4 soldiers) plus 1.5× the strongest player's units by it. The strike is a wave whose target is
 the tower, and comes home once the tower is down (or too few are left, it is outmatched by the same
-measure, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
+measure, home can't hold a raid without it, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
 and not under a tower, is razed at once by home fighters (`strategy.raze`).
 
 Siege at our door. The leader remembers our buildings' HP; one losing HP with nothing we can see
@@ -273,10 +276,11 @@ The serum: a once-a-match superpower the game keeps out of its published docs (G
 `/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
 ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and
 every player is told when we take it. It is kept for when home is being overrun and the help we
-have won't do: the brain asks for it (`strategy.serum`) when a raid of at least ~4 soldiers'
+have won't do: the brain asks for it (`strategy.serum`) when a raid of at least ~8 soldiers'
 strength hits home, we have 8 Soldiers or more, and either a wave out that can be back within 15
 ticks can't hold it even together with home (otherwise recalling the wave is enough), or, with no
-wave that close, the raid is at least 1.25× what can meet it at home (not a coin flip). Never for the wave's own fights
+wave that close, the raid is at least 1.25× everything at home, wherever it stands (not a coin flip,
+and not just because home's fighters are across the base). Never for the wave's own fights
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.

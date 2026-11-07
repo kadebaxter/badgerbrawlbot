@@ -283,7 +283,7 @@ defmodule Swarm.UnitBrain do
     cond do
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
-      job = Roles.tower_job(v, unit) -> tower_intent(v, job)
+      job = Roles.tower_job(v, s.wave, unit) -> tower_intent(v, job)
       look = looking(s, unit) -> {:move, look}
       away = clear_of_hidden(unit, s) -> {:move, away}
       enemy = Roles.leftover_target(v, s.wave, unit) -> {:attack, enemy["id"]}
@@ -299,7 +299,7 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # A tower shooting at us (`Roles.tower_job/2`): attack it if we can see it, else walk at it
+  # A tower shooting at the wave (`Roles.tower_job/3`): attack it if we can see it, else walk at it
   # until we do (the server lets us attack only what we see, and our Soldiers often can't see a
   # tower that reaches them); or step out of its reach.
   defp tower_intent(v, {:hit, tower}) do

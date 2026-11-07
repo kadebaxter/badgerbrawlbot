@@ -42,45 +42,46 @@ defmodule Swarm.TowersTest do
   end
 
   describe "a unit by a tower hitting us" do
+    # Soldiers 201.. in the wave.
+    defp wave(n), do: %{id: 1, members: Enum.to_list(201..(200 + n))}
+    defp attacking(n), do: %{@gather | mode: :attack, wave: wave(n)}
+
     test "enemy fighters come first" do
       ours = soldiers_at(6, 27, 10)
       enemy = unit(900, "Soldier", 27, 11, owner: 1)
       v = view([enemy | ours], buildings: [@tower])
-      assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(201, v, @gather)
+      assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(201, v, attacking(6))
     end
 
-    test "then the tower, with enough of us there to take it" do
+    test "in the wave: then the tower hitting it" do
       v = view(soldiers_at(6, 27, 10), buildings: [@tower])
-      assert {:hit, %{"id" => 800}} = Roles.tower_job(v, hd(soldiers_at(1, 27, 10)))
-      assert {%{"type" => "Attack", "targetId" => 800}, _} = UnitBrain.decide(201, v, @gather)
+      assert {:hit, %{"id" => 800}} = Roles.tower_job(v, wave(6), hd(soldiers_at(1, 27, 10)))
+      assert {%{"type" => "Attack", "targetId" => 800}, _} = UnitBrain.decide(201, v, attacking(6))
     end
 
-    test "home fighters too: it is hitting us" do
-      # Guards and attackers alike; no wave out.
-      v = view(soldiers_at(8, 27, 10), buildings: [@tower])
-      assert {%{"type" => "Attack", "targetId" => 800}, _} = UnitBrain.decide(208, v, @gather)
+    test "in the wave, even a few: whether to go on is the wave's call, not each unit's" do
+      v = view(soldiers_at(2, 27, 10), buildings: [@tower])
+      assert {:hit, _} = Roles.tower_job(v, wave(2), hd(soldiers_at(1, 27, 10)))
     end
 
     test "one we can't see (remembered in the fog): walk at it until we do" do
       v = %{view(soldiers_at(6, 26, 14)) | remembered: [remembered(@tower)]}
-      assert {%{"type" => "Move", "x" => 30, "y" => 10}, _} = UnitBrain.decide(201, v, @gather)
+      assert {%{"type" => "Move", "x" => 30, "y" => 10}, _} = UnitBrain.decide(201, v, attacking(6))
     end
 
-    test "too few of us to take it: step out of its reach, not in one at a time" do
-      v = view(soldiers_at(2, 27, 10), buildings: [@tower])
-      assert {:back_off, {x, y}} = Roles.tower_job(v, hd(soldiers_at(1, 27, 10)))
+    test "at home: never after a tower, however many of us; in its reach, step out of it" do
+      v = view(soldiers_at(12, 27, 10), buildings: [@tower])
+      assert {:back_off, {x, y}} = Roles.tower_job(v, nil, hd(soldiers_at(1, 27, 10)))
       assert View.dist({x, y}, {30, 10}) > 5
       assert {%{"type" => "Move", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, @gather)
     end
 
-    test "enemy fighters by the tower count on its side" do
-      ours = soldiers_at(5, 27, 10)
-      theirs = for i <- 1..4, do: unit(900 + i, "Soldier", 33, 10, owner: 1)
-      assert {:back_off, _} = Roles.tower_job(view(ours ++ theirs, buildings: [@tower]), hd(ours))
+    test "at home, out of its reach: nothing to do about it" do
+      assert Roles.tower_job(view(soldiers_at(6, 20, 10), buildings: [@tower]), nil, hd(soldiers_at(1, 20, 10))) == nil
     end
 
-    test "nothing to do about a tower nobody of ours is near" do
-      assert Roles.tower_job(view(soldiers_at(6, 20, 10), buildings: [@tower]), hd(soldiers_at(1, 20, 10))) == nil
+    test "a tower nobody of the wave is near is left alone" do
+      assert Roles.tower_job(view(soldiers_at(6, 20, 10), buildings: [@tower]), wave(6), hd(soldiers_at(1, 20, 10))) == nil
     end
   end
 
@@ -121,6 +122,12 @@ defmodule Swarm.TowersTest do
       assert strategy.hidden == []
 
       {strategy, _, _} = hit_once([unit(201, "Soldier", 27, 10)], 201, buildings: [@tower])
+      assert strategy.hidden == []
+    end
+
+    test "not in a fight: an enemy fighter we can see nearby may have stepped off or died" do
+      soldier = unit(900, "Soldier", 35, 20, owner: 1)
+      {strategy, _, _} = hit_once([unit(201, "Soldier", 30, 20), soldier], 201)
       assert strategy.hidden == []
     end
 

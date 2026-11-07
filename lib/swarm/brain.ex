@@ -58,7 +58,7 @@ defmodule Swarm.Brain do
   # The serum (once a match, Soldiers ×2 for 30 ticks), for home being overrun: only with this many
   # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
-  @serum_raid 4000
+  @serum_raid 8000
   # ... a wave this many tiles (ticks) from the raid can be back in time: it counts as help;
   # without one, the raid must be at least this many times what home has.
   @help_eta 15
@@ -245,6 +245,8 @@ defmodule Swarm.Brain do
   # this close together one spot, forgotten after this long without another hit, and how far
   # toward the enemy a fighter looking (with no scout) goes from the spot.
   @hidden_max 3
+  # A hit with an enemy fighter we can see this close is part of a fight, not a hidden attacker.
+  @hidden_quiet 8
   @hidden_merge 4
   @hidden_ticks 20
   @peek 3
@@ -405,6 +407,7 @@ defmodule Swarm.Brain do
           prev = Map.get(memory.unit_hp, u["id"]),
           u["hp"] != nil and prev != nil and u["hp"] < prev,
           not Enum.any?(v.enemy_units, &(View.dist(View.pos(&1), View.pos(u)) <= Roles.range(&1) + 1)),
+          not in_a_fight?(v, u),
           not reaches?.(View.pos(u)),
           do: u
 
@@ -432,6 +435,12 @@ defmodule Swarm.Brain do
 
     memory = %{memory | hidden: spots, unit_hp: Map.new(v.my_units, &{&1["id"], &1["hp"]})}
     {Enum.map(spots, &Map.take(&1, [:pos, :by, :look])), memory, notes}
+  end
+
+  # Enemy fighters we can see within `@hidden_quiet` of `unit`: a fight, where a hit from one that
+  # stepped away or died the same tick isn't a mystery.
+  defp in_a_fight?(v, unit) do
+    Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(unit)) <= @hidden_quiet))
   end
 
   # Who looks at each spot: whoever did before while alive, else the closest free scout (it goes
@@ -623,7 +632,7 @@ defmodule Swarm.Brain do
   # A line for the decision log when home starts or stops falling back.
   defp fall_back_note(v, wave, true, false) do
     exposed = Roles.exposed_raiders(v)
-    {theirs, ours} = {Roles.strength(exposed), Roles.home_strength(v, wave, exposed)}
+    {theirs, ours} = {Roles.strength(exposed), Roles.all_home_strength(v, wave, exposed)}
 
     [{:fall_back,
       "#{length(exposed)} raiders out of our towers' reach, strength #{round(theirs)} vs #{round(ours)} at home: " <>
@@ -749,6 +758,8 @@ defmodule Swarm.Brain do
   # comes before any wave; until it can go, nobody walks into the tower's reach
   # (`Swarm.Roles.covered?/2`).
   defp strike(v, memory) do
+    raided = Roles.raiders(v) != []
+
     case Roles.towers_near_home(v) do
       [] ->
         nil
@@ -757,10 +768,15 @@ defmodule Swarm.Brain do
         hold = "strike at player #{tower["owner"]}'s tower at #{fmt(View.pos(tower))}: back from one, #{@strike_rest - (v.tick - memory.strike_back_at)} more ticks"
         {nil, memory.next_wave, [], hold}
 
+      [tower | _] when raided ->
+        hold = "strike at player #{tower["owner"]}'s tower at #{fmt(View.pos(tower))}: not while home is being raided"
+        {nil, memory.next_wave, [], hold}
+
       [tower | _] ->
         pos = View.pos(tower)
         roles = Roles.home_roles(v, nil)
-        group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], do: u
+        # The attackers: the guards stay home, so the base is never left empty.
+        group = for u <- Roles.home(v, nil), roles[u["id"]] == :attacker, do: u
         guards = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @wave_sight))
         {_, theirs} = strongest_player(guards) || {nil, 0}
         need = Roles.strength([tower]) + @margin * theirs
@@ -780,10 +796,10 @@ defmodule Swarm.Brain do
             at: v.tick
           }
 
-          why = "strike at #{at}: #{length(group)} fighters, strength #{round(ours)} vs #{round(need)} for it"
+          why = "strike at #{at}: #{length(group)} attackers, strength #{round(ours)} vs #{round(need)} for it"
           {wave, memory.next_wave, [{:wave_launched, why}], nil}
         else
-          hold = "strike at #{at}: #{length(group)} fighters at home, want #{@strike_min} and strength #{round(need)} (have #{round(ours)})"
+          hold = "strike at #{at}: #{length(group)} attackers at home, want #{@strike_min} and strength #{round(need)} (have #{round(ours)})"
           {nil, memory.next_wave, [], hold}
         end
     end
@@ -955,6 +971,11 @@ defmodule Swarm.Brain do
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: only #{length(alive)} left"}], nil}
 
+      raid = Roles.recall(v, wave) ->
+        {theirs, ours} = raid
+        why = "strike at #{at}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
+
       facing = outmatched(v, alive, wave.tower_pos) ->
         {player, theirs} = facing
         why = "strike at #{at}: outmatched by player #{player}, #{round(Roles.strength(alive))} vs #{round(theirs)}"
@@ -1101,6 +1122,8 @@ defmodule Swarm.Brain do
   end
 
   # The moment for the serum (once a match): home is being overrun and the help we have won't do.
+  # Home is everything at home, wherever it stands (`Roles.all_home_strength/3`), not only what is
+  # by the raid: a raid is only overrunning us if all of home can't meet it.
   # A raid of at least `@serum_raid` hits a base, an outpost or our workers, we have
   # `@serum_soldiers` soldiers or more, and:
   #   - with a wave out that can be back within `@help_eta` ticks (soldiers walk a tile a tick):
@@ -1113,7 +1136,7 @@ defmodule Swarm.Brain do
   defp serum_moment?(v, wave) do
     raiders = Roles.raiders(v)
     raid = Roles.strength(raiders)
-    home = Roles.home_strength(v, wave, raiders)
+    home = Roles.all_home_strength(v, wave, raiders)
     out = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
 
     near? =

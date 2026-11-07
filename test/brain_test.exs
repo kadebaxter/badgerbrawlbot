@@ -856,6 +856,15 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  describe "the serum, kept for a real raid" do
+    test "not for a small early raid, even with home's fighters away from it" do
+      # Six raiders by the Command Center (5940, under 8000); home's ten are across the base.
+      raiders = for i <- 1..6, do: unit(900 + i, "Soldier", 8, 8, owner: 1)
+      home = for s <- soldiers(10), do: %{s | "x" => 20, "y" => 20}
+      assert {%{serum: nil}, _, _} = plan(units: home ++ raiders)
+    end
+  end
+
   describe "the serum" do
     # A wave of ten soldiers out at (45, 45); ten more at home by the rally point.
     defp wave_at_front, do: for(s <- soldiers(10), do: %{s | "x" => 45, "y" => 45})
@@ -903,47 +912,65 @@ defmodule Swarm.BrainTest do
     # Player 1's finished tower at (16, 12), 9 tiles from our Command Center at (7, 7).
     defp their_tower, do: building(800, "GuardTower", 16, 12, 1)
 
-    test "no strike with fewer than eight: it says so, and no wave leaves meanwhile" do
-      # 7 soldiers at home: not enough to go at it.
-      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(7), buildings: [their_tower()])
-      assert hold =~ "strike at player 1's tower at (16,12): 7 fighters at home, want 8"
+    # The seven newest are guards and stay home: 17 soldiers are 10 attackers.
+    test "no strike with fewer than eight attackers: it says so, and no wave leaves meanwhile" do
+      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(14), buildings: [their_tower()])
+      assert hold =~ "strike at player 1's tower at (16,12): 7 attackers at home, want 8"
     end
 
-    test "then everyone at home goes at it together, and it is the target" do
+    test "then the attackers go at it together, the guards stay, and it is the target" do
       assert {%{wave: %{kind: :strike, members: members}, target: {16, 12}, why: [{:wave_launched, "strike at " <> _}]}, _, _} =
-               plan(units: soldiers(10), buildings: [their_tower()])
+               plan(units: soldiers(17), buildings: [their_tower()])
 
-      assert length(members) == 10
+      assert members == Enum.to_list(201..210)
+    end
+
+    test "not while home is being raided" do
+      raiders = for i <- 1..2, do: unit(900 + i, "Soldier", 8, 9, owner: 1)
+      assert {%{wave: wave, hold: hold}, _, _} = plan(units: soldiers(17) ++ raiders, buildings: [their_tower()])
+      refute match?(%{kind: :strike}, wave)
+      assert hold == nil or hold =~ "not while home is being raided"
+    end
+
+    test "comes home when home can't hold a raid without it" do
+      {_, _, memory} = plan(units: soldiers(17), buildings: [their_tower()])
+      raiders = for i <- 1..12, do: unit(900 + i, "Soldier", 8, 9, owner: 1)
+      out = for s <- Enum.take(soldiers(17), 10), do: %{s | "x" => 15, "y" => 11}
+      home = Enum.drop(soldiers(17), 10)
+      assert {%{why: why}, _, _} = plan([units: out ++ home ++ raiders, buildings: [their_tower()], tick: 101], memory)
+      assert Enum.any?(why, &match?({:wave_recalled, "strike at " <> _}, &1))
     end
 
     test "more when it is guarded" do
-      guards = for i <- 1..6, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
-      assert {%{wave: nil, hold: "strike at" <> _}, _, _} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
+      # By the tower, just outside our base (11+ from the Command Center): guarding it, not raiding us.
+      guards = for i <- 1..6, do: unit(900 + i, "Soldier", 19, 14, owner: 1)
+      assert {%{wave: nil, hold: "strike at" <> _}, _, _} = plan(units: soldiers(17) ++ guards, buildings: [their_tower()])
     end
 
     test "a strike that just qualified isn't called back the next tick (one measure for both)" do
       # The tower (3960: theirs, four soldiers) and three of their soldiers by it (2970): it needs
       # 3960 + 1.5 x 2970 = 8415; we have ten (9900).
-      guards = for i <- 1..3, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
-      {s, _, memory} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
+      guards = for i <- 1..3, do: unit(900 + i, "Soldier", 19, 14, owner: 1)
+      {s, _, memory} = plan(units: soldiers(17) ++ guards, buildings: [their_tower()])
       assert %{wave: %{kind: :strike}} = s
 
       # Walking up to it: still out, not "outmatched" by the very tower it was sized for.
-      closer = for u <- soldiers(10), do: %{u | "x" => 14, "y" => 11}
+      closer = for u <- Enum.take(soldiers(17), 10), do: %{u | "x" => 14, "y" => 11}
+      closer = closer ++ Enum.drop(soldiers(17), 10)
       assert {%{wave: %{kind: :strike}}, _, _} = plan([units: closer ++ guards, buildings: [their_tower()], tick: 101], memory)
     end
 
     test "after a strike comes back, none for 20 ticks" do
       memory = %{Brain.new_memory() | strike_back_at: 95}
       assert {%{wave: nil, hold: "strike at player 1's tower at (16,12): back from one, 15 more ticks"}, _, _} =
-               plan([units: soldiers(10), buildings: [their_tower()]], memory)
+               plan([units: soldiers(17), buildings: [their_tower()]], memory)
 
-      assert {%{wave: %{kind: :strike}}, _, _} = plan([units: soldiers(10), buildings: [their_tower()], tick: 115], memory)
+      assert {%{wave: %{kind: :strike}}, _, _} = plan([units: soldiers(17), buildings: [their_tower()], tick: 115], memory)
     end
 
     test "the strike comes home once the tower is down" do
-      {_, _, memory} = plan(units: soldiers(10), buildings: [their_tower()])
-      at_it = for s <- soldiers(10), do: %{s | "x" => 15, "y" => 11}
+      {_, _, memory} = plan(units: soldiers(17), buildings: [their_tower()])
+      at_it = for s <- soldiers(17), do: %{s | "x" => 15, "y" => 11}
       assert {%{wave: nil, why: [{:wave_recalled, "strike: player 1's tower at (16,12) is down"}]}, _, _} =
                plan([units: at_it, tick: 130], memory)
     end

@@ -127,6 +127,11 @@ defmodule Swarm.EconomyTest do
       refute Roles.fall_back?(View.new(state(units: miners() ++ raid(2) ++ home(8, 24, 8), buildings: [@tower])), nil)
     end
 
+    test "not for one raider just because home's fighters are back at the rally point" do
+      # One soldier by the workers, 15+ tiles from home's eight: all of home can meet it.
+      refute Roles.fall_back?(View.new(state(units: miners() ++ raid(1) ++ home(8), buildings: [@tower])), nil)
+    end
+
     test "not for raiders our towers reach: there the towers fight with us" do
       tower = building(5, "GuardTower", 24, 9)
       refute Roles.fall_back?(View.new(state(units: miners() ++ raid(3) ++ home(2), buildings: [tower])), nil)

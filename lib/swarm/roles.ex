@@ -46,8 +46,6 @@ defmodule Swarm.Roles do
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
-  # Our fighters this close to an enemy tower shooting at us count toward taking it down.
-  @tower_reach 8
   @siege_engage_radius 10
   # A Trebuchet this close to one of our buildings is attacking it (its range is 7).
   @siege_reach 9
@@ -323,7 +321,7 @@ defmodule Swarm.Roles do
 
   @doc """
   Should home fall back to the towers? When the raiders out of our towers' reach are stronger than
-  what is home to meet them (`home_strength/3`). Then fighters at home don't go out to them: they
+  everything at home (`all_home_strength/3`). Then fighters at home don't go out to them: they
   go to the towers by the workers and cover them (`shelter/2`), and fight what follows them there.
   """
   def fall_back?(%View{cc: nil}, _wave), do: false
@@ -331,8 +329,20 @@ defmodule Swarm.Roles do
   def fall_back?(%View{} = v, wave) do
     case exposed_raiders(v) do
       [] -> false
-      exposed -> strength(exposed) > home_strength(v, wave, exposed)
+      exposed -> strength(exposed) > all_home_strength(v, wave, exposed)
     end
+  end
+
+  @doc """
+  Like `home_strength/3`, but every fighter and Trebuchet at home counts, wherever it is: all we
+  could send at these raiders. For calls about home as a whole (falling back, the serum), so one
+  raider out of sight of the rally point doesn't look like a raid nobody can meet.
+  """
+  def all_home_strength(%View{} = v, wave, raiders) do
+    siege = Enum.reject(View.units_of(v, "Trebuchet"), &(&1["id"] in members(wave)))
+    near? = fn pos, reach -> Enum.any?(raiders, &(View.dist(View.pos(&1), pos) <= reach)) end
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and near?.(View.pos(&1), range(&1) + 1)))
+    strength(home(v, wave) ++ siege ++ towers, v.me)
   end
 
   @doc "Whether one of our finished Guard Towers reaches `pos`."
@@ -440,32 +450,39 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  What `unit` does about the towers shooting at us, once there are no enemy fighters for it
-  (`fighter_target/3` first): the closest one within `@engage_radius`, if our fighters within
-  `@tower_reach` of it are at least as strong as it and the enemy fighters by it,
-  `{:hit, tower}` (wave or home alike: it is hitting us); if they aren't, and the unit is in its
-  reach, `{:back_off, spot}`, just out of its reach, so we don't feed it one at a time. Nil with
-  no such tower.
+  What `unit` does about the enemy towers shooting at us, once there are no enemy fighters for it
+  (`fighter_target/3` first):
+
+  - in the wave: the closest tower within `@engage_radius` that has one of the wave in its reach,
+    `{:hit, tower}`. Whether the wave can take what it meets is the wave's call (it is recalled
+    when outmatched), so its members don't each turn back on their own.
+  - at home: never after a tower (defenders defend; a strike deals with a tower at our door once
+    home is calm). In a tower's reach (plus one), `{:back_off, spot}`, just out of it.
+
+  Nil otherwise.
   """
-  def tower_job(%View{} = v, unit) do
+  def tower_job(%View{} = v, wave, unit) do
     here = View.pos(unit)
+    towers = enemy_towers(v)
 
-    case v |> towers_hitting() |> Enum.filter(&(View.dist(View.pos(&1), here) <= @engage_radius)) do
-      [] ->
-        nil
+    if unit["id"] in members(wave) do
+      wave_units = Enum.filter(v.my_units, &(&1["id"] in members(wave)))
 
-      towers ->
-        tower = Enum.min_by(towers, &{View.dist(View.pos(&1), here), &1["id"]})
-        at = View.pos(tower)
-        near? = &(View.dist(View.pos(&1), at) <= @tower_reach)
-        ours = Enum.filter(fighters(v), near?)
-        theirs = [tower | Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))]
-
-        cond do
-          strength(ours, v.me) >= strength(theirs) -> {:hit, tower}
-          View.dist(here, at) <= range(tower) + 1 -> {:back_off, out_of_reach(v, here, tower)}
-          true -> nil
-        end
+      towers
+      |> Enum.filter(fn t ->
+        View.dist(View.pos(t), here) <= @engage_radius and
+          Enum.any?(wave_units, &(View.dist(View.pos(&1), View.pos(t)) <= range(t)))
+      end)
+      |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
+      |> case do
+        nil -> nil
+        tower -> {:hit, tower}
+      end
+    else
+      case Enum.filter(towers, &(View.dist(View.pos(&1), here) <= range(&1) + 1)) do
+        [] -> nil
+        near -> {:back_off, out_of_reach(v, here, Enum.min_by(near, &{View.dist(View.pos(&1), here), &1["id"]}))}
+      end
     end
   end
 
