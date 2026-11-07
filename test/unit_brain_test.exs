@@ -341,6 +341,11 @@ defmodule Swarm.UnitBrainTest do
     end
   end
 
+  test "a checker goes to its spot around a building hit by something we can't see" do
+    check = Map.put(@gather, :check, %{2 => {21, 7}})
+    assert %{"type" => "Attack", "x" => 21, "y" => 7} = cmd(unit(2, "Soldier", 10, 10), check)
+  end
+
   describe "scouts" do
     # Us at (7, 7), the enemy at (56, 56): halfway is (31, 31).
     test "a scout waits halfway to its neighbor" do

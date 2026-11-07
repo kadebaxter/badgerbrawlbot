@@ -229,6 +229,19 @@ wave whose target is the tower, and comes home once the tower is down (or too fe
 outmatched, or after 120 ticks). An enemy building still going up within 12 of one of our bases,
 and not under a tower, is razed at once by home fighters (`strategy.raze`).
 
+Siege at our door. The leader remembers our buildings' HP; one losing HP with nothing we can see
+able to reach it is being shelled from out of sight (a Trebuchet reaches 7, a tower 5, and a tower
+can't see its own corners). Up to 4 home fighters go to look, one each to the four sides of it, 7
+tiles out, since shells can come from anywhere; a checker that dies has found them, and everyone at
+home attacks into that area. Once we can see enemy Trebuchets in reach of our buildings, a sortie
+goes at them: everyone at home (guards and attackers) at once, at even strength with the enemy
+units there (not the 1.5 a wave wants: they are knocking our buildings down meanwhile), at least 4,
+Trebuchets first. It follows the siege and comes home once it is cleared (or too few are left, it
+is outmatched, or after 100 ticks). Enemy sites within 20 tiles of one of our bases, and finished
+buildings within 12 (a Barracks or a Command Center built at our door), are razed by home fighters
+once there are no enemy fighters to fight; leftover fighters split, half on workers and half on
+buildings, so building and producing both stop.
+
 The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
 `/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
 ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and

@@ -268,6 +268,15 @@ defmodule Swarm.RolesTest do
       assert Roles.target(v, nil, ours) == nil
     end
 
+    test "after fighters, half take workers first and half buildings first" do
+      worker = unit(900, "Worker", 13, 12, owner: 1)
+      barracks = building(800, "Barracks", 12, 13, 1)
+      v = View.new(state(units: [worker], buildings: [barracks]))
+      wave = %{id: 1, members: [202, 203]}
+      assert %{"id" => 900} = Roles.target(v, wave, unit(202, "Soldier", 12, 11))
+      assert %{"id" => 800} = Roles.target(v, wave, unit(203, "Soldier", 12, 11))
+    end
+
     test "then construction sites, then other buildings, and Command Centers last" do
       ours = unit(201, "Soldier", 12, 11)
       site = Map.put(building(802, "Barracks", 14, 14, 1), "completed", false)

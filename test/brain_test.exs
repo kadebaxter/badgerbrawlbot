@@ -926,6 +926,69 @@ defmodule Swarm.BrainTest do
     end
   end
 
+  describe "siege at our door" do
+    # Our tower at (14, 7), at 300 of 500 HP; it was 500 last tick.
+    defp hit_tower, do: Map.put(building(40, "GuardTower", 14, 7), "hp", 300)
+    defp was_whole, do: %{Brain.new_memory() | hp: %{40 => 500}}
+
+    test "hit by something we can't see: four go to look, one to each side of it" do
+      {s, _, memory} = plan([units: soldiers(12), buildings: [hit_tower()]], was_whole())
+      assert map_size(s.check) == 4
+      assert Enum.sort(Map.values(s.check)) == Enum.sort([{14, 0}, {21, 7}, {14, 14}, {7, 7}])
+      assert [{:siege_check, "GuardTower at (14,7) is being hit by something we can't see: 4 checking around it"} | _] = s.why
+      assert %{check: %{building: 40, found: nil}} = memory
+    end
+
+    test "not when we can see what is hitting it" do
+      archer = unit(900, "Archer", 17, 7, owner: 1)
+      assert {%{check: check}, _, _} = plan([units: soldiers(12) ++ [archer], buildings: [hit_tower()]], was_whole())
+      assert check == %{}
+    end
+
+    test "a checker dies: everyone at home attacks into that area" do
+      {s, _, memory} = plan([units: soldiers(12), buildings: [hit_tower()]], was_whole())
+      {dead, spot} = Enum.find(s.check, fn {_id, spot} -> spot == {21, 7} end)
+      left = Enum.reject(soldiers(12), &(&1["id"] == dead))
+
+      assert {%{wave: %{kind: :sortie, spot: ^spot}, target: ^spot, why: why}, _, _} =
+               plan([units: left, buildings: [hit_tower()], tick: 101], memory)
+
+      assert Enum.any?(why, &match?({:siege_found, _}, &1))
+      assert Enum.any?(why, &match?({:wave_launched, "sortie at the siege by (21,7)" <> _}, &1))
+    end
+
+    test "trebuchets in sight by our buildings: a sortie at even strength, trebuchets and all" do
+      trebs = for i <- 1..2, do: unit(900 + i, "Trebuchet", 20, 12, owner: 1)
+      escort = for i <- 1..5, do: unit(910 + i, "Soldier", 21, 13, owner: 1)
+
+      # 2 x 750 + 5 x 990 = 6450 there: six soldiers (5940) aren't enough, seven (6930) are.
+      assert {%{wave: nil, hold: "sortie at the siege" <> _}, _, _} = plan(units: soldiers(6) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert {%{wave: %{kind: :sortie, members: members}}, _, _} = plan(units: soldiers(7) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert length(members) == 7
+    end
+
+    test "the sortie comes home once the siege is gone and it has been there" do
+      trebs = for i <- 1..2, do: unit(900 + i, "Trebuchet", 20, 12, owner: 1)
+      {_, _, memory} = plan(units: soldiers(7) ++ trebs, buildings: [hit_tower()])
+      there = for s <- soldiers(7), do: %{s | "x" => 20, "y" => 11}
+      assert {%{wave: nil, why: [{:wave_recalled, "sortie: the siege by (20,12) is cleared"} | _]}, _, _} =
+               plan([units: there, buildings: [hit_tower()], tick: 120], memory)
+    end
+  end
+
+  describe "the builder: buildings at our door" do
+    test "sites within 20 of a base are razed, and finished buildings within 12" do
+      site = Map.put(building(801, "Barracks", 25, 7, 1), "completed", false)
+      assert {%{raze: 801}, _, _} = plan(units: soldiers(5), buildings: [site])
+
+      barracks = building(802, "Barracks", 17, 7, 1)
+      assert {%{raze: 802}, _, _} = plan(units: soldiers(5), buildings: [barracks])
+
+      far = building(803, "Barracks", 25, 7, 1)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(5), buildings: [far])
+    end
+  end
+
   # A backup Command Center out of the way, as the build order puts one.
   defp backup_cc, do: building(19, "CommandCenter", 40, 20)
 

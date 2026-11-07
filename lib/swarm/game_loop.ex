@@ -698,6 +698,7 @@ defmodule Swarm.GameLoop do
   defp wave_info(nil), do: ""
   defp wave_info(%{all_in: true} = wave), do: " (ALL IN: #{length(wave.members)})"
   defp wave_info(%{kind: :strike} = wave), do: " (strike at a tower: #{length(wave.members)} out)"
+  defp wave_info(%{kind: :sortie} = wave), do: " (sortie at a siege: #{length(wave.members)} out)"
   defp wave_info(wave), do: " (wave #{wave.id}: #{length(wave.members)} out)"
 
   # "swarm-0" for swarm@swarm-0.swarm.netrts.svc.cluster.local (the pod); the node itself otherwise.

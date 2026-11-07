@@ -61,6 +61,15 @@ defmodule Swarm.Brain do
   @strike_min 8
   @strike_tower 7000
   @strike_ticks 120
+  # Siege by our base (see `siege_watch/2` and `sortie/3`): checkers, how far out around the
+  # building they look, for how long; a sortie's smallest size and longest outing.
+  @checkers 4
+  @check_radius 7
+  @check_ticks 60
+  @sortie_min 4
+  @sortie_ticks 100
+  # Enemy sites this close to one of our bases are razed (finished buildings within 12).
+  @raze_reach 20
   # The backup Command Center (see `site/4`, `:hideout`): a map corner is free with no base start
   # within `@corner_free` of it, and the backup goes within `@corner_zone` of one; at least
   # `@backup_near` from our base; along our edge (failing a free corner) no more than `@backup_to`
@@ -239,7 +248,8 @@ defmodule Swarm.Brain do
           hold: String.t() | nil,
           look: pos() | nil,
           serum: :take | nil,
-          raze: integer() | nil
+          raze: integer() | nil,
+          check: %{integer() => pos()}
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -267,6 +277,10 @@ defmodule Swarm.Brain do
       recalled_at: nil,
       raid: nil,
       look: nil,
+      # Our buildings' HP last tick (to notice one being hit), and the check going on around one
+      # hit by something we can't see: %{building, pos, at, checkers: unit id => spot, found}.
+      hp: %{},
+      check: nil,
       # The serum: nil (not taken yet), :off (not in this game), :spent, or {:until, last tick}.
       # Taken by the game loop when the strategy asks for it (`strategy.serum`).
       serum: nil
@@ -299,7 +313,8 @@ defmodule Swarm.Brain do
   # No base left: everyone attacks.
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
-    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil}, memory}
+    {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{}},
+     memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -314,12 +329,20 @@ defmodule Swarm.Brain do
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
     {look, looked} = look(memory, v, rally, owner, target)
-    memory = %{memory | look: look}
+    {check, checked} = siege_watch(memory, v)
+    memory = %{memory | look: look, check: check}
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
     # A raid answered with a counterattack is done with.
     raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
-    # A strike goes for its tower.
-    target = if wave && Map.get(wave, :kind) == :strike, do: wave.tower_pos, else: target
+    # A strike goes for its tower, a sortie for the siege; a sortie under way ends the check.
+    target =
+      case wave && Map.get(wave, :kind) do
+        :strike -> wave.tower_pos
+        :sortie -> wave.spot
+        _ -> target
+      end
+
+    check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
 
     mode =
       cond do
@@ -335,14 +358,15 @@ defmodule Swarm.Brain do
       post: post(v, rally, target),
       threat: threat,
       wave: wave,
-      why: looked ++ why,
+      why: looked ++ checked ++ why,
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
       serum: if(memory.serum == nil and serum_moment?(v, wave), do: :take),
-      raze: raze(v)
+      raze: raze(v),
+      check: if(check && check.found == nil, do: check.checkers, else: %{})
     }
 
-    {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid}}
+    {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid, check: check}}
   end
 
   # The raid on us: when it was last here, and how many of its fighters we have killed at home
@@ -447,7 +471,9 @@ defmodule Swarm.Brain do
     cond do
       all_in?(v) -> Tuple.insert_at(all_in(v, memory, owner), 3, nil)
       memory.wave && Map.get(memory.wave, :kind) == :strike -> keep_strike(v, memory)
+      memory.wave && Map.get(memory.wave, :kind) == :sortie -> keep_sortie(v, memory)
       memory.wave -> keep_wave(v, memory, rally, target)
+      spot = siege_spot(v, memory) -> sortie(v, memory, spot)
       strike = strike(v, memory) -> strike
       true -> launch(v, memory, rally, calm?, owner, target)
     end
@@ -492,6 +518,155 @@ defmodule Swarm.Brain do
           hold = "strike at #{at}: #{length(group)} fighters at home, want #{@strike_min} and strength #{round(need)} (have #{round(ours)})"
           {nil, memory.next_wave, [], hold}
         end
+    end
+  end
+
+  # Siege at our door. A building of ours losing HP with nothing we can see able to reach it is
+  # being shelled from out of sight (a Trebuchet outranges a tower, and a tower can't see its own
+  # corners): up to `@checkers` home fighters go to look, one each to the four sides of it,
+  # `@check_radius` out, as shells can come from anywhere. A checker that dies has found them:
+  # `found` is its spot, and a sortie goes there. Over once we see them (a sortie takes over),
+  # or after `@check_ticks`. Returns {check, what to log}.
+  defp siege_watch(memory, v) do
+    check = memory.check
+    alive = MapSet.new(v.my_units, & &1["id"])
+    hit = for b <- v.my_buildings, prev = Map.get(memory.hp, b["id"]), b["hp"] != nil and prev != nil and b["hp"] < prev, do: b
+
+    unseen =
+      Enum.reject(hit, fn b ->
+        Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(b)) <= Roles.range(&1)))
+      end)
+
+    lost = check && Enum.find(check.checkers, fn {id, _spot} -> not MapSet.member?(alive, id) end)
+
+    cond do
+      Roles.siege_threats(v) != [] ->
+        {nil, []}
+
+      check && check.found ->
+        {check, []}
+
+      lost ->
+        {_id, spot} = lost
+        {%{check | found: spot}, [{:siege_found, "a checker died by #{fmt(spot)}: attacking into the area"}]}
+
+      check && v.tick - check.at > @check_ticks ->
+        {nil, [{:siege_check, "nothing found around #{fmt(check.pos)}"}]}
+
+      check ->
+        {check, []}
+
+      unseen != [] and v.cc != nil ->
+        new_check(v, hd(unseen))
+
+      true ->
+        {nil, []}
+    end
+  end
+
+  defp new_check(v, building) do
+    {bx, by} = pos = View.pos(building)
+    r = @check_radius
+    spots = for {dx, dy} <- [{0, -r}, {r, 0}, {0, r}, {-r, 0}], do: {clamp(bx + dx, v.map_width), clamp(by + dy, v.map_height)}
+    roles = Roles.home_roles(v, nil)
+
+    free =
+      for u <- Roles.home(v, nil), roles[u["id"]] in [:attacker, :guard] do
+        {if(roles[u["id"]] == :attacker, do: 0, else: 1), View.dist(View.pos(u), pos), u}
+      end
+      |> Enum.sort_by(fn {kind, d, u} -> {kind, d, u["id"]} end)
+      |> Enum.map(&elem(&1, 2))
+      |> Enum.take(@checkers)
+
+    {checkers, _} =
+      Enum.reduce(spots, {%{}, free}, fn spot, {acc, left} ->
+        case left do
+          [] ->
+            {acc, left}
+
+          _ ->
+            u = Enum.min_by(left, &{View.dist(View.pos(&1), spot), &1["id"]})
+            {Map.put(acc, u["id"], spot), List.delete(left, u)}
+        end
+      end)
+
+    if checkers == %{} do
+      {nil, []}
+    else
+      why = "#{building["type"]} at #{fmt(pos)} is being hit by something we can't see: #{map_size(checkers)} checking around it"
+      {%{building: building["id"], pos: pos, at: v.tick, checkers: checkers, found: nil}, [{:siege_check, why}]}
+    end
+  end
+
+  # Where a sortie goes: the enemy Trebuchet in reach of our buildings nearest one of them, or
+  # where a checker died. Nil if neither.
+  defp siege_spot(v, memory) do
+    case Roles.siege_threats(v) do
+      [] ->
+        memory.check && memory.check.found
+
+      spots ->
+        mine = Enum.map(v.my_buildings, &View.pos/1)
+        Enum.min_by(spots, fn spot -> {mine |> Enum.map(&View.dist(&1, spot)) |> Enum.min(fn -> 99 end), spot} end)
+    end
+  end
+
+  # A sortie at siege by our base: everyone at home at once (no trickling into the guarding pack),
+  # at even strength with the enemy units there (not the 1.5 a wave wants: they are knocking our
+  # buildings down meanwhile), and at least `@sortie_min`. Trebuchets are first on its list: they
+  # can't hit anything close, and each is 350.
+  defp sortie(v, memory, spot) do
+    roles = Roles.home_roles(v, nil)
+    group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], do: u
+    theirs = v.enemy_units |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), spot) <= @wave_sight)) |> Roles.strength()
+    ours = Roles.strength(group)
+
+    if length(group) >= @sortie_min and ours >= theirs do
+      wave = %{
+        id: 0,
+        kind: :sortie,
+        members: group |> Enum.map(& &1["id"]) |> Enum.sort(),
+        owner: nil,
+        spot: spot,
+        released: true,
+        staging: nil,
+        at: v.tick
+      }
+
+      why = "sortie at the siege by #{fmt(spot)}: #{length(group)} fighters, strength #{round(ours)} vs #{round(theirs)} there"
+      {wave, memory.next_wave, [{:wave_launched, why}], nil}
+    else
+      hold = "sortie at the siege by #{fmt(spot)}: #{length(group)} fighters at home, strength #{round(ours)} vs #{round(theirs)} there"
+      {nil, memory.next_wave, [], hold}
+    end
+  end
+
+  # A sortie follows the siege (the nearest Trebuchet still in reach of our buildings) and comes
+  # home once none is left and we have been there, or too few are left, it is outmatched, or after
+  # `@sortie_ticks`.
+  defp keep_sortie(v, %{wave: wave} = memory) do
+    alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
+    spot = siege_spot(v, %{memory | check: nil}) || wave.spot
+    there? = Enum.any?(alive, &(View.dist(View.pos(&1), spot) <= 3))
+    at = "the siege by #{fmt(wave.spot)}"
+
+    cond do
+      length(alive) < @recall_below ->
+        {nil, memory.next_wave, [{:wave_recalled, "sortie at #{at}: only #{length(alive)} left"}], nil}
+
+      Roles.siege_threats(v) == [] and there? ->
+        {nil, memory.next_wave, [{:wave_recalled, "sortie: #{at} is cleared"}], nil}
+
+      facing = outmatched(v, alive, spot) ->
+        {player, theirs} = facing
+        why = "sortie at #{at}: outmatched by player #{player}, #{round(Roles.strength(alive))} vs #{round(theirs)}"
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
+
+      v.tick - wave.at > @sortie_ticks ->
+        {nil, memory.next_wave, [{:wave_recalled, "sortie at #{at}: given up after #{@sortie_ticks} ticks"}], nil}
+
+      true ->
+        {%{wave | members: Enum.map(alive, & &1["id"]), spot: spot}, memory.next_wave, [], nil}
     end
   end
 
@@ -644,10 +819,14 @@ defmodule Swarm.Brain do
     |> strongest_player()
   end
 
-  # An enemy building going up at our door, for home fighters to kill now (its id), unless an enemy
-  # tower covers it: then it waits for a strike.
+  # An enemy building at our door, for home fighters to kill now (its id), unless an enemy tower
+  # covers it: then it waits for a strike.
+  # Sites within `@raze_reach` of a base first, then finished buildings within 12 (a Barracks or a
+  # Command Center built at our door). Units only go for it with no enemy fighter to fight.
   defp raze(v) do
-    case Enum.reject(Roles.sites_near_home(v), &Roles.covered?(v, View.pos(&1))) do
+    targets = Roles.sites_near_home(v, @raze_reach) ++ Roles.buildings_near_home(v)
+
+    case Enum.reject(targets, &Roles.covered?(v, View.pos(&1))) do
       [site | _] -> site["id"]
       [] -> nil
     end
@@ -1146,7 +1325,7 @@ defmodule Swarm.Brain do
       |> Map.merge(Map.new(gone, &{&1, v.tick}))
       |> Map.reject(fn {_spot, at} -> v.tick - at > @avoid_lost_ticks end)
 
-    %{memory | buildings: now, lost: lost}
+    %{memory | buildings: now, lost: lost, hp: Map.new(v.my_buildings, &{&1["id"], &1["hp"]})}
   end
 
   # Since when home has been short of ore (see `@low_home_ore`), or nil if it isn't.

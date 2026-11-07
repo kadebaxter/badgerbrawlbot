@@ -13,7 +13,8 @@ defmodule Swarm.UnitBrain do
   1. something to fight nearby (`Swarm.Roles.target/3`: enemy fighters first, shared out so
      none is overkilled; fighters at home don't chase out of the base): attack it
   2. in the wave: attack-move to the target, or to the threat if the wave turns back
-  3. an escort: fight enemies at its outpost, else stand by it
+  3. an escort: fight enemies at its outpost, else stand by it (a checker, sent to look around a
+     building of ours hit by something we can't see, goes to its spot first)
   4. guards and attackers, with an enemy building going up by one of our bases: kill the site
   5. guards and attackers, with enemies at the main base: attack-move to the threat, unless it
      is under an enemy tower (a strike deals with that, not one unit at a time)
@@ -217,6 +218,7 @@ defmodule Swarm.UnitBrain do
     cond do
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.target(v, s.wave, unit) -> {:attack, enemy["id"]}
+      spot = s |> Map.get(:check, %{}) |> Map.get(unit["id"]) -> {:attack_move, spot}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))

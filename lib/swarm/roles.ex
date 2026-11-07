@@ -321,7 +321,8 @@ defmodule Swarm.Roles do
   keeps going if our unit is already on that enemy, then the closest. An enemy takes attackers until their damage covers its current HP,
   and at most `@melee_slots` melee ones. A fighter left without one hits finished towers (they
   shoot back), then construction sites (worth their full cost to us at a tenth of the HP and no
-  armor), then workers, then other buildings, and Command Centers last: a player is eliminated
+  armor), then workers and other buildings (half of us, by id, workers first, the other half
+  buildings first, so building and producing both stop), and Command Centers last: a player is eliminated
   with their last one, and everything they had left goes with no score for anyone.
 
   Fighters at home only go after enemies inside one of our bases or by our workers, so they
@@ -381,13 +382,17 @@ defmodule Swarm.Roles do
     |> Enum.filter(&(View.dist(View.pos(&1), here) <= @engage_radius and may_chase?(v, wave, unit, &1)))
     |> Enum.min_by(
       fn t ->
+        # After towers and sites, half of us (by id) take workers first and half buildings first:
+        # the builders stop building and the buildings stop making things, at the same time.
+        workers_first? = rem(unit["id"], 2) == 0
+
         kind =
           cond do
-            t["type"] == "Worker" -> 2
+            t["type"] == "Worker" -> if workers_first?, do: 2, else: 3
             t["completed"] == false -> 1
             t["type"] == "GuardTower" -> 0
             t["type"] == "CommandCenter" -> 4
-            true -> 3
+            true -> if workers_first?, do: 3, else: 2
           end
 
         {kind, if(unit["targetId"] == t["id"], do: 0, else: 1), View.dist(View.pos(t), here), t["id"]}
@@ -432,14 +437,21 @@ defmodule Swarm.Roles do
   or anything else built at our door. Killed while they are sites: a tenth of the HP, no armor,
   and worth their full cost to us.
   """
-  def sites_near_home(%View{} = v), do: near_home(v, &(&1["completed"] == false))
+  def sites_near_home(%View{} = v, reach \\ @home_reach), do: near_home(v, &(&1["completed"] == false), reach)
 
-  defp near_home(v, pick?) do
+  @doc """
+  Finished enemy buildings within `@home_reach` of one of our bases other than towers (a strike
+  deals with those): a Barracks or a Command Center built at our door. The closest first.
+  """
+  def buildings_near_home(%View{} = v),
+    do: near_home(v, &(&1["completed"] != false and &1["type"] != "GuardTower"), @home_reach)
+
+  defp near_home(v, pick?, reach \\ @home_reach) do
     bases = bases(v)
     from_home = fn b -> bases |> Enum.map(&View.dist(&1, View.pos(b))) |> Enum.min(fn -> 99 end) end
 
     v.enemy_buildings
-    |> Enum.filter(&(pick?.(&1) and from_home.(&1) <= @home_reach))
+    |> Enum.filter(&(pick?.(&1) and from_home.(&1) <= reach))
     |> Enum.sort_by(&{from_home.(&1), &1["id"]})
   end
 
