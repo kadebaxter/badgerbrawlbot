@@ -61,11 +61,19 @@ defmodule Swarm.Brain do
   @strike_min 8
   @strike_tower 7000
   @strike_ticks 120
-  # How far the backup Command Center goes from ours (see `site/4`, `:hideout`).
-  @backup_from 18
-  @backup_to 30
-  # ... or, with no room that far on our side, from this close.
+  # The backup Command Center (see `site/4`, `:hideout`): a map corner is free with no base start
+  # within `@corner_free` of it, and the backup goes within `@corner_zone` of one; at least
+  # `@backup_near` from our base; along our edge (failing a free corner) no more than `@backup_to`
+  # from it, and no nearer the middle than it by more than `@edge_slack`.
+  @corner_free 15
+  @corner_zone 10
   @backup_near 12
+  @backup_to 30
+  @edge_slack 3
+  # The early strike on a weak, close neighbor (see `early_strike?/6`).
+  @early_min 10
+  @early_reach 30
+  @early_margin 2
   # The first wave in a big game waits for the tower square, but not past this tick.
   @square_deadline 900
   @margin 1.5
@@ -704,7 +712,8 @@ defmodule Swarm.Brain do
     ours = Roles.strength(staged ++ siege)
     theirs = enemy_strength(v, memory, owner)
 
-    want = wave_min(v, memory)
+    early? = early_strike?(v, memory, owner, staged, ours, theirs)
+    want = if early?, do: @early_min, else: wave_min(v, memory)
 
     ready? =
       if scouted?,
@@ -726,7 +735,7 @@ defmodule Swarm.Brain do
         length(staged) < want ->
           "#{at_rally}, want #{want}"
 
-        (towers = towers_short(v, memory)) != nil ->
+        (towers = if(early?, do: nil, else: towers_short(v, memory))) != nil ->
           "#{at_rally}, building the tower square first (#{towers} of #{@big_towers})"
 
         not counter? and looking?(memory.look, owner) ->
@@ -749,7 +758,12 @@ defmodule Swarm.Brain do
 
     if hold == nil do
       with_siege = if siege == [], do: "", else: " and #{length(siege)} trebuchets"
-      counter = if counter?, do: "counterattack: ", else: ""
+      counter =
+        cond do
+          counter? -> "counterattack: "
+          early? -> "early strike on a weak neighbor: "
+          true -> ""
+        end
 
       why =
         if scouted?,
@@ -1070,6 +1084,17 @@ defmodule Swarm.Brain do
   # A new co-op away from home, in a big game only with an army to hold it.
   defp may_expand?(v), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army
 
+  # A big game's first wave may go early, with `@early_min` attackers and before the tower square,
+  # at a neighbor that is close (its start within `@early_reach`), that a scout has just looked at,
+  # and that is weak: our attackers at least `@early_margin` times all we know of it.
+  defp early_strike?(v, memory, owner, staged, ours, theirs) do
+    start = Enum.find_value(v.start_owner, fn {pos, slot} -> if slot == owner, do: pos end)
+
+    big?(v) and memory.next_wave == 1 and v.cc != nil and start != nil and
+      View.dist(start, View.pos(v.cc)) <= @early_reach and fresh?(memory.look, owner, v) and
+      length(staged) >= @early_min and ours >= @early_margin * theirs
+  end
+
   # The fewest attackers a wave may leave with (see `@min_wave`).
   defp wave_min(v, memory) do
     cond do
@@ -1360,18 +1385,21 @@ defmodule Swarm.Brain do
     end)
   end
 
-  # The backup Command Center: hidden away from our base. On our side of the map (no farther from
-  # our Command Center than from any enemy's start), `@backup_from`–`@backup_to` tiles from it (far
-  # enough not to fall with the base, near enough to reach; `@backup_near` if there is no room that
-  # far, or 6 on a crowded map), and as far as can be from the enemy and from the middle of the map, which everyone
-  # crosses: behind our base where there is room, else along our edge, away from the nearer
-  # neighbor (on a crowded map, the quietest spot on our side). Not by
-  # the edge itself, an enemy building we know of, or ore (nobody mines there, so nobody comes).
-  # Every third tile is enough, and keeps this quick on a big map.
+  # The backup Command Center, hidden away from our base and never toward the middle of the map
+  # (everyone crosses it):
+  #   1. in a free corner of the map (no base starts within `@corner_free` of it; on a ring map
+  #      none do, and in a 2–4 player game the unused ones are free), the one nearest us, ours
+  #      (nearer us than any enemy start) if there is one: the farthest a spot can be from the
+  #      middle, and nobody's way anywhere;
+  #   2. else along our edge: no nearer the middle than our base (`@edge_slack` tiles), as far from
+  #      the enemy as can be;
+  # at least `@backup_near` tiles from our base, not by ore, an enemy building we know of, or the
+  # very edge. Every other tile is enough, and keeps this quick on a big map.
   def site(terrain, %View{cc: cc} = v, :hideout, _avoid) do
     rows = List.to_tuple(terrain)
     home = View.pos(cc)
-    away_from = [center(v) | v.enemy_starts]
+    middle = center(v)
+    starts = [home | v.enemy_starts]
     enemy = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1)
     taken = MapSet.new(Enum.map(v.my_buildings ++ v.enemy_buildings ++ v.deposits, &View.pos/1))
     margin = 3
@@ -1381,40 +1409,55 @@ defmodule Swarm.Brain do
         :binary.at(elem(rows, y), x) == ?.
     end
 
-    clear? = fn {x, y} ->
-      open?.({x, y}) and not Enum.any?(for(dx <- -1..1, dy <- -1..1, do: {x + dx, y + dy}), &MapSet.member?(taken, &1))
+    ok? = fn {x, y} = tile, near ->
+      x >= margin and y >= margin and x < v.map_width - margin and y < v.map_height - margin and open?.(tile) and
+        not Enum.any?(for(dx <- -1..1, dy <- -1..1, do: {x + dx, y + dy}), &MapSet.member?(taken, &1)) and
+        not Enum.any?(enemy, &(View.dist(&1, tile) <= 8)) and
+        not Enum.any?(v.deposits, &(View.dist(View.pos(&1), tile) <= 4)) and
+        View.dist(home, tile) >= near
     end
 
-    candidates = fn reach ->
-      for x <- margin..(v.map_width - margin - 1)//3,
-          y <- margin..(v.map_height - margin - 1)//3,
-          clear?.({x, y}),
-          not Enum.any?(enemy, &(View.dist(&1, {x, y}) <= 8)),
-          not Enum.any?(v.deposits, &(View.dist(View.pos(&1), {x, y}) <= 4)),
-          View.dist(home, {x, y}) in reach,
-          Enum.all?(v.enemy_starts, &(dist2(home, {x, y}) <= dist2(&1, {x, y}))),
+    ours? = fn tile -> Enum.all?(v.enemy_starts, &(dist2(home, tile) <= dist2(&1, tile))) end
+    {w, h} = {v.map_width - 1, v.map_height - 1}
+
+    corners =
+      for corner <- [{0, 0}, {w, 0}, {0, h}, {w, h}],
+          not Enum.any?(starts, &(View.dist(&1, corner) <= @corner_free)),
+          do: corner
+
+    in_corners =
+      for {cx, cy} <- corners,
+          x <- max(cx - @corner_zone, 0)..min(cx + @corner_zone, w)//2,
+          y <- max(cy - @corner_zone, 0)..min(cy + @corner_zone, h)//2,
+          ok?.({x, y}, @backup_near),
           do: {x, y}
-    end
 
-    # Far enough not to fall with our base; nearer only if our side has no room that far.
-    candidates =
-      Enum.find_value([@backup_from..@backup_to, @backup_near..@backup_to, 6..@backup_to], [], fn reach ->
-        case candidates.(reach) do
-          [] -> nil
-          found -> found
+    case in_corners do
+      [_ | _] ->
+        Enum.min_by(in_corners, fn tile -> {if(ours?.(tile), do: 0, else: 1), View.dist(home, tile), tile} end)
+
+      [] ->
+        # On a crowded map our side may have no room that far out: then nearer.
+        along_edge = fn near ->
+          for x <- margin..(w - margin)//3,
+              y <- margin..(h - margin)//3,
+              ok?.({x, y}, near),
+              View.dist({x, y}, middle) >= View.dist(home, middle) - @edge_slack,
+              ours?.({x, y}),
+              View.dist(home, {x, y}) <= @backup_to,
+              do: {x, y}
         end
-      end)
 
-    # Behind our base (farther from the middle than it is) first, where there is room for it.
-    behind = dist2(home, center(v))
+        along_edge =
+          case along_edge.(@backup_near) do
+            [] -> along_edge.(6)
+            found -> found
+          end
 
-    Enum.max_by(
-      candidates,
-      fn tile ->
-        {if(dist2(tile, center(v)) > behind, do: 1, else: 0), away_from |> Enum.map(&dist2(&1, tile)) |> Enum.min(), tile}
-      end,
-      fn -> nil end
-    )
+        Enum.max_by(along_edge, fn tile -> {v.enemy_starts |> Enum.map(&dist2(&1, tile)) |> Enum.min(fn -> 0 end), tile} end, fn ->
+          nil
+        end)
+    end
   end
 
   # By an outpost, on the side facing the middle of the map, like `:front`.

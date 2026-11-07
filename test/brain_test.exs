@@ -775,20 +775,17 @@ defmodule Swarm.BrainTest do
   end
 
   describe "a backup Command Center" do
-    test "goes up after the first tower, with two builders, hidden behind our base" do
+    test "goes up after the first tower, with two builders, in a free corner" do
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
       {_, commands, _} = plan(units: workers(12) ++ soldiers(10), buildings: start, ore: 1000)
       assert [%{"buildingType" => "CommandCenter", "unitIds" => [_, _], "x" => x, "y" => y}] =
                for(%{"type" => "Build"} = c <- commands, do: c)
 
-      # Us at (7, 7), the enemy at (56, 56), the middle at (32, 32): 10–25 from us, on our side,
-      # and no nearer the middle than our base is.
-      assert View.dist({x, y}, {7, 7}) in 10..25
-      assert View.dist({x, y}, {56, 56}) > View.dist({x, y}, {7, 7})
-      assert View.dist({x, y}, {32, 32}) >= View.dist({7, 7}, {32, 32})
+      # Us at (7, 7), the enemy at (56, 56): the two unused corners are free; it goes to one.
+      assert View.dist({x, y}, {63, 0}) <= 10 or View.dist({x, y}, {0, 63}) <= 10
     end
 
-    test "on a big map, behind our base toward our corner, not in the middle" do
+    test "on a big ring map, to the corner nearest us, never toward the middle" do
       # 112 x 112 like a 15-player brawl: us at (22, 22), neighbors along the ring.
       starts = [{1, 56, 10}, {2, 10, 56}, {3, 90, 22}, {4, 22, 90}, {5, 102, 56}, {6, 56, 102}, {7, 90, 90}]
 
@@ -803,10 +800,29 @@ defmodule Swarm.BrainTest do
 
       terrain = List.duplicate(String.duplicate(".", 112), 112)
       {x, y} = Brain.site(terrain, View.new(big_map), :hideout)
-      assert View.dist({x, y}, {22, 22}) in 18..30
-      # Behind us: farther from the middle (56, 56) than our base, toward the corner.
-      assert x < 22 or y < 22
+      # The top-left corner: nobody starts there, and it is the one nearest us.
+      assert View.dist({x, y}, {0, 0}) <= 10 and View.dist({x, y}, {22, 22}) >= 12
       assert View.dist({x, y}, {56, 56}) > View.dist({22, 22}, {56, 56})
+    end
+
+    test "a base against the edge with a neighbor along it: along the edge to the corner, not down" do
+      # 120 x 120 like the game that put it at (48, 33): us at (40, 12), a neighbor at (60, 8).
+      starts = [{1, 60, 8}, {2, 79, 12}, {3, 8, 60}, {4, 107, 40}, {5, 60, 112}, {6, 112, 80}]
+
+      edge_map =
+        state()
+        |> Map.merge(%{"mapWidth" => 120, "mapHeight" => 120})
+        |> Map.update!("players", fn [me | _] ->
+          [put_in(me, ["startPosition"], %{"x" => 40, "y" => 12}) |
+             for({slot, x, y} <- starts, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})]
+        end)
+        |> Map.update!("buildings", fn [_cc | rest] -> [building(1, "CommandCenter", 40, 12) | rest] end)
+
+      terrain = List.duplicate(String.duplicate(".", 120), 120)
+      {x, y} = Brain.site(terrain, View.new(edge_map), :hideout)
+      # The top-left corner, along the top edge: not down toward the middle (60, 60).
+      assert View.dist({x, y}, {0, 0}) <= 10
+      assert View.dist({x, y}, {60, 60}) > View.dist({40, 12}, {60, 60})
     end
 
     test "on a crowded map, still on our side and out of the middle" do
@@ -820,7 +836,8 @@ defmodule Swarm.BrainTest do
 
       site = Brain.site(terrain(), v, :hideout)
       assert View.dist(site, {7, 7}) in 6..30
-      assert View.dist(site, {32, 32}) >= 10
+      # Every corner has a base: along the edge, no nearer the middle than our base (less 3).
+      assert View.dist(site, {32, 32}) >= View.dist({7, 7}, {32, 32}) - 3
       assert Enum.all?([{31, 7}, {7, 31}], &(View.dist(site, &1) >= View.dist(site, {7, 7})))
     end
 
@@ -941,6 +958,24 @@ defmodule Swarm.BrainTest do
       memory = %{memory | look: %{memory.look | done: 100}}
       assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(25), buildings: square()], memory)
       assert length(members) == 18
+    end
+
+    test "an early strike on a weak, close neighbor we just looked at: ten go, no tower square" do
+      # Player 2 at (31, 7), 24 tiles away: seen with one soldier.
+      seen = %{901 => %{"id" => 901, "type" => "Soldier", "owner" => 2, "hp" => 110, "x" => 31, "y" => 7, "seen" => 100}}
+      looked = %{Brain.new_memory() | enemies: seen, look: %{owner: 2, pos: {25, 7}, at: 90, done: 100}}
+
+      # 17 soldiers: 7 guards, 10 attackers.
+      assert {%{wave: %{members: members}, why: [{:wave_launched, "early strike on a weak neighbor: " <> _} | _]}, _, _} =
+               big_plan([units: soldiers(17)], looked)
+
+      assert length(members) == 10
+
+      # Without a fresh look, or against a neighbor that isn't weak: the usual 18 and the square.
+      assert {%{wave: nil}, _, _} = big_plan([units: soldiers(17)], %{looked | look: nil})
+
+      strong = Map.new(1..6, &{900 + &1, %{"id" => 900 + &1, "type" => "Soldier", "owner" => 2, "hp" => 110, "x" => 31, "y" => 7, "seen" => 100}})
+      assert {%{wave: nil}, _, _} = big_plan([units: soldiers(17)], %{looked | enemies: strong})
     end
 
     test "after the first, at least fifteen a wave" do
