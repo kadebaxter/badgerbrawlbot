@@ -46,6 +46,8 @@ defmodule Swarm.Roles do
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
+  # Our fighters this close to an enemy tower shooting at us count toward taking it down.
+  @tower_reach 8
   @siege_engage_radius 10
   # A Trebuchet this close to one of our buildings is attacking it (its range is 7).
   @siege_reach 9
@@ -405,12 +407,78 @@ defmodule Swarm.Roles do
   can't be lured away, and fight back against any enemy fighter that can hit them. They never
   stay to hit a building outside: a recalled wave walks home. Wave members fight anything.
   """
-  def target(%View{} = v, wave, unit) do
+  def target(%View{} = v, wave, unit), do: fighter_target(v, wave, unit) || leftover_target(v, wave, unit)
+
+  @doc "The enemy fighter `unit` goes after (`assignments/2`), or nil."
+  def fighter_target(%View{} = v, wave, unit) do
     case Map.get(assignments(v, wave), unit["id"]) do
-      nil -> leftover_target(v, wave, unit)
+      nil -> nil
       id -> Enum.find(v.enemy_units, &(&1["id"] == id))
     end
   end
+
+  @doc """
+  Finished enemy Guard Towers we know of: those in sight, and those the server remembers for us
+  (`rememberedBuildings`: seen before, hidden by fog now, where we last saw them).
+  """
+  def enemy_towers(%View{} = v) do
+    tower? = &(&1["type"] == "GuardTower" and &1["completed"] != false)
+    seen = Enum.filter(v.enemy_buildings, tower?)
+    ids = MapSet.new(seen, & &1["id"])
+    seen ++ Enum.filter(v.remembered, &(tower?.(&1) and not MapSet.member?(ids, &1["id"])))
+  end
+
+  @doc """
+  Known enemy towers shooting at us: with one of our units in their reach. A tower fires at
+  whatever enemy is in its reach, so that is all it takes. Towers nobody of ours is near don't
+  count: we leave those alone.
+  """
+  def towers_hitting(%View{} = v) do
+    Enum.filter(enemy_towers(v), fn t ->
+      Enum.any?(v.my_units, &(View.dist(View.pos(&1), View.pos(t)) <= range(t)))
+    end)
+  end
+
+  @doc """
+  What `unit` does about the towers shooting at us, once there are no enemy fighters for it
+  (`fighter_target/3` first): the closest one within `@engage_radius`, if our fighters within
+  `@tower_reach` of it are at least as strong as it and the enemy fighters by it,
+  `{:hit, tower}` (wave or home alike: it is hitting us); if they aren't, and the unit is in its
+  reach, `{:back_off, spot}`, just out of its reach, so we don't feed it one at a time. Nil with
+  no such tower.
+  """
+  def tower_job(%View{} = v, unit) do
+    here = View.pos(unit)
+
+    case v |> towers_hitting() |> Enum.filter(&(View.dist(View.pos(&1), here) <= @engage_radius)) do
+      [] ->
+        nil
+
+      towers ->
+        tower = Enum.min_by(towers, &{View.dist(View.pos(&1), here), &1["id"]})
+        at = View.pos(tower)
+        near? = &(View.dist(View.pos(&1), at) <= @tower_reach)
+        ours = Enum.filter(fighters(v), near?)
+        theirs = [tower | Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))]
+
+        cond do
+          strength(ours, v.me) >= strength(theirs) -> {:hit, tower}
+          View.dist(here, at) <= range(tower) + 1 -> {:back_off, out_of_reach(v, here, tower)}
+          true -> nil
+        end
+    end
+  end
+
+  # Straight away from `from` until two tiles past its reach, kept on the map.
+  defp out_of_reach(v, {x, y} = here, from) do
+    {fx, fy} = View.pos(from)
+    d = max(View.dist(here, {fx, fy}), 1)
+    clear = range(from) + 2
+    {dx, dy} = if here == {fx, fy}, do: {1, 1}, else: {x - fx, y - fy}
+    {clamp(fx + div(dx * clear, d), v.map_width), clamp(fy + div(dy * clear, d), v.map_height)}
+  end
+
+  defp clamp(n, size), do: n |> max(0) |> min(size - 1)
 
   @doc """
   Our fighter id => the enemy fighter id it goes after. Falling back (`fall_back?/2`), home
@@ -454,10 +522,14 @@ defmodule Swarm.Roles do
     assigned
   end
 
-  # Nothing to fight among the enemy fighters: towers (they shoot back), then workers, then
-  # the rest. Stay on what we are already hitting.
-  defp leftover_target(v, wave, unit) do
+  @doc """
+  Nothing to fight among the enemy fighters: towers shooting at us (`towers_hitting/1`), then
+  sites, then workers and buildings, Command Centers last. Stay on what we are already hitting.
+  Other towers are buildings like the rest: we don't go after a tower that leaves us alone.
+  """
+  def leftover_target(v, wave, unit) do
     here = View.pos(unit)
+    hitting = MapSet.new(towers_hitting(v), & &1["id"])
 
     (Enum.filter(v.enemy_units, &(&1["type"] == "Worker")) ++ v.enemy_buildings)
     |> Enum.filter(&(View.dist(View.pos(&1), here) <= @engage_radius and may_chase?(v, wave, unit, &1)))
@@ -471,7 +543,7 @@ defmodule Swarm.Roles do
           cond do
             t["type"] == "Worker" -> if workers_first?, do: 2, else: 3
             t["completed"] == false -> 1
-            t["type"] == "GuardTower" -> 0
+            MapSet.member?(hitting, t["id"]) -> 0
             t["type"] == "CommandCenter" -> 4
             true -> if workers_first?, do: 3, else: 2
           end

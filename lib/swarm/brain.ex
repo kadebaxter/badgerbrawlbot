@@ -241,6 +241,13 @@ defmodule Swarm.Brain do
   # The survey for ore (see `survey/3`): rings this far around the Command Center, and how long the
   # scout tries for one spot.
   @survey_rings [10, 20]
+  # Hits by something we can't see (see `hidden_hits/2`): spots at most this many at once, hits
+  # this close together one spot, forgotten after this long without another hit, and how far
+  # toward the enemy a fighter looking (with no scout) goes from the spot.
+  @hidden_max 3
+  @hidden_merge 4
+  @hidden_ticks 20
+  @peek 3
   @survey_timeout 40
   # Ore kept back for workers (two of them), and how few workers make training them come first.
   @worker_reserve 100
@@ -267,7 +274,8 @@ defmodule Swarm.Brain do
           raze: integer() | nil,
           check: %{integer() => pos()},
           fall_back: boolean(),
-          survey: pos() | nil
+          survey: pos() | nil,
+          hidden: [%{pos: pos(), by: integer() | nil, look: pos() | nil}]
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -312,7 +320,11 @@ defmodule Swarm.Brain do
       surveyed: [],
       survey: nil,
       # Whether home was falling back to the towers last tick (`Roles.fall_back?/2`).
-      fall_back: false
+      fall_back: false,
+      # Our units' HP last tick, and the spots where they were hit by something we can't see
+      # (see `hidden_hits/2`).
+      unit_hp: %{},
+      hidden: []
     }
   end
 
@@ -374,6 +386,101 @@ defmodule Swarm.Brain do
     {current && current.pos, %{memory | surveyed: surveyed, survey: current}, notes}
   end
 
+  # Hits we can't explain: one of our units lost HP and nothing we can see could have done it
+  # (an enemy unit in its reach, or a tower we know of, `Roles.enemy_towers/1`). Almost always a
+  # tower we haven't seen: our Soldiers see 5 tiles in a straight line, and a tower reaches 5 tiles
+  # the game's way, diagonals too. Each such spot (up to `@hidden_max`, `@hidden_merge` tiles
+  # apart) gets someone to look: the closest scout (it sees 8, the whole area a tower could shoot
+  # from), else the closest fighter, a few tiles from the spot toward the enemy's buildings (or
+  # start). Everyone else near the spot steps out of the area (`Swarm.UnitBrain`). A spot is done
+  # once a tower we know of reaches it (found: then the tower rule takes over, `Roles.tower_job/2`),
+  # or after `@hidden_ticks` ticks without another hit there.
+  # Returns {[%{pos, by: unit id, look: where it goes}], memory, notes for the decision log}.
+  defp hidden_hits(v, memory) do
+    towers = Roles.enemy_towers(v)
+    reaches? = fn pos -> Enum.any?(towers, &(View.dist(View.pos(&1), pos) <= Roles.range(&1) + 1)) end
+
+    unseen =
+      for u <- v.my_units,
+          prev = Map.get(memory.unit_hp, u["id"]),
+          u["hp"] != nil and prev != nil and u["hp"] < prev,
+          not Enum.any?(v.enemy_units, &(View.dist(View.pos(&1), View.pos(u)) <= Roles.range(&1) + 1)),
+          not reaches?.(View.pos(u)),
+          do: u
+
+    {found, spots} = Enum.split_with(memory.hidden, &reaches?.(&1.pos))
+    spots = Enum.reject(spots, &(v.tick - &1.at > @hidden_ticks))
+
+    {spots, new} =
+      Enum.reduce(unseen, {spots, []}, fn u, {spots, new} ->
+        pos = View.pos(u)
+
+        case Enum.find_index(spots, &(View.dist(&1.pos, pos) <= @hidden_merge)) do
+          nil when length(spots) < @hidden_max -> {spots ++ [%{pos: pos, at: v.tick, by: nil, look: nil}], [u | new]}
+          nil -> {spots, new}
+          i -> {List.update_at(spots, i, &%{&1 | at: v.tick}), new}
+        end
+      end)
+
+    spots = lookers(v, spots)
+
+    notes =
+      for(s <- found, do: {:hidden_found, "found what was hitting us by #{fmt(s.pos)}: an enemy tower"}) ++
+        for u <- Enum.reverse(new), s = Enum.find(spots, &(&1.pos == View.pos(u))) do
+          {:hidden_hit, "#{u["type"]} #{u["id"]} hit by something we can't see at #{fmt(s.pos)}: #{looker_text(v, s)}"}
+        end
+
+    memory = %{memory | hidden: spots, unit_hp: Map.new(v.my_units, &{&1["id"], &1["hp"]})}
+    {Enum.map(spots, &Map.take(&1, [:pos, :by, :look])), memory, notes}
+  end
+
+  # Who looks at each spot: whoever did before while alive, else the closest free scout (it goes
+  # to the spot), else the closest free fighter (it goes `@peek` tiles from the spot toward the
+  # enemy).
+  defp lookers(v, spots) do
+    alive = MapSet.new(v.my_units, & &1["id"])
+
+    Enum.reduce(spots, [], fn spot, done ->
+      taken = MapSet.new(done, & &1.by)
+      free = &(not MapSet.member?(taken, &1["id"]))
+
+      spot =
+        cond do
+          spot.by != nil and MapSet.member?(alive, spot.by) ->
+            spot
+
+          scout = closest_of(Enum.filter(View.units_of(v, "Scout"), free), spot.pos) ->
+            %{spot | by: scout["id"], look: spot.pos}
+
+          fighter = closest_of(Enum.filter(Roles.fighters(v), free), spot.pos) ->
+            %{spot | by: fighter["id"], look: toward(spot.pos, enemy_side(v, spot.pos), @peek)}
+
+          true ->
+            %{spot | by: nil, look: nil}
+        end
+
+      done ++ [spot]
+    end)
+  end
+
+  defp closest_of([], _pos), do: nil
+  defp closest_of(units, pos), do: Enum.min_by(units, &{View.dist(View.pos(&1), pos), &1["id"]})
+
+  # Where the enemy most likely is from `pos`: the closest enemy building we see or remember, else
+  # the closest enemy start, else the middle of the map.
+  defp enemy_side(v, pos) do
+    places = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1)
+    places = if places == [], do: v.enemy_starts, else: places
+    Enum.min_by(places, &View.dist(&1, pos), fn -> {div(v.map_width, 2), div(v.map_height, 2)} end)
+  end
+
+  defp looker_text(_v, %{by: nil}), do: "nobody to look; stepping out of the area"
+
+  defp looker_text(v, %{by: id, look: look}) do
+    type = (View.my_unit(v, id) || %{})["type"] || "unit"
+    "#{type} #{id} goes to look at #{fmt(look)}, the rest step out of the area"
+  end
+
   # The scout that surveys: the first by id (`Swarm.UnitBrain` gives it the same job).
   defp surveyor(v), do: v |> View.units_of("Scout") |> Enum.min_by(& &1["id"], fn -> nil end)
 
@@ -408,7 +515,8 @@ defmodule Swarm.Brain do
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
     {survey, memory, surveyed} = survey(v, memory, terrain)
-    strategy = %{strategy | survey: survey, why: strategy.why ++ surveyed}
+    {hidden, memory, unseen} = hidden_hits(v, memory)
+    strategy = %{strategy | survey: survey, hidden: hidden, why: strategy.why ++ surveyed ++ unseen}
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
 
@@ -436,7 +544,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, survey: nil}, memory}
+       fall_back: false, survey: nil, hidden: []}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -495,7 +603,8 @@ defmodule Swarm.Brain do
       raze: raze(v),
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
-      survey: nil
+      survey: nil,
+      hidden: []
     }
 
     {strategy,

@@ -200,11 +200,25 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Situation | Fighter does |
 |---|---|
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
-| Something to fight within 6 tiles | Attack it (see below) |
+| An enemy fighter to fight within 6 tiles | Attack it (see below) |
+| An enemy tower shooting at us (one of our units in its reach) within 6 tiles | With our fighters within 8 of it at least as strong as it and the enemy fighters by it: attack it (walk at it first if we can't see it); else, in its reach, step 2 tiles past it |
+| The one sent to look where we were hit by something unseen | Go there (a scout) or a few tiles from there toward the enemy (a fighter) |
+| Within 7 of a spot where we were hit by something unseen | Step 7 tiles from it toward the rally point |
+| Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat (falling back, if no tower of ours reaches it: to the tower closest to it) |
 | Attacker, an outpost or workers in the field under attack | Go help the closest (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
+
+**Towers:** only towers shooting at us are targets; one that leaves us alone is a building like
+the rest. We know a tower if we see it or the server remembers it for us (`rememberedBuildings`),
+which matters because a tower reaches 5 tiles the game's way (diagonals count as one) while a
+Soldier sees 5 in a straight line: most of a tower's reach is out of a Soldier's sight. A unit that
+loses HP with nothing we see or know of able to reach it was hit by something unseen, almost
+always such a tower: the leader marks the spot (`strategy.hidden`) and sends the closest scout
+there (it sees 8, the whole area a tower could shoot from), else the closest fighter a few tiles
+toward the enemy; everyone else steps out of the area. Once the tower is seen the server keeps
+reporting it, and the tower rule above takes over. A spot with no hit for 20 ticks is dropped.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
 what is home to meet them, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
