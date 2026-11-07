@@ -863,9 +863,20 @@ defmodule Swarm.BrainTest do
     defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum}
     defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 12, 9, owner: 1))
 
-    test "taken when home is overrun: the raid is stronger than all that can meet it there" do
-      # Twelve raiders against the ten soldiers at home.
-      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(12)], wave_memory())
+    test "with the wave far off: taken only when the raid is clearly stronger than home (1.25x)" do
+      # Ten soldiers at home (9900); the wave at (45, 45) is too far to make it back in time.
+      # Twelve raiders (11880, 1.2x): a coin flip, not taken. Thirteen (12870, 1.3x): taken.
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(12)], wave_memory())
+      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(13)], wave_memory())
+    end
+
+    test "with the wave close enough to get back: only if home and the wave together can't hold" do
+      # The wave at (20, 12), 8 tiles from the raid at (12, 9): it counts as help.
+      near_wave = for s <- soldiers(10), do: %{s | "x" => 20, "y" => 12}
+      # 13 raiders (12870) beat home (9900) but not home and the wave (19800): just recall the wave.
+      assert {%{serum: nil}, _, _} = plan([units: near_wave ++ at_home() ++ raiders(13)], wave_memory())
+      # 21 raiders (20790) beat both together: now it's worth it.
+      assert {%{serum: :take}, _, _} = plan([units: near_wave ++ at_home() ++ raiders(21)], wave_memory())
     end
 
     test "not for the wave's own fights, however big" do
@@ -876,7 +887,7 @@ defmodule Swarm.BrainTest do
     test "not for a raid home can hold, nor twice, nor when it's off" do
       assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(8)], wave_memory())
 
-      overrun = wave_at_front() ++ at_home() ++ raiders(12)
+      overrun = wave_at_front() ++ at_home() ++ raiders(13)
       assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory(:spent))
       assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory({:until, 140}))
       assert {%{serum: nil}, _, _} = plan([units: overrun], wave_memory(:off))

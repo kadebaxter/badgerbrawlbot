@@ -55,6 +55,10 @@ defmodule Swarm.Brain do
   # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
   @serum_raid 4000
+  # ... a wave this many tiles (ticks) from the raid can be back in time: it counts as help;
+  # without one, the raid must be at least this many times what home has.
+  @help_eta 15
+  @serum_margin 1.25
   # A strike at an enemy tower by our base: at least this many fighters, as strong as this (about
   # seven soldiers: what kills a tower before it kills them) plus `@margin` times the strongest
   # player's units by it; given up after `@strike_ticks`.
@@ -331,6 +335,7 @@ defmodule Swarm.Brain do
     {look, looked} = look(memory, v, rally, owner, target)
     {check, checked} = siege_watch(memory, v)
     memory = %{memory | look: look, check: check}
+    memory_wave = memory.wave
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
     # A raid answered with a counterattack is done with.
     raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
@@ -361,7 +366,7 @@ defmodule Swarm.Brain do
       why: looked ++ checked ++ why,
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
-      serum: if(memory.serum == nil and serum_moment?(v, wave), do: :take),
+      serum: if(memory.serum == nil and serum_moment?(v, memory_wave), do: :take),
       raze: raze(v),
       check: if(check && check.found == nil, do: check.checkers, else: %{})
     }
@@ -832,18 +837,29 @@ defmodule Swarm.Brain do
     end
   end
 
-  # The moment for the serum (once a match): home is being overrun. A raid of at least
-  # `@serum_raid` hits a base, an outpost or our workers, and it is stronger than all that can meet
-  # it there without the wave (guards, escorts, fighters about, towers), and we have
-  # `@serum_soldiers` soldiers or more. Not for the wave's own fights: it should win those anyway,
-  # and the serum is kept for when we have no other help. (It doubles the soldiers' speed too, so a
-  # recalled wave gets home sooner.)
+  # The moment for the serum (once a match): home is being overrun and the help we have won't do.
+  # A raid of at least `@serum_raid` hits a base, an outpost or our workers, we have
+  # `@serum_soldiers` soldiers or more, and:
+  #   - with a wave out that can be back within `@help_eta` ticks (soldiers walk a tile a tick):
+  #     the raid is stronger than home and the wave together (recalling the wave alone won't do);
+  #   - otherwise (no wave, or too far to make it): the raid is at least `@serum_margin` times what
+  #     can meet it at home, not a coin flip. The serum doubles soldiers' speed too, so a far wave
+  #     gets home twice as fast.
+  # `wave` is the wave out before this tick's recall (a recalled wave is still the help coming).
+  # Never for the wave's own fights: it should win those anyway.
   defp serum_moment?(v, wave) do
     raiders = Roles.raiders(v)
     raid = Roles.strength(raiders)
+    home = Roles.home_strength(v, wave, raiders)
+    out = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
 
-    raiders != [] and raid >= @serum_raid and raid > Roles.home_strength(v, wave, raiders) and
-      length(View.units_of(v, "Soldier")) >= @serum_soldiers
+    near? =
+      out != [] and
+        Enum.min(for(u <- out, r <- raiders, do: View.dist(View.pos(u), View.pos(r))), fn -> 99 end) <= @help_eta
+
+    overrun? = if near?, do: raid > home + Roles.strength(out), else: raid >= @serum_margin * home
+
+    raiders != [] and raid >= @serum_raid and overrun? and length(View.units_of(v, "Soldier")) >= @serum_soldiers
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.

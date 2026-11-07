@@ -245,9 +245,11 @@ buildings, so building and producing both stop.
 The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
 `/matches/{id}/superpower/superserum`): Soldiers deal double damage and move twice as fast for 30
 ticks, as long as every command to them carries our key (header `X-SUPERPOWER-SUPERSERUM`), and
-every player is told when we take it. It is kept for when home is being overrun: the brain asks
-for it (`strategy.serum`) when a raid of at least ~4 soldiers' strength is stronger than all that
-can meet it there without the wave, and we have 8 Soldiers or more. Never for the wave's own fights
+every player is told when we take it. It is kept for when home is being overrun and the help we
+have won't do: the brain asks for it (`strategy.serum`) when a raid of at least ~4 soldiers'
+strength hits home, we have 8 Soldiers or more, and either a wave out that can be back within 15
+ticks can't hold it even together with home (otherwise recalling the wave is enough), or, with no
+wave that close, the raid is at least 1.25× what can meet it at home (not a coin flip). Never for the wave's own fights
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
