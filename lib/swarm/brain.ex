@@ -53,6 +53,9 @@ defmodule Swarm.Brain do
   # soldiers, and only for a raid at least this strong (about four soldiers).
   @serum_soldiers 8
   @serum_raid 4000
+  # How far the backup Command Center goes from ours (see `site/4`, `:hideout`).
+  @backup_from 10
+  @backup_to 25
   # The first wave in a big game waits for the tower square, but not past this tick.
   @square_deadline 900
   @margin 1.5
@@ -1244,13 +1247,17 @@ defmodule Swarm.Brain do
     end)
   end
 
-  # The backup Command Center: open ground as far as can be from every base, enemies' and ours
-  # (if our base falls, it should still stand), not by the edge of the map, an enemy building we
-  # know of, or ore (nobody mines there, so nobody comes). Every third tile is enough, and keeps
-  # this quick on a big map.
+  # The backup Command Center: hidden behind our base. On our side of the map (no farther from
+  # our Command Center than from any enemy's start), `@backup_from`–`@backup_to` tiles from it (far
+  # enough not to fall with the base, near enough to reach), and as far as can be from the enemy
+  # and from the middle of the map, which everyone crosses: behind our base, toward our own edge or
+  # corner, where there is room (on a crowded map, the quietest spot on our side). Not by
+  # the edge itself, an enemy building we know of, or ore (nobody mines there, so nobody comes).
+  # Every third tile is enough, and keeps this quick on a big map.
   def site(terrain, %View{cc: cc} = v, :hideout, _avoid) do
     rows = List.to_tuple(terrain)
-    bases = [View.pos(cc) | v.enemy_starts]
+    home = View.pos(cc)
+    away_from = [center(v) | v.enemy_starts]
     enemy = Enum.map(v.enemy_buildings ++ v.remembered, &View.pos/1)
     taken = MapSet.new(Enum.map(v.my_buildings ++ v.enemy_buildings ++ v.deposits, &View.pos/1))
     margin = 3
@@ -1270,9 +1277,20 @@ defmodule Swarm.Brain do
           clear?.({x, y}),
           not Enum.any?(enemy, &(View.dist(&1, {x, y}) <= 8)),
           not Enum.any?(v.deposits, &(View.dist(View.pos(&1), {x, y}) <= 4)),
+          View.dist(home, {x, y}) in @backup_from..@backup_to,
+          Enum.all?(v.enemy_starts, &(dist2(home, {x, y}) <= dist2(&1, {x, y}))),
           do: {x, y}
 
-    Enum.max_by(candidates, fn tile -> {bases |> Enum.map(&dist2(&1, tile)) |> Enum.min(), tile} end, fn -> nil end)
+    # Behind our base (farther from the middle than it is) first, where there is room for it.
+    behind = dist2(home, center(v))
+
+    Enum.max_by(
+      candidates,
+      fn tile ->
+        {if(dist2(tile, center(v)) > behind, do: 1, else: 0), away_from |> Enum.map(&dist2(&1, tile)) |> Enum.min(), tile}
+      end,
+      fn -> nil end
+    )
   end
 
   # By an outpost, on the side facing the middle of the map, like `:front`.

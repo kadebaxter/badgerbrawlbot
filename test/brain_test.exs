@@ -775,14 +775,53 @@ defmodule Swarm.BrainTest do
   end
 
   describe "a backup Command Center" do
-    test "goes up after the first tower, with two builders, far from every base and off the ore" do
+    test "goes up after the first tower, with two builders, hidden behind our base" do
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
       {_, commands, _} = plan(units: workers(12) ++ soldiers(10), buildings: start, ore: 1000)
       assert [%{"buildingType" => "CommandCenter", "unitIds" => [_, _], "x" => x, "y" => y}] =
                for(%{"type" => "Build"} = c <- commands, do: c)
 
-      # Us at (7, 7), the enemy at (56, 56): far from both, so out toward a free corner.
-      assert View.dist({x, y}, {7, 7}) >= 30 and View.dist({x, y}, {56, 56}) >= 30
+      # Us at (7, 7), the enemy at (56, 56), the middle at (32, 32): 10–25 from us, on our side,
+      # and no nearer the middle than our base is.
+      assert View.dist({x, y}, {7, 7}) in 10..25
+      assert View.dist({x, y}, {56, 56}) > View.dist({x, y}, {7, 7})
+      assert View.dist({x, y}, {32, 32}) >= View.dist({7, 7}, {32, 32})
+    end
+
+    test "on a big map, behind our base toward our corner, not in the middle" do
+      # 112 x 112 like a 15-player brawl: us at (22, 22), neighbors along the ring.
+      starts = [{1, 56, 10}, {2, 10, 56}, {3, 90, 22}, {4, 22, 90}, {5, 102, 56}, {6, 56, 102}, {7, 90, 90}]
+
+      big_map =
+        state()
+        |> Map.merge(%{"mapWidth" => 112, "mapHeight" => 112})
+        |> Map.update!("players", fn [me | _] ->
+          [put_in(me, ["startPosition"], %{"x" => 22, "y" => 22}) |
+             for({slot, x, y} <- starts, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})]
+        end)
+        |> Map.update!("buildings", fn [_cc | rest] -> [building(1, "CommandCenter", 22, 22) | rest] end)
+
+      terrain = List.duplicate(String.duplicate(".", 112), 112)
+      {x, y} = Brain.site(terrain, View.new(big_map), :hideout)
+      assert View.dist({x, y}, {22, 22}) in 10..25
+      # Behind us: farther from the middle (56, 56) than our base, toward the corner.
+      assert x < 22 or y < 22
+      assert View.dist({x, y}, {56, 56}) > View.dist({22, 22}, {56, 56})
+    end
+
+    test "on a crowded map, still on our side and out of the middle" do
+      more = [{2, 31, 7}, {3, 56, 7}, {4, 7, 31}, {5, 56, 31}, {6, 7, 56}, {7, 31, 56}]
+
+      v =
+        Map.update!(state(), "players", fn ps ->
+          ps ++ for({slot, x, y} <- more, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})
+        end)
+        |> View.new()
+
+      site = Brain.site(terrain(), v, :hideout)
+      assert View.dist(site, {7, 7}) in 10..25
+      assert View.dist(site, {32, 32}) >= 10
+      assert Enum.all?([{31, 7}, {7, 31}], &(View.dist(site, &1) >= View.dist(site, {7, 7})))
     end
 
     test "is rebuilt if lost" do

@@ -255,9 +255,10 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → backup Command Center (12)
-   → TechLab (13) → 2nd Barracks (15) → 2nd Guard Tower (17). The backup Command Center goes as
-   far from every base (ours too) as there is open ground, away from ore and known enemy
-   buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
+   → TechLab (13) → 2nd Barracks (15) → 2nd Guard Tower (17). The backup Command Center is hidden
+   behind our base: on our side of the map, 10–25 tiles from our Command Center, as far as can be
+   from the enemy and from the middle of the map (toward our own edge or corner where there is
+   room), away from ore and known enemy buildings, with two builders, and is rebuilt if lost: a player is eliminated only with no
    Command Center at all, and elimination would wipe our survival score. It isn't a drop-off while
    our base stands, so workers never go mining by it. In a big game (6 players or more) we turtle
    up: Barracks (7) → Resource Depot (9) → Guard Tower (10) → 2nd Guard Tower (12) → backup
