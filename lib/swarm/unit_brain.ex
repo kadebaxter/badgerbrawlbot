@@ -63,8 +63,6 @@ defmodule Swarm.UnitBrain do
   @crowd 3
   # Ore with an enemy fighter this close is unsafe to mine.
   @unsafe_ore 5
-  # Units this close to a spot where we were hit by something we can't see step this far from it.
-  @hidden_clear 7
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
@@ -120,7 +118,7 @@ defmodule Swarm.UnitBrain do
   # with enemies by it. Builders keep building.
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning"] and rally != nil do
-    case worker_danger(unit, v, s) || hidden_near(unit, s) do
+    case worker_danger(unit, v, s) do
       nil ->
         worker(unit, v)
 
@@ -151,16 +149,6 @@ defmodule Swarm.UnitBrain do
       Map.get(s, :fall_back, false) or Roles.losing_at?(v, here, @worker_alarm) -> closest
       true -> nil
     end
-  end
-
-  # A spot near this worker where we were hit by something we can't see (as a position to run
-  # from), or nil.
-  defp hidden_near(unit, s) do
-    here = View.pos(unit)
-
-    Enum.find_value(Map.get(s, :hidden, []), fn %{pos: {x, y} = pos} ->
-      if View.dist(here, pos) < @hidden_clear, do: %{"x" => x, "y" => y}
-    end)
   end
 
   # Where to run: by the closest of our towers on our side of the enemy (`Roles.shelter/3`); else
@@ -283,9 +271,7 @@ defmodule Swarm.UnitBrain do
     cond do
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
-      job = Roles.tower_job(v, s.wave, unit) -> tower_intent(v, job)
-      look = looking(s, unit) -> {:move, look}
-      away = clear_of_hidden(unit, s) -> {:move, away}
+      tower = Roles.tower_hitting(v, s.wave, unit) -> hit_tower(v, tower)
       enemy = Roles.leftover_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       spot = s |> Map.get(:check, %{}) |> Map.get(unit["id"]) -> {:attack_move, spot}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
@@ -299,33 +285,13 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # A tower shooting at the wave (`Roles.tower_job/3`): attack it if we can see it, else walk at it
-  # until we do (the server lets us attack only what we see, and our Soldiers often can't see a
-  # tower that reaches them); or step out of its reach.
-  defp tower_intent(v, {:hit, tower}) do
+  # A tower shooting at this wave member (`Roles.tower_hitting/3`): attack it if we can see it,
+  # else walk at it until we do (we can only attack what we see, and a Soldier often can't see the
+  # tower reaching it).
+  defp hit_tower(v, tower) do
     if Enum.any?(v.enemy_buildings, &(&1["id"] == tower["id"])),
       do: {:attack, tower["id"]},
       else: {:move, View.pos(tower)}
-  end
-
-  defp tower_intent(_v, {:back_off, spot}), do: {:move, spot}
-
-  # This unit is the one sent to look where we were hit by something we can't see
-  # (`strategy.hidden`): where it goes, or nil.
-  defp looking(s, unit) do
-    Enum.find_value(Map.get(s, :hidden, []), fn h -> if h.by == unit["id"], do: h.look end)
-  end
-
-  # Near a spot where we were hit by something we can't see (and not the one looking): out of the
-  # area, `@hidden_clear` tiles from the spot toward home, until the look finds it. Nil otherwise.
-  defp clear_of_hidden(unit, s) do
-    here = View.pos(unit)
-    home = s.rally
-
-    Enum.find_value(Map.get(s, :hidden, []), fn h ->
-      if home && View.dist(here, h.pos) < @hidden_clear and h.by != unit["id"],
-        do: toward(h.pos, home, @hidden_clear)
-    end)
   end
 
   # Where an archer steps back to, or nil to stand and shoot. Of the steps that take it farther
@@ -435,8 +401,7 @@ defmodule Swarm.UnitBrain do
   @doc """
   What each of our scouts is doing, for the leader's log: [{id, job, position}], where the job is
   `:look` (looking at a target before a wave leaves), `:wave` (working in front of the wave out),
-  `:reveal` (looking for what hit us that we couldn't see), `:survey` (looking round our side for
-  ore) or `:post` (watching its side from halfway).
+  `:survey` (looking round our side for ore) or `:post` (watching its side from halfway).
   """
   def scout_jobs(%View{} = v, strategy) do
     for u <- View.units_of(v, "Scout"), do: {u["id"], elem(scout_job(v, strategy, u), 0), View.pos(u)}
@@ -449,10 +414,8 @@ defmodule Swarm.UnitBrain do
     front = s.wave && s.target && s.rally && wave_front(v, s.wave, s.target)
 
     survey = Map.get(s, :survey)
-    reveal = looking(s, unit)
 
     cond do
-      reveal -> {:reveal, reveal}
       spot && looker(v, spot) == unit["id"] -> {:look, spot}
       front && looker(v, s.target) == unit["id"] -> {:wave, front}
       survey && surveyor?(v, unit) -> {:survey, survey}
@@ -482,8 +445,6 @@ defmodule Swarm.UnitBrain do
   defp scout_post(v, s, here, {:wave, front}, phase), do: with_wave(v, s, here, front, phase)
   defp scout_post(v, _s, _here, {:post, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
   defp scout_post(v, _s, _here, {:survey, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
-  # Straight there: the point is to see what we can't (it backs off once it does, `danger/3`).
-  defp scout_post(_v, _s, _here, {:reveal, spot}, _phase), do: {{:move, spot}, nil, nil}
 
   # A little past the threat's reach (`@scout_clear` tiles), straight away from it: the scout keeps
   # watching, not running home. Taking damage, at least 3 tiles farther than now (something we

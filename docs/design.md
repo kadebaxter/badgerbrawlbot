@@ -201,26 +201,18 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 |---|---|
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | An enemy fighter to fight within 6 tiles | Attack it (see below) |
-| In the wave, an enemy tower within 6 tiles with one of the wave in its reach | Attack it (walk at it first if we can't see it); whether the wave goes on is the wave's call (it is recalled when outmatched) |
-| At home, in an enemy tower's reach (plus one) | Step 2 tiles past its reach: home fighters never go after towers (a strike does, below) |
-| The one sent to look where we were hit by something unseen | Go there (a scout) or a few tiles from there toward the enemy (a fighter) |
-| Within 7 of a spot where we were hit by something unseen | Step 7 tiles from it toward the rally point |
+| In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog) | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat (falling back, if no tower of ours reaches it: to the tower closest to it) |
 | Attacker, an outpost or workers in the field under attack | Go help the closest (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
 
-**Towers:** only towers shooting at us are targets; one that leaves us alone is a building like
-the rest. We know a tower if we see it or the server remembers it for us (`rememberedBuildings`),
-which matters because a tower reaches 5 tiles the game's way (diagonals count as one) while a
-Soldier sees 5 in a straight line: most of a tower's reach is out of a Soldier's sight. A unit that
-loses HP with nothing we see or know of able to reach it was hit by something unseen, almost
-always such a tower: the leader marks the spot (`strategy.hidden`) and sends the closest scout
-there (it sees 8, the whole area a tower could shoot from), else the closest fighter a few tiles
-toward the enemy; everyone else steps out of the area. Once the tower is seen the server keeps
-reporting it, and the tower rule above takes over. A spot with no hit for 20 ticks is dropped. A
-hit with an enemy fighter we can see within 8 tiles is part of a fight, not a hidden attacker.
+**Towers:** a tower reaches 5 tiles the game's way (diagonals count as one) while a Soldier sees 5
+in a straight line, so a tower often shoots a Soldier that can't see it. The server remembers
+towers we have seen (`rememberedBuildings`), so a wave member in the reach of one we know goes
+for it, walking at it until it is in sight. Only that unit: the rest of the wave goes on, and a
+tower that isn't shooting at a unit is a building like any other to it.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
 everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
@@ -290,7 +282,7 @@ first. Pairs are taken closest first, with enemies that can already hit us ahead
 and a unit already on an enemy stays on it. An enemy takes attackers until their damage
 (`max(1, damage + Weapons - armor)`) covers its current HP, with at most 8 melee attackers. Enemy
 armor is assumed +1 once we have seen an enemy TechLab, since their research is hidden. Units
-left over hit finished towers (they shoot back), then construction sites (worth their full cost
+left over hit a tower shooting at them, then construction sites (worth their full cost
 in destruction at a tenth of the HP and no armor), then workers, then other buildings, and
 Command Centers last (a player is eliminated with their last one, and everything they had left
 is removed with no destruction score for anyone). Fighters at home only go after
