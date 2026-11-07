@@ -208,11 +208,14 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Guard | Stand at the post (behind the front tower, else the rally point) |
 | Attacker | Wait at the rally point |
 
+Every strength comparison (launching, recalling, strikes, sorties, the serum, home's defense) uses
+one measure, `Swarm.Roles.strength/1`, so they always agree: a unit is its HP × damage per tick,
+and a Guard Tower is 2 Soldiers at full HP, less as it is hurt (by HP × damage it would be 5, but
+it can't move, gets focused down and is outranged by Trebuchets).
+
 The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
-or our workers are stronger (HP × damage per tick) than what can meet them: our fighters not in the
-wave within 12 tiles of a raider, and the towers that can reach one, each worth 2 Soldiers (by HP ×
-damage a tower would count as 5, but it can't move, gets focused down and is outranged by
-Trebuchets). Defenders at another base don't count. A
+or our workers are stronger than what can meet them: our fighters not in the wave within 12 tiles
+of a raider, and the towers that can reach one. Defenders at another base don't count. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
 on the way. A wave only leaves if what stays home can hold the raid going on (by the same
 comparison, so a scout poking at the base holds nothing up), and not within 20 ticks of a recall
@@ -224,9 +227,10 @@ An enemy tower at our door (finished, within 12 of one of our bases): home fight
 into its reach (its range + 1) one at a time, not even to meet enemy units standing by it
 (`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
 any wave: everyone at home (guards and attackers) at once, when that is at least 8 fighters with
-the strength of about seven soldiers plus 1.5× the strongest player's units by it. The strike is a
-wave whose target is the tower, and comes home once the tower is down (or too few are left, it is
-outmatched, or after 120 ticks). An enemy building still going up within 12 of one of our bases,
+the strength of the tower plus 1.5× the strongest player's units by it (eight soldiers take a tower
+down in about nine ticks: the eight is what makes it safe). The strike is a wave whose target is
+the tower, and comes home once the tower is down (or too few are left, it is outmatched by the same
+measure, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
 and not under a tower, is razed at once by home fighters (`strategy.raze`).
 
 Siege at our door. The leader remembers our buildings' HP; one losing HP with nothing we can see

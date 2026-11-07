@@ -59,12 +59,13 @@ defmodule Swarm.Brain do
   # without one, the raid must be at least this many times what home has.
   @help_eta 15
   @serum_margin 1.25
-  # A strike at an enemy tower by our base: at least this many fighters, as strong as this (about
-  # seven soldiers: what kills a tower before it kills them) plus `@margin` times the strongest
-  # player's units by it; given up after `@strike_ticks`.
+  # A strike at an enemy tower by our base: at least this many fighters (eight soldiers take a tower
+  # down in about nine ticks), as strong as the tower plus `@margin` times the strongest player's
+  # units by it (`Swarm.Roles.strength/1`, the one measure); given up after `@strike_ticks`, and
+  # not tried again for `@strike_rest` ticks after one comes back.
   @strike_min 8
-  @strike_tower 7000
   @strike_ticks 120
+  @strike_rest 20
   # Siege by our base (see `siege_watch/2` and `sortie/3`): checkers, how far out around the
   # building they look, for how long; a sortie's smallest size and longest outing.
   @checkers 4
@@ -285,6 +286,8 @@ defmodule Swarm.Brain do
       # hit by something we can't see: %{building, pos, at, checkers: unit id => spot, found}.
       hp: %{},
       check: nil,
+      # When the last strike at a tower came back (see `@strike_rest`), or nil.
+      strike_back_at: nil,
       # The serum: nil (not taken yet), :off (not in this game), :spent, or {:until, last tick}.
       # Taken by the game loop when the strategy asks for it (`strategy.serum`).
       serum: nil
@@ -349,6 +352,9 @@ defmodule Swarm.Brain do
 
     check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
 
+    strike_back_at =
+      if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
+
     mode =
       cond do
         attacked? -> :defend
@@ -371,7 +377,8 @@ defmodule Swarm.Brain do
       check: if(check && check.found == nil, do: check.checkers, else: %{})
     }
 
-    {strategy, %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid, check: check}}
+    {strategy,
+     %{memory | wave: wave, next_wave: next_wave, recalled_at: recalled_at, raid: raid, check: check, strike_back_at: strike_back_at}}
   end
 
   # The raid on us: when it was last here, and how many of its fighters we have killed at home
@@ -494,13 +501,17 @@ defmodule Swarm.Brain do
       [] ->
         nil
 
+      [tower | _] when memory.strike_back_at != nil and v.tick - memory.strike_back_at < @strike_rest ->
+        hold = "strike at player #{tower["owner"]}'s tower at #{fmt(View.pos(tower))}: back from one, #{@strike_rest - (v.tick - memory.strike_back_at)} more ticks"
+        {nil, memory.next_wave, [], hold}
+
       [tower | _] ->
         pos = View.pos(tower)
         roles = Roles.home_roles(v, nil)
         group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], do: u
         guards = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @wave_sight))
         {_, theirs} = strongest_player(guards) || {nil, 0}
-        need = @strike_tower + @margin * theirs
+        need = Roles.strength([tower]) + @margin * theirs
         ours = Roles.strength(group)
         at = "player #{tower["owner"]}'s tower at #{fmt(pos)}"
 

@@ -177,12 +177,19 @@ defmodule Swarm.Roles do
   def home(%View{} = v, wave), do: Enum.reject(fighters(v), &(&1["id"] in members(wave)))
 
   @doc """
-  How much fight a group has: the sum of HP × damage per tick. Rough, but it ranks a Soldier,
-  an Archer and a Tower sensibly against each other. Takes units or buildings, ours or theirs.
+  How much fight a group has: the one measure every comparison uses (launching, recalling, strikes,
+  sorties, the serum, home's defense), so they always agree. A unit is its HP × damage per tick.
+  A Guard Tower is `@tower_worth` Soldiers at full HP, less as it is hurt: by HP × damage it would
+  be five, but it can't move, gets focused down, and Trebuchets outrange it. (Taking one down is
+  safe because a strike also needs `@strike_min` fighters in `Swarm.Brain`, not because of this.)
+  Takes units or buildings, ours or theirs.
   """
-  def strength(units) do
-    Enum.sum_by(units, fn u -> hp(u) * stats(u).damage / stats(u).cooldown end)
-  end
+  def strength(units), do: Enum.sum_by(units, &strength_of/1)
+
+  defp strength_of(%{"type" => "GuardTower"} = tower),
+    do: @tower_worth * strength_of(%{"type" => "Soldier"}) * hp(tower) / stats(tower).hp
+
+  defp strength_of(u), do: hp(u) * stats(u).damage / stats(u).cooldown
 
   @doc """
   Enemies near the Command Center: where the closest one is, and how many fighters (not
@@ -268,19 +275,16 @@ defmodule Swarm.Roles do
 
   @doc """
   What can meet `raiders` without the wave: our fighters and Trebuchets not in it within
-  `@defend_reach` of a raider, and our finished towers that can reach one, each worth
-  `@tower_worth` Soldiers. (By HP × damage a tower would count as five: it can't move, gets
-  focused down, and Trebuchets outrange it.) Defenders elsewhere, at another base, don't count.
+  `@defend_reach` of a raider, and our finished towers that can reach one (by `strength/1`, like
+  everything). Defenders elsewhere, at another base, don't count.
   """
   def home_strength(%View{} = v, wave, raiders) do
     near? = fn pos, reach -> Enum.any?(raiders, &(View.dist(View.pos(&1), pos) <= reach)) end
     siege = Enum.reject(View.units_of(v, "Trebuchet"), &(&1["id"] in members(wave)))
     units = Enum.filter(home(v, wave) ++ siege, &near?.(View.pos(&1), @defend_reach))
 
-    towers =
-      Enum.count(View.buildings_of(v, "GuardTower"), &(&1["completed"] and near?.(View.pos(&1), range(&1) + 1)))
-
-    strength(units) + towers * @tower_worth * strength([%{"type" => "Soldier"}])
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and near?.(View.pos(&1), range(&1) + 1)))
+    strength(units ++ towers)
   end
 
   @doc """

@@ -170,6 +170,12 @@ defmodule Swarm.RolesTest do
     end
   end
 
+  test "one measure for everything: a tower is two soldiers at full HP, less as it is hurt" do
+    soldier = Roles.strength([unit(1, "Soldier", 0, 0)])
+    assert Roles.strength([building(800, "GuardTower", 0, 0)]) == 2 * soldier
+    assert Roles.strength([Map.put(building(800, "GuardTower", 0, 0), "hp", 250)]) == soldier
+  end
+
   describe "enemy towers and sites by our base" do
     test "a tower covers its reach plus one; only finished ones" do
       tower = building(800, "GuardTower", 16, 12, 1)

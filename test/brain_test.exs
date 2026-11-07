@@ -921,6 +921,25 @@ defmodule Swarm.BrainTest do
       assert {%{wave: nil, hold: "strike at" <> _}, _, _} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
     end
 
+    test "a strike that just qualified isn't called back the next tick (one measure for both)" do
+      # The tower (1980) and five of their soldiers by it (4950): it needs 1980 + 1.5 x 4950 = 9405.
+      guards = for i <- 1..5, do: unit(900 + i, "Soldier", 17, 13, owner: 1)
+      {s, _, memory} = plan(units: soldiers(10) ++ guards, buildings: [their_tower()])
+      assert %{wave: %{kind: :strike}} = s
+
+      # Walking up to it: still out, not "outmatched" by the very tower it was sized for.
+      closer = for u <- soldiers(10), do: %{u | "x" => 14, "y" => 11}
+      assert {%{wave: %{kind: :strike}}, _, _} = plan([units: closer ++ guards, buildings: [their_tower()], tick: 101], memory)
+    end
+
+    test "after a strike comes back, none for 20 ticks" do
+      memory = %{Brain.new_memory() | strike_back_at: 95}
+      assert {%{wave: nil, hold: "strike at player 1's tower at (16,12): back from one, 15 more ticks"}, _, _} =
+               plan([units: soldiers(10), buildings: [their_tower()]], memory)
+
+      assert {%{wave: %{kind: :strike}}, _, _} = plan([units: soldiers(10), buildings: [their_tower()], tick: 115], memory)
+    end
+
     test "the strike comes home once the tower is down" do
       {_, _, memory} = plan(units: soldiers(10), buildings: [their_tower()])
       at_it = for s <- soldiers(10), do: %{s | "x" => 15, "y" => 11}
