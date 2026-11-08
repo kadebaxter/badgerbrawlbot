@@ -105,6 +105,8 @@ defmodule Swarm.Brain do
   @home_watch 20
   # A wave, strike or sortie down this share of the most it has had is called off (`bleeding/2`).
   @call_off 0.35
+  # A wave may have this many fighters, or two thirds of the army once that is more (`wave_cap/1`).
+  @wave_floor 20
   # A spot where we lost a building is avoided while enemy fighters are this close to it.
   @lost_clear 10
   # Falling back holds this many ticks past the last reason to.
@@ -343,7 +345,9 @@ defmodule Swarm.Brain do
       # The look where a checker died (see `peek/3`), %{pos, at} or nil, and the tick before which
       # no new check starts (`@check_rest` after a checker dies), or nil.
       peek: nil,
-      check_rest: nil
+      check_rest: nil,
+      # The last tick a wave was called home for an enemy army near home (`army_near_home/3`).
+      army_recalled_at: nil
     }
   end
 
@@ -528,6 +532,10 @@ defmodule Swarm.Brain do
     # Called home to defend this tick (all in, nothing comes home).
     home_recall? = memory.wave != nil and not all_in?(v) and Roles.recall(v, memory.wave) != nil
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
+    # Called home for an army near home: no new wave for `@calm_ticks` either, counterattack or
+    # not: the army is still about, and a wave leaving into it was called straight back.
+    army_recall? = memory.wave != nil and not all_in?(v) and army_near_home(v, memory, memory.wave) != nil
+    memory = if army_recall?, do: %{memory | army_recalled_at: v.tick}, else: memory
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
     {look, looked} = look(memory, v, rally, owner, target)
     {check, checked, died_at} = siege_watch(memory, v)
@@ -1101,10 +1109,15 @@ defmodule Swarm.Brain do
 
   # `@batch` attackers at the rally point go after the wave, if home can still hold without them.
   defp reinforce(v, wave, rally) do
+    in_wave = Enum.count(Roles.fighters(v), &(&1["id"] in wave.members))
+    room = max(wave_cap(v) - in_wave, 0)
     staged = staged(v, wave, rally, @staged_radius)
     ids = Enum.map(staged, & &1["id"])
 
     cond do
+      room < @batch ->
+        {wave, [], "reinforcements: the wave is at its cap (#{in_wave} of #{wave_cap(v)}), the rest stay home"}
+
       length(staged) < @batch ->
         {wave, [], "reinforcements: #{length(staged)} of #{@batch} at the rally point"}
 
@@ -1116,6 +1129,11 @@ defmodule Swarm.Brain do
         {%{wave | members: Enum.sort(wave.members ++ ids)}, [{:wave_reinforced, why}], nil}
     end
   end
+
+  # The most fighters a wave may have: `@wave_floor`, or two thirds of all our fighters once that
+  # is more. Until we have `@wave_floor` plus the guards, a wave may take everyone but them; past
+  # that, a third of the army stays home. (The end-of-match all-in takes everyone regardless.)
+  defp wave_cap(v), do: max(@wave_floor, div(2 * length(Roles.fighters(v)), 3))
 
   # Attackers (not guards or escorts) within `radius` of the rally point.
   defp staged(v, wave, rally, radius) do
@@ -1253,7 +1271,11 @@ defmodule Swarm.Brain do
   # fourth element says why we wait.
   defp launch(v, memory, rally, calm?, owner, target) do
     counter? = counter?(memory, v)
-    staged = staged(v, nil, rally, if(counter?, do: @counter_radius, else: @staged_radius))
+    # No more than the wave may take (`wave_cap/1`), the closest to the rally point first.
+    staged =
+      staged(v, nil, rally, if(counter?, do: @counter_radius, else: @staged_radius))
+      |> Enum.sort_by(&{View.dist(View.pos(&1), rally), &1["id"]})
+      |> Enum.take(wave_cap(v))
     attackers = for {_id, :attacker} <- Roles.home_roles(v, nil), do: 1
 
     # Trebuchets waiting at the rally point go too, if there are enough of them.
@@ -1285,6 +1307,9 @@ defmodule Swarm.Brain do
       cond do
         not calm? and not counter? ->
           "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"
+
+        memory.army_recalled_at && v.tick - memory.army_recalled_at < @calm_ticks ->
+          "back from a recall for an army near home, #{@calm_ticks - (v.tick - memory.army_recalled_at)} more ticks"
 
         not scouted? and not ready? ->
           "#{at_rally}, want #{max(@first_wave, want)} while nothing is scouted"

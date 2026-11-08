@@ -253,7 +253,11 @@ never go at one too light. Whose it is decides, not who asks: a strike's launch 
 both see an enemy tower and agree.
 
 Any wave, strike or sortie is called off once it has lost over a third of the most strength it has
-had (reinforcements count), not left to bleed until only a few remain. The leader also recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
+had (reinforcements count), not left to bleed until only a few remain. A wave takes at most 20
+fighters, or two thirds of all our fighters once that is more: up to 27 fighters it may take
+everyone but the seven guards, and past that a third of the army stays home (the end-of-match
+all-in still takes everyone). After a wave is called home for an enemy army near home, no new wave
+leaves for 20 ticks, counterattack or not. The leader also recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
 or our workers are stronger than what can meet them: our fighters not in the wave within 12 tiles
 of a raider, and the towers that can reach one. Defenders at another base don't count. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them

@@ -50,6 +50,49 @@ defmodule Swarm.DefenseTest do
     end
   end
 
+  describe "how much of the army a wave takes" do
+    # n soldiers at the rally point, and nothing known of the enemy (so a wave may leave).
+    defp army(n), do: for(i <- 1..n, do: unit(200 + i, "Soldier", 10, 10))
+
+    test "up to 27 fighters: everyone but the seven guards" do
+      assert {%{wave: %{members: members}}, _, _} = plan(units: army(27))
+      assert length(members) == 20
+    end
+
+    test "past that, two thirds; a third stays home" do
+      assert {%{wave: %{members: members}}, _, _} = plan(units: army(45))
+      assert length(members) == 30
+    end
+
+    test "reinforcements stop at the cap" do
+      wave = %{id: 1, members: Enum.to_list(201..220), released: true, owner: 1}
+      out = for s <- Enum.take(army(30), 20), do: %{s | "x" => 40, "y" => 40}
+      memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
+      # Thirty fighters: the cap is 20, and the wave has them all.
+      assert {%{wave: %{members: members}, hold: hold}, _, _} = plan([units: out ++ Enum.drop(army(30), 20)], memory)
+      assert length(members) == 20
+      assert hold =~ "at its cap"
+    end
+  end
+
+  describe "after a recall for an army near home" do
+    test "no new wave for a while, counterattack or not" do
+      army = for i <- 1..20, do: unit(900 + i, "Archer", 22, 7, owner: 2)
+      remembered = Map.new(army, &{&1["id"], &1 |> Map.take(["id", "owner", "type", "x", "y"]) |> Map.put("seen", 99)})
+      out = for i <- 1..15, do: unit(200 + i, "Soldier", 45, 45)
+      memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..215), released: true}, next_wave: 2, enemies: remembered}
+      {_, _, memory} = plan([units: out ++ soldiers(10)], memory)
+      assert memory.army_recalled_at == 100
+
+      # The army has gone out of mind, everyone is back: still no wave until 20 ticks have passed.
+      back = for i <- 1..25, do: unit(200 + i, "Soldier", 10, 10)
+      assert {%{wave: nil, hold: "back from a recall for an army near home" <> _}, _, _} =
+               plan([units: back, tick: 110], %{memory | enemies: %{}})
+
+      assert {%{wave: %{}}, _, _} = plan([units: back, tick: 121], %{memory | enemies: %{}})
+    end
+  end
+
   describe "sorties" do
     defp hit_tower, do: Map.put(building(40, "GuardTower", 14, 7), "hp", 300)
     defp was_whole, do: %{Brain.new_memory() | hp: %{40 => 500}}
