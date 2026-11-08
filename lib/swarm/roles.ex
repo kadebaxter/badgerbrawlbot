@@ -46,6 +46,8 @@ defmodule Swarm.Roles do
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
+  # A Command Center our fighters by it can bring down in this many ticks is finished first.
+  @finish_ticks 5
   @siege_engage_radius 10
   # A Trebuchet this close to one of our buildings is attacking it (its range is 7).
   @siege_reach 9
@@ -155,7 +157,7 @@ defmodule Swarm.Roles do
     v = put_shared(v, %{fighters: fighters(v), enemy_fighters: enemy_fighters(v), enemy_towers: enemy_towers(v), our_towers: our_towers(v)})
     v = put_shared(v, %{outposts: outposts(v)})
     v = put_shared(v, %{bases: bases(v)})
-    v = put_shared(v, %{raiders: raiders(v), help_wanted: help_wanted(v)})
+    v = put_shared(v, %{raiders: raiders(v), help_wanted: help_wanted(v), finishable_ccs: finishable_ccs(v)})
     v = put_shared(v, %{wave: wave, home_roles: home_roles(v, wave)})
     v = put_shared(v, %{assignments: assignments(v, wave), home_strength: strength(home(v, wave), v.me)})
     # The lists of units and towers only helped work the rest out: the view already carries them,
@@ -175,6 +177,31 @@ defmodule Swarm.Roles do
   end
 
   defp put_shared(v, answers), do: %{v | shared: Map.merge(v.shared || %{}, answers)}
+
+  @doc """
+  Enemy Command Centers nearly dead: our fighters within `@engage_radius` of one can bring it down
+  in `@finish_ticks` ticks (their hits, its armor of 2 taken off, over that many ticks, are at
+  least its HP). A player is eliminated with their last one, and everything they had goes with
+  it: finishing one comes before anything else, including calling a wave off.
+  """
+  def finishable_ccs(%View{} = v) do
+    View.cached(v, :finishable_ccs, fn ->
+      weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
+
+      for b <- v.enemy_buildings,
+          b["type"] == "CommandCenter",
+          by = Enum.filter(fighters(v), &(View.dist(View.pos(&1), View.pos(b)) <= @engage_radius)),
+          by != [],
+          per_tick = Enum.sum_by(by, &(max(1, stats(&1).damage + weapons - 2) / stats(&1).cooldown)),
+          (b["hp"] || 1500) <= per_tick * @finish_ticks,
+          do: b
+    end)
+  end
+
+  @doc "A nearly dead enemy Command Center (`finishable_ccs/1`) within `@engage_radius` of `unit`, or nil."
+  def finish_target(%View{} = v, unit) do
+    Enum.find(finishable_ccs(v), &(View.dist(View.pos(&1), View.pos(unit)) <= @engage_radius))
+  end
 
   @doc "Enemy fighters we can see (not workers)."
   def enemy_fighters(%View{} = v), do: View.cached(v, :enemy_fighters, fn -> Enum.reject(v.enemy_units, &(&1["type"] == "Worker")) end)

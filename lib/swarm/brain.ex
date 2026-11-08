@@ -119,6 +119,8 @@ defmodule Swarm.Brain do
   @help_follow 8
   @help_clear 15
   @help_give_up 1.3
+  # After help is called off, no new help for this long.
+  @help_rest 20
   # The main base is overrun by enemies this many times all of home; regrouping holds this long
   # after the last tick it was (see `regroup/2`). The base's reach is `Swarm.Roles`'.
   @overrun_margin 1.5
@@ -278,6 +280,8 @@ defmodule Swarm.Brain do
   @survey_timeout 40
   # Ore kept back for workers (two of them), and how few workers make training them come first.
   @worker_reserve 100
+  # The opening: with no Barracks up yet, before this tick, no ore is kept back.
+  @opening_ticks 300
   @rebuild_workers 5
 
   # Each tier 2 comes after its tier 1, and a TechLab researches one at a time.
@@ -361,8 +365,10 @@ defmodule Swarm.Brain do
       check_rest: nil,
       # The last tick a wave was called home for an enemy army near home (`army_near_home/3`).
       army_recalled_at: nil,
-      # Where home's attackers are helping, %{pos, clear_since}, or nil (see `help/3`).
-      help: nil
+      # Where home's attackers are helping, %{pos, clear_since}, or nil, and the tick help was
+      # last called off (see `help/3`).
+      help: nil,
+      help_off_at: nil
     }
   end
 
@@ -471,7 +477,8 @@ defmodule Swarm.Brain do
   #   `@help_follow`), and holds while there is one. It ends once nothing has been wanted there for
   #   `@help_clear` ticks, or when what is there is `@help_give_up` times what home can bring.
   # - Not committed: it commits to the wanted spot closest to the rally point that home can take
-  #   (`Roles.can_take?/3`), so everyone goes together, from the rally point.
+  #   (`Roles.can_take?/3`), so everyone goes together, from the rally point; not within
+  #   `@help_rest` ticks of calling help off.
   #
   # A raid on the main base still comes first for the units (`Swarm.UnitBrain`).
   # Returns {where, or nil; memory; notes for the decision log}.
@@ -480,7 +487,12 @@ defmodule Swarm.Brain do
   defp help(v, memory, s) do
     spots = Enum.reject(Roles.help_wanted(v), &Roles.covered?(v, &1))
 
+    resting? = memory.help_off_at != nil and v.tick - memory.help_off_at < @help_rest
+
     case memory.help do
+      nil when resting? ->
+        {nil, memory, []}
+
       nil ->
         case spots |> Enum.filter(&Roles.can_take?(v, s.wave, &1)) |> Enum.min_by(&{View.dist(&1, s.rally || &1), &1}, fn -> nil end) do
           nil -> {nil, memory, []}
@@ -489,7 +501,10 @@ defmodule Swarm.Brain do
 
       %{pos: pos} = help ->
         near = Enum.filter(spots, &(View.dist(&1, pos) <= @help_follow))
-        pos = Enum.min_by(near, &{View.dist(&1, pos), &1}, fn -> pos end)
+        # It follows the fight only to where home can still take what is there: following onto
+        # the middle of the pack had it called off the next tick, and committed again at its edge.
+        takeable = Enum.filter(near, &Roles.can_take?(v, s.wave, &1))
+        pos = Enum.min_by(takeable, &{View.dist(&1, pos), &1}, fn -> pos end)
         clear_since = if near == [], do: help.clear_since || v.tick, else: nil
         # The same measure that committed to it (`Roles.help_odds/3`).
         {ours, theirs} = Roles.help_odds(v, s.wave, pos)
@@ -500,7 +515,7 @@ defmodule Swarm.Brain do
 
           theirs > @help_give_up * ours ->
             why = "help at #{fmt(pos)} called off: #{round(theirs)} there against #{round(ours)} home can bring"
-            {nil, %{memory | help: nil}, [{:help, why}]}
+            {nil, %{memory | help: nil, help_off_at: v.tick}, [{:help, why}]}
 
           true ->
             {pos, %{memory | help: %{pos: pos, clear_since: clear_since}}, []}
@@ -556,18 +571,23 @@ defmodule Swarm.Brain do
     memory = remember_losses(memory, v)
 
     # Ore for a couple of workers stays back from everything else once the army is being trained
-    # (a Barracks is up): with every worker dead and nothing banked, the economy never starts again.
-    # Not in the opening, where every bit of ore goes into the first buildings.
-    reserve = if Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"]), do: min(v.ore, @worker_reserve), else: 0
+    # (a Barracks is up, or past the opening: the Barracks may be gone): with every worker dead and
+    # nothing banked, the economy never starts again. Not in the opening, where every bit of ore
+    # goes into the first buildings.
+    opening? = v.tick < @opening_ticks and not Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"])
+    reserve = if opening?, do: 0, else: min(v.ore, @worker_reserve)
+    # While the main base is raided or overrun, workers trained there only die: the reserve waits
+    # for the backup's own workers (first claim on it) or for the raid to be gone.
+    home_reserve = if Roles.threat(v) != nil or memory.regroup, do: 0, else: reserve
 
     {commands, memory, _ore} =
       {[], memory, v.ore - reserve}
-      |> rebuild_workers(v, reserve)
+      |> with_reserve(reserve, &train_backup_workers(&1, v))
+      |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
       |> army_floor(v)
       |> build(v, terrain)
-      |> with_reserve(reserve, &train_workers(&1, v))
-      |> with_reserve(reserve, &train_backup_workers(&1, v))
+      |> with_reserve(home_reserve, &train_workers(&1, v))
       |> research(v)
       |> train_scout(v)
       |> train_siege(v)
@@ -1047,6 +1067,9 @@ defmodule Swarm.Brain do
       gone? ->
         {nil, memory.next_wave, [{:wave_recalled, "strike: #{at} is down"}], nil}
 
+      finishing?(v, alive) ->
+        {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
+
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: only #{length(alive)} left"}], nil}
 
@@ -1069,6 +1092,13 @@ defmodule Swarm.Brain do
       true ->
         {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
     end
+  end
+
+  # Some of `alive` are by a nearly dead enemy Command Center (`Roles.finishable_ccs/1`): the wave
+  # stays out until it falls, whatever else would call it off. Two more ticks there eliminate a
+  # player; walking away left one at 195 HP.
+  defp finishing?(v, alive) do
+    Enum.any?(Roles.finishable_ccs(v), fn cc -> Enum.any?(alive, &(View.dist(View.pos(&1), View.pos(cc)) <= 6)) end)
   end
 
   # Called off sooner: a wave, strike or sortie that has lost `@call_off` of the most it ever had
@@ -1112,6 +1142,9 @@ defmodule Swarm.Brain do
     alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
 
     cond do
+      finishing?(v, alive) ->
+        {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
+
       home = Roles.recall(v, wave) ->
         {theirs, ours} = home
         why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"

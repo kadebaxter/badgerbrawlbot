@@ -353,6 +353,8 @@ defmodule Swarm.UnitBrain do
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
 
     cond do
+      # A nearly dead enemy Command Center next to us: finish it, before anything else.
+      cc = Roles.finish_target(v, unit) -> {:attack, cc["id"]}
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)

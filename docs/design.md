@@ -237,10 +237,16 @@ tower that isn't shooting at a unit is a building like any other to it.
 every tick (which turned the group around whenever an archer stepped out of sight). It commits to
 the place help is wanted (an outpost, our workers, a siege; not under an enemy tower) closest to
 the rally point that home can take, so the attackers go together from there. Committed, it follows
-the fight within 8 tiles, and holds until nothing has been wanted there for 15 ticks, or what is
+the fight within 8 tiles, but only to where home can still take what is there (following onto the
+middle of a pack had it called off the next tick and committed again at its edge), and holds until nothing has been wanted there for 15 ticks, or what is
 there is 1.3× what home can bring. Committing and calling off use one measure
 (`Swarm.Roles.help_odds/3`: everything at home and our towers that reach the spot, against what is
-there), so they never disagree. A raid on the main base still comes first.
+there), so they never disagree. After it is called off, no new help for 20 ticks. A raid on the
+main base still comes first.
+
+**Finishing a Command Center:** an enemy Command Center that our fighters by it can bring down in 5
+ticks is attacked before anything else (by those within 6 of it), and the wave or strike they are
+in isn't called off meanwhile, whatever its losses: a player is eliminated with their last one.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
 everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
@@ -403,8 +409,10 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    plan with. Once we have a scout, the first one **surveys** our side for ore before taking its post:
    spots on two rings (10 and 20 tiles) around the Command Center, on our side of the map, each
    done once anything of ours sees it (or after 40 ticks of trying).
-   **Ore for workers:** once a Barracks is up, 100 ore (two workers) is kept back from everything but
-   workers, and with fewer than 5 workers left, workers are trained before anything else: losing
+   **Ore for workers:** once a Barracks is up (or from tick 300 on), 100 ore (two workers) is kept
+   back from everything but workers, and with fewer than 5 workers left, workers are trained before
+   anything else. While the main base is raided or overrun, the reserve isn't spent on workers
+   there (they only die); the backup Command Center's own workers have first claim on it: losing
    every worker with nothing banked would end the economy for good. When home has been short of ore for 30 ticks in a row (under
    3,000 left within reach of a drop-off, so the next depot is up before it runs out; how many
    workers there are doesn't matter, they stack), a Resource

@@ -135,6 +135,86 @@ defmodule Swarm.CallOffTest do
     end
   end
 
+  describe "help that doesn't flip-flop" do
+    defp edge_miners, do: for(i <- 1..4, do: unit(100 + i, "Worker", 25, 7, activity: "Gathering"))
+
+    test "it doesn't follow the fight onto a pack it can't take" do
+      # Committed to two raiders at (27, 7). Next tick they are gone, and the only raiders left
+      # are a big pack 7 tiles on at (34, 7), by more of our workers: following them there had it
+      # called off the tick after, and committed again at the next edge.
+      far_miners = for i <- 1..3, do: unit(110 + i, "Worker", 33, 9, activity: "Gathering")
+      pair = for i <- 1..2, do: unit(900 + i, "Soldier", 27, 7, owner: 1)
+      pack = for i <- 1..20, do: unit(920 + i, "Soldier", 34, 7, owner: 1)
+      home = soldiers(10)
+      {_, _, memory} = plan(units: edge_miners() ++ far_miners ++ pair ++ home)
+      assert memory.help.pos == {27, 7}
+
+      {s, _, _} = plan([units: edge_miners() ++ far_miners ++ pack ++ home, tick: 101], memory)
+      assert s.help == {27, 7}
+      refute Enum.any?(s.why, &match?({:help, _}, &1))
+    end
+
+    test "after help is called off, none again for a while" do
+      pair = for i <- 1..2, do: unit(900 + i, "Soldier", 27, 7, owner: 1)
+      {_, _, memory} = plan(units: edge_miners() ++ pair ++ soldiers(10))
+      big = for i <- 1..16, do: unit(940 + i, "Soldier", 27, 7, owner: 1)
+      {%{help: nil}, _, memory} = plan([units: edge_miners() ++ big ++ soldiers(10), tick: 101], memory)
+
+      # The big raid moves off, two raiders again: still no help until 20 ticks have passed.
+      assert {%{help: nil}, _, _} = plan([units: edge_miners() ++ pair ++ soldiers(10), tick: 110], memory)
+      assert {%{help: {27, 7}}, _, _} = plan([units: edge_miners() ++ pair ++ soldiers(10), tick: 122], memory)
+    end
+  end
+
+  describe "the worker reserve" do
+    test "isn't spent on workers at a main base under attack: they only die there" do
+      raiders = for i <- 1..3, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+      opts = [units: workers(3) ++ raiders, buildings: [building(2, "Barracks", 11, 7)], ore: 100, tick: 500]
+      {_, commands, _} = plan(opts)
+      refute Enum.any?(commands, &match?(%{"unitType" => "Worker"}, &1))
+
+      # Raid gone: the reserve rebuilds.
+      {_, commands, _} = plan(Keyword.put(opts, :units, workers(3)))
+      assert Enum.any?(commands, &match?(%{"unitType" => "Worker", "buildingId" => 1}, &1))
+    end
+
+    test "the backup's own workers get it first while we regroup" do
+      backup = building(19, "CommandCenter", 40, 8)
+      overrun = for i <- 1..12, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+      {_, _, memory} = plan(units: overrun ++ soldiers(3), buildings: [backup, building(2, "Barracks", 11, 7)])
+      {_, commands, _} = plan([units: overrun ++ workers(2), buildings: [backup, building(2, "Barracks", 11, 7)], ore: 100, tick: 101], memory)
+      assert [%{"unitType" => "Worker", "buildingId" => 19}] = for(%{"unitType" => "Worker"} = c <- commands, do: c)
+    end
+  end
+
+  describe "a nearly dead Command Center" do
+    # Player 1's Command Center at (40, 40) down to 195 HP; eleven of ours by it in a wave.
+    defp dying_cc, do: Map.put(building(700, "CommandCenter", 40, 40, 1), "hp", 195)
+    defp wave_by_it, do: for(i <- 1..11, do: unit(200 + i, "Soldier", 41, 41))
+
+    test "is finished first: before a building, a pullback, or anything" do
+      barracks = building(701, "Barracks", 42, 42, 1)
+      tower = building(702, "GuardTower", 44, 44, 1)
+      s = Map.merge(@gather, %{mode: :attack, wave: %{id: 1, members: Enum.to_list(201..211)}})
+      v = View.new(state(units: wave_by_it(), buildings: [dying_cc(), barracks, tower]))
+      assert [%{"id" => 700}] = Roles.finishable_ccs(v)
+      assert {%{"type" => "Attack", "targetId" => 700}, _} = UnitBrain.decide(201, v, s)
+    end
+
+    test "a full one isn't" do
+      v = View.new(state(units: wave_by_it(), buildings: [building(700, "CommandCenter", 40, 40, 1)]))
+      assert Roles.finishable_ccs(v) == []
+    end
+
+    test "the wave isn't called off while it is finishing one" do
+      # The wave had 20; eleven left (55%): it would be called off for its losses.
+      wave = %{id: 1, members: Enum.to_list(201..220), released: true, owner: 1, peak: 20 * 990, at: 90}
+      memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
+      assert {%{wave: %{id: 1}}, _, _} = plan([units: wave_by_it(), buildings: [dying_cc()]], memory)
+      assert {%{wave: nil}, _, _} = plan([units: wave_by_it(), buildings: [Map.put(dying_cc(), "hp", 1500)]], memory)
+    end
+  end
+
   describe "the economy" do
     test "home is short of ore at 3000 left, so the next depot is up before it runs out" do
       home = for {id, x, y} <- [{4, 2, 7}, {5, 2, 9}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 1400}
