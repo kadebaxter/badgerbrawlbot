@@ -21,7 +21,7 @@ defmodule Swarm.UnitBrain do
   4. guards and attackers, with an enemy building going up by one of our bases: kill the site
   5. guards and attackers, with enemies at the main base: attack-move to the threat, unless it
      is under an enemy tower (a strike deals with that, not one unit at a time)
-  6. an attacker, with an outpost or our workers under attack: go help (the closest)
+  6. an attacker, with the leader helping somewhere (`strategy.help`): go there
   7. otherwise go to its spot: guards to the post, attackers to the rally point
 
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
@@ -345,7 +345,7 @@ defmodule Swarm.UnitBrain do
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       raze = role == :attacker && Map.get(s, :raze) -> {:attack, raze}
       s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
-      help = role == :attacker && closest_help(v, unit) -> go_help(unit, v, s, cover(v, s, help))
+      help = role == :attacker && Map.get(s, :help) -> {:attack_move, cover(v, s, help)}
       role == :guard -> {:move, s.post}
       true -> {:move, s.rally}
     end
@@ -355,7 +355,7 @@ defmodule Swarm.UnitBrain do
   # (`Roles.safe_at?/2`); otherwise nobody walks in alone (`regroup_or_retreat/4`).
   defp safe_tower(v, wave, unit) do
     tower = Roles.tower_hitting(v, wave, unit)
-    if tower && Roles.safe_at?(v, View.pos(tower)), do: tower
+    if tower && Roles.safe_for?(v, unit, View.pos(tower)), do: tower
   end
 
   # Losing where it stands, with nothing it may fight (it is never sent to chase into more
@@ -459,13 +459,6 @@ defmodule Swarm.UnitBrain do
   end
 
   # Not under an enemy tower: a strike goes there, not one unit at a time.
-  defp closest_help(v, unit) do
-    case Enum.reject(Roles.help_wanted(v), &Roles.covered?(v, &1)) do
-      [] -> nil
-      spots -> Enum.min_by(spots, &View.dist(&1, View.pos(unit)))
-    end
-  end
-
   # A Trebuchet waits at the rally point for a wave (with no base left it joins the attack);
   # with one, it goes to the wave's staging point, then attack-move to the target (the game fires them at
   # whatever they reach), stepping back from anything inside their blind spot.

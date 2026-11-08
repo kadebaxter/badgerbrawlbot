@@ -83,6 +83,46 @@ defmodule Swarm.CallOffTest do
     end
   end
 
+  describe "helping, one decision kept by the leader" do
+    # Four of our workers out at (25, 7); raiders on them at (27, 7).
+    defp field_miners, do: for(i <- 1..4, do: unit(100 + i, "Worker", 25, 7, activity: "Gathering"))
+    defp field_raid(n, x \\ 27), do: for(i <- 1..n, do: unit(900 + i, "Soldier", x, 7, owner: 1))
+
+    test "commits when home can take what is there, and says so" do
+      {s, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      assert s.help == {27, 7}
+      assert memory.help.pos == {27, 7}
+      assert Enum.any?(s.why, &match?({:help, "home goes to help at (27,7)"}, &1))
+    end
+
+    test "not when home can't take it" do
+      assert {%{help: nil}, _, _} = plan(units: field_miners() ++ field_raid(14) ++ soldiers(10))
+    end
+
+    test "holds while the raid is out of sight a moment, ends once it has been gone a while" do
+      {_, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      {s, _, memory} = plan([units: field_miners() ++ soldiers(10), tick: 101], memory)
+      assert s.help == {27, 7}
+      {s, _, memory} = plan([units: field_miners() ++ soldiers(10), tick: 110], memory)
+      assert s.help == {27, 7}
+      {s, _, _} = plan([units: field_miners() ++ soldiers(10), tick: 116], memory)
+      assert s.help == nil
+      assert Enum.any?(s.why, &match?({:help, "help at (27,7) over" <> _}, &1))
+    end
+
+    test "follows the fight as the raiders move" do
+      {_, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      assert {%{help: {29, 7}}, _, _} = plan([units: field_miners() ++ field_raid(2, 29) ++ soldiers(10), tick: 101], memory)
+    end
+
+    test "is called off when what is there gets well beyond what home can bring" do
+      {_, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      {s, _, _} = plan([units: field_miners() ++ field_raid(16) ++ soldiers(10), tick: 101], memory)
+      assert s.help == nil
+      assert Enum.any?(s.why, &match?({:help, "help at (27,7) called off" <> _}, &1))
+    end
+  end
+
   describe "the economy" do
     test "home is short of ore at 3000 left, so the next depot is up before it runs out" do
       home = for {id, x, y} <- [{4, 2, 7}, {5, 2, 9}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 1400}

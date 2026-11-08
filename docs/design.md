@@ -220,13 +220,20 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost if the escorts (all of them) with our fighters and towers there can meet them; a stronger raid, back to the rally point. Else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat, together: from the rally point, once everything at home and our towers there are at least as strong as what is there (those already within 6 carry on); otherwise wait at the rally point. Falling back, if no tower of ours reaches it: to the tower closest to it |
-| Attacker, an outpost or workers in the field under attack | Go help the closest the same way, together from the rally point (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
+| Attacker, with the leader helping somewhere (`strategy.help`) | Attack-move there (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
 
 **Towers:** a tower reaches 5 tiles the game's way (diagonals count as one) while a Soldier sees 5
 in a straight line, so a tower often shoots a Soldier that can't see it. The server remembers
 towers we have seen (`rememberedBuildings`), so a wave member in the reach of one we know goes
 for it, walking at it until it is in sight. Only that unit: the rest of the wave goes on, and a
 tower that isn't shooting at a unit is a building like any other to it.
+
+**Helping:** one decision, made and kept by the leader (`strategy.help`), not by each attacker
+every tick (which turned the group around whenever an archer stepped out of sight). It commits to
+the place help is wanted (an outpost, our workers, a siege; not under an enemy tower) closest to
+the rally point that home can take, so the attackers go together from there. Committed, it follows
+the fight within 8 tiles, and holds until nothing has been wanted there for 15 ticks, or what is
+there is 1.3× what home can bring. A raid on the main base still comes first.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
 everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
@@ -270,9 +277,11 @@ comparison, so a scout poking at the base holds nothing up) and any enemy army w
 20 tiles of the Command Center (the strongest single player's, against everything that stays home
 and our towers by it), and not within 20 ticks of a recall for home. A wave out comes home for such
 an army too, before it is in the base. Strikes and sorties only take fighters within 20 tiles of
-the Command Center, so a recalled wave walking back isn't sent straight into another fight. Right after we beat a raid (3 of its fighters killed at home, the last of it gone within
-30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
-counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
+the Command Center, so a recalled wave walking back isn't sent straight into another fight. Once a raid we beat has been gone for 20 ticks (3 of its fighters killed at home, the last of it
+seen 20 to 50 ticks ago) a wave may leave with every attacker within 10 tiles of the rally point: a
+counterattack. Not sooner: archers step out of sight and back, and a counterattack left into them
+and was called straight back. For the same reason no wave at all leaves while a raid has been out
+of sight for less than 20 ticks. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
 An enemy tower at our door (finished, within 12 of the Command Center; never because it is by an
 outpost, usually the enemy's own base next door): home fighters never walk
@@ -325,7 +334,8 @@ left over hit a tower shooting at them, then construction sites (worth their ful
 in destruction at a tenth of the HP and no armor), then workers, then other buildings, and
 Command Centers last (a player is eliminated with their last one, and everything they had left
 is removed with no destruction score for anyone). Nobody chases an enemy into more danger: a fighter only goes after an enemy (or a building)
-where our fighters and towers there, with it, are at least as strong as theirs there (their
+where our fighters and towers there, with it, or the group around it (our fighters within 6 of
+it, who go in with it), whichever is more, are at least as strong as theirs there (their
 fighters, and their towers we know of that reach the spot; a Trebuchet counts as one Soldier, as
 it can't hit anything close), and otherwise only hits what it can reach without moving. Fighters at home only go after
 enemies inside a base (within 10 of the Command Center or an outpost) or within 5 of one of our

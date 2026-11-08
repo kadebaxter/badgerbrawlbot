@@ -66,6 +66,19 @@ defmodule Swarm.TowersTest do
     assert %{"id" => 799} = Roles.target(v, wave(5), hd(ours))
   end
 
+  test "a group goes in together: the ones behind count, not only those already by the enemy" do
+    # Eight archers in our base at (14, 10). Three of ours 5 tiles from them, seventeen more 5
+    # behind those.
+    archers = for i <- 1..8, do: unit(900 + i, "Archer", 14, 10, owner: 1)
+    front = for i <- 1..3, do: unit(200 + i, "Soldier", 9, 10)
+    behind = for i <- 4..20, do: unit(200 + i, "Soldier", 4, 10)
+    v = view(archers ++ front ++ behind)
+    assert %{"id" => _} = Roles.target(v, nil, hd(front))
+
+    # The same three on their own still hold back.
+    assert Roles.target(view(archers ++ front), nil, hd(front)) == nil
+  end
+
   test "at home: not this rule" do
     v = view(soldiers_at(3, 26, 10), buildings: [@tower])
     assert Roles.tower_hitting(v, nil, hd(soldiers_at(1, 26, 10))) == nil

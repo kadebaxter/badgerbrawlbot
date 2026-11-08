@@ -529,11 +529,14 @@ defmodule Swarm.Roles do
     # Where we may go after an enemy: where our side (with the one going) is at least as strong as
     # theirs (`safe_at?/2`).
     odds = Map.new(enemies, &{&1["id"], {support_at(v, View.pos(&1)), danger_at(v, View.pos(&1))}})
+    # The group around each of ours: they go in together, so they count, not only those already by
+    # the enemy (counting only those, a group standing a few tiles back never went in at all).
+    groups = Map.new(fighters(v), &{&1["id"], group_strength(v, &1)})
 
     safe? = fn o, e ->
       {ours, theirs} = odds[e["id"]]
       going = if View.dist(View.pos(o), View.pos(e)) > @engage_radius, do: strength([o], v.me), else: 0
-      ours + going >= theirs
+      max(ours + going, groups[o["id"]]) >= theirs
     end
     extra_armor = if enemy_tech_lab?(v), do: 1, else: 0
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
@@ -583,7 +586,7 @@ defmodule Swarm.Roles do
     (Enum.filter(v.enemy_units, &(&1["type"] == "Worker")) ++ v.enemy_buildings)
     |> Enum.filter(fn t ->
       d = View.dist(View.pos(t), here)
-      d <= @engage_radius and may_chase?(v, wave, unit, t) and (d <= stats(unit).range or safe_at?(v, View.pos(t)))
+      d <= @engage_radius and may_chase?(v, wave, unit, t) and (d <= stats(unit).range or safe_for?(v, unit, View.pos(t)))
     end)
     |> Enum.min_by(
       fn t ->
@@ -707,6 +710,21 @@ defmodule Swarm.Roles do
   its towers, or into its friends, is left alone until we are there in strength.
   """
   def safe_at?(%View{} = v, pos), do: support_at(v, pos) >= danger_at(v, pos)
+
+  @doc """
+  Our fighters within `@engage_radius` of `unit`, itself included: the group that goes in with it.
+  """
+  def group_strength(%View{} = v, unit) do
+    here = View.pos(unit)
+    strength(Enum.filter(fighters(v), &(View.dist(View.pos(&1), here) <= @engage_radius)), v.me)
+  end
+
+  @doc """
+  Whether `unit` may go fight at `pos`: what we have there (`support_at/2`), or the group around
+  it that goes in with it (`group_strength/2`), whichever is more, is at least what they have
+  (`danger_at/2`). A lone fighter still holds back from a pack; a group goes in together.
+  """
+  def safe_for?(%View{} = v, unit, pos), do: max(support_at(v, pos), group_strength(v, unit)) >= danger_at(v, pos)
 
   @doc """
   Whether home can take on what is at `pos`: everything at home (not in `wave`), and our towers

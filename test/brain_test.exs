@@ -346,7 +346,7 @@ defmodule Swarm.BrainTest do
     test "a counterattack doesn't wait for one" do
       {attackers, guards} = Enum.split(soldiers(22), 15)
       near = Enum.map(attackers, &%{&1 | "x" => 14, "y" => 14}) ++ guards
-      memory = %{Brain.new_memory() | raid: %{at: 95, kills: 3}}
+      memory = %{Brain.new_memory() | raid: %{at: 75, kills: 3}}
       assert {%{wave: %{id: 1}}, _, _} = fresh([units: near], memory)
     end
 
@@ -410,8 +410,8 @@ defmodule Swarm.BrainTest do
       Enum.map(attackers, &%{&1 | "x" => 14, "y" => 14}) ++ guards
     end
 
-    test "right after we beat a raid, everyone near the rally point goes" do
-      memory = %{Brain.new_memory() | raid: %{at: 95, kills: 3}}
+    test "once a raid we beat has been gone 20 ticks, everyone near the rally point goes" do
+      memory = %{Brain.new_memory() | raid: %{at: 75, kills: 3}}
       assert {%{wave: %{members: members}, why: [{:wave_launched, "counterattack: " <> _}]}, _, %{raid: nil}} =
                plan([units: near_rally()], memory)
 
@@ -420,8 +420,13 @@ defmodule Swarm.BrainTest do
 
     test "not without the raid, or after only a kill or two, or long after" do
       assert {%{wave: nil}, _, _} = plan(units: near_rally())
-      assert {%{wave: nil}, _, _} = plan([units: near_rally()], %{Brain.new_memory() | raid: %{at: 95, kills: 2}})
-      assert {%{wave: nil}, _, _} = plan([units: near_rally(), tick: 140], %{Brain.new_memory() | raid: %{at: 95, kills: 3}})
+      assert {%{wave: nil}, _, _} = plan([units: near_rally()], %{Brain.new_memory() | raid: %{at: 75, kills: 2}})
+      assert {%{wave: nil}, _, _} = plan([units: near_rally(), tick: 160], %{Brain.new_memory() | raid: %{at: 95, kills: 3}})
+    end
+
+    test "not the moment a raid steps out of sight: it may be right there, and no wave leaves either" do
+      assert {%{wave: nil, hold: hold}, _, _} = plan([units: near_rally()], %{Brain.new_memory() | raid: %{at: 95, kills: 3}})
+      assert hold =~ "a raid only just out of sight, 15 more ticks"
     end
 
     test "raiders we kill at home are counted" do

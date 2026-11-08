@@ -123,19 +123,16 @@ defmodule Swarm.UnitBrainTest do
     assert %{"type" => "Move", "x" => 10, "y" => 10} = cmd(unit(2, "Soldier", 25, 25), defend)
   end
 
-  test "they don't go to help until home can take what is there: they wait at the rally point" do
+  test "attackers go where the leader says to help (strategy.help), and only then" do
     # Raiders on our workers out in the field; unit 50 is the oldest of eight, an attacker.
     miners = for i <- 1..2, do: unit(100 + i, "Worker", 26, 10, activity: "Gathering")
     others = for i <- 1..7, do: unit(60 + i, "Soldier", 10, 10)
-    defend = %{@gather | mode: :defend}
-
-    # Ten raiders (9900) against home's eight (7920): it waits.
-    raid = for i <- 1..10, do: unit(900 + i, "Soldier", 25, 10, owner: 1)
+    raid = for i <- 1..6, do: unit(900 + i, "Soldier", 25, 10, owner: 1)
+    defend = Map.put(%{@gather | mode: :defend}, :help, nil)
     refute match?(%{"type" => "Attack"}, cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others))
 
-    # Six (5940): they go, together.
-    raid = Enum.take(raid, 6)
-    assert %{"type" => "Attack", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others)
+    helping = %{defend | help: {25, 10}}
+    assert %{"type" => "Attack", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 10, 11), helping, raid ++ miners ++ others)
   end
 
   test "a recalled wave walks home past enemies that aren't fighting it" do
@@ -183,9 +180,10 @@ defmodule Swarm.UnitBrainTest do
     test "when an outpost is attacked, attackers go help and guards stay home" do
       enemy = unit(900, "Soldier", 36, 36, owner: 1)
       v = outpost_view([enemy | army()])
-      assert {%{"type" => "Attack", "x" => 36, "y" => 36}, _} = UnitBrain.decide(201, v, @gather)
+      helping = Map.put(@gather, :help, {36, 36})
+      assert {%{"type" => "Attack", "x" => 36, "y" => 36}, _} = UnitBrain.decide(201, v, helping)
       # Already at its post: stays.
-      assert {:no_change, _} = UnitBrain.decide(210, v, @gather)
+      assert {:no_change, _} = UnitBrain.decide(210, v, helping)
     end
   end
 
@@ -198,8 +196,9 @@ defmodule Swarm.UnitBrainTest do
 
     test "attackers go help them; guards stay home" do
       v = field(soldiers(10))
-      assert {%{"type" => "Attack", "x" => 40, "y" => 40}, _} = UnitBrain.decide(201, v, @gather)
-      assert {:no_change, _} = UnitBrain.decide(210, v, @gather)
+      helping = Map.put(@gather, :help, {40, 40})
+      assert {%{"type" => "Attack", "x" => 40, "y" => 40}, _} = UnitBrain.decide(201, v, helping)
+      assert {:no_change, _} = UnitBrain.decide(210, v, helping)
     end
 
     test "a miner about to be hit runs to the closest help that isn't toward the enemy" do

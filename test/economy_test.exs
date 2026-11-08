@@ -140,13 +140,13 @@ defmodule Swarm.EconomyTest do
     test "an attacker goes to the tower by the workers, not into the raid" do
       # Eight at home: the oldest (201) is an attacker, the rest guards.
       units = miners() ++ raid(8) ++ home(8, 5, 5)
-      strategy = Map.put(@gather, :fall_back, true)
+      strategy = @gather |> Map.put(:fall_back, true) |> Map.put(:help, {27, 7})
       v = View.new(state(units: units, buildings: [@tower]))
       {x, y} = @by_tower
       assert {%{"type" => "Attack", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, strategy)
 
-      # Holding, it goes to help.
-      assert {%{"type" => "Attack", "x" => 27, "y" => 7}, _} = UnitBrain.decide(201, v, @gather)
+      # Holding, it goes to help where the leader says.
+      assert {%{"type" => "Attack", "x" => 27, "y" => 7}, _} = UnitBrain.decide(201, v, Map.put(@gather, :help, {27, 7}))
     end
 
     test "a defender out there doesn't take on the raid, only fights back" do

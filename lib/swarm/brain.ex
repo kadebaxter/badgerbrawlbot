@@ -111,6 +111,11 @@ defmodule Swarm.Brain do
   @lost_clear 10
   # Falling back holds this many ticks past the last reason to.
   @fall_back_hold 15
+  # Helping (see `help/3`): it follows the fight this far, ends after this long with nothing there,
+  # and is called off when what is there is this many times what home can bring.
+  @help_follow 8
+  @help_clear 15
+  @help_give_up 1.3
   # The main base is overrun by enemies this many times all of home; regrouping holds this long
   # after the last tick it was (see `regroup/2`). The base's reach is `Swarm.Roles`'.
   @overrun_margin 1.5
@@ -124,7 +129,9 @@ defmodule Swarm.Brain do
   # gone within `@counter_window` ticks), a wave may leave with every attacker this close to the
   # rally point, not only the ones standing at it: hit back while they are weak.
   @counter_kills 3
-  @counter_window 30
+  @counter_window 50
+  # A raid out of sight this long is gone (see `counter?/2`); no wave leaves before that.
+  @raid_gone 20
   @counter_radius 10
   # Before a wave leaves, a scout looks at the target: once `@look_at` attackers wait at the rally
   # point, unless we looked at that player in the last `@look_fresh` ticks. It goes to `@look_from`
@@ -291,7 +298,8 @@ defmodule Swarm.Brain do
           fall_back: boolean(),
           survey: pos() | nil,
           regroup: pos() | nil,
-          peek: pos() | nil
+          peek: pos() | nil,
+          help: pos() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -347,7 +355,9 @@ defmodule Swarm.Brain do
       peek: nil,
       check_rest: nil,
       # The last tick a wave was called home for an enemy army near home (`army_near_home/3`).
-      army_recalled_at: nil
+      army_recalled_at: nil,
+      # Where home's attackers are helping, %{pos, clear_since}, or nil (see `help/3`).
+      help: nil
     }
   end
 
@@ -448,6 +458,51 @@ defmodule Swarm.Brain do
     {regroup && regroup.pos, %{memory | regroup: regroup}, notes}
   end
 
+  # Where home's attackers help (`strategy.help`): one decision for all of them, kept from tick to
+  # tick, so they don't turn back every time an archer steps out of sight. Help is wanted at an
+  # outpost, by our workers or at a siege (`Roles.help_wanted/1`, not under an enemy tower).
+  #
+  # - Committed: it follows the fight (the wanted spot closest to where it was, within
+  #   `@help_follow`), and holds while there is one. It ends once nothing has been wanted there for
+  #   `@help_clear` ticks, or when what is there is `@help_give_up` times what home can bring.
+  # - Not committed: it commits to the wanted spot closest to the rally point that home can take
+  #   (`Roles.can_take?/3`), so everyone goes together, from the rally point.
+  #
+  # A raid on the main base still comes first for the units (`Swarm.UnitBrain`).
+  # Returns {where, or nil; memory; notes for the decision log}.
+  defp help(%View{cc: nil}, memory, _s), do: {nil, %{memory | help: nil}, []}
+
+  defp help(v, memory, s) do
+    spots = Enum.reject(Roles.help_wanted(v), &Roles.covered?(v, &1))
+
+    case memory.help do
+      nil ->
+        case spots |> Enum.filter(&Roles.can_take?(v, s.wave, &1)) |> Enum.min_by(&{View.dist(&1, s.rally || &1), &1}, fn -> nil end) do
+          nil -> {nil, memory, []}
+          spot -> {spot, %{memory | help: %{pos: spot, clear_since: nil}}, [{:help, "home goes to help at #{fmt(spot)}"}]}
+        end
+
+      %{pos: pos} = help ->
+        near = Enum.filter(spots, &(View.dist(&1, pos) <= @help_follow))
+        pos = Enum.min_by(near, &{View.dist(&1, pos), &1}, fn -> pos end)
+        clear_since = if near == [], do: help.clear_since || v.tick, else: nil
+        theirs = Roles.danger_at(v, pos)
+        ours = Roles.all_home_strength(v, s.wave, [])
+
+        cond do
+          clear_since && v.tick - clear_since >= @help_clear ->
+            {nil, %{memory | help: nil}, [{:help, "help at #{fmt(pos)} over: nothing there for #{@help_clear} ticks"}]}
+
+          theirs > @help_give_up * ours ->
+            why = "help at #{fmt(pos)} called off: #{round(theirs)} there against #{round(ours)} home can bring"
+            {nil, %{memory | help: nil}, [{:help, why}]}
+
+          true ->
+            {pos, %{memory | help: %{pos: pos, clear_since: clear_since}}, []}
+        end
+    end
+  end
+
   # Our finished Command Center that isn't the main one, or nil.
   defp backup_cc(v) do
     v
@@ -490,7 +545,8 @@ defmodule Swarm.Brain do
     {strategy, memory} = strategy(v, memory)
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
-    strategy = %{strategy | survey: survey, regroup: regroup, why: strategy.why ++ surveyed ++ regrouped}
+    {help, memory, helped} = help(v, memory, strategy)
+    strategy = %{strategy | survey: survey, regroup: regroup, help: help, why: strategy.why ++ surveyed ++ regrouped ++ helped}
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
 
@@ -519,7 +575,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, survey: nil, regroup: nil, peek: nil}, memory}
+       fall_back: false, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -590,7 +646,8 @@ defmodule Swarm.Brain do
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
       survey: nil,
-      regroup: nil
+      regroup: nil,
+      help: nil
     }
 
     {strategy,
@@ -1313,6 +1370,9 @@ defmodule Swarm.Brain do
         not calm? and not counter? ->
           "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"
 
+        memory.raid && Roles.raiders(v) == [] && v.tick - memory.raid.at < @raid_gone ->
+          "a raid only just out of sight, #{@raid_gone - (v.tick - memory.raid.at)} more ticks"
+
         memory.army_recalled_at && v.tick - memory.army_recalled_at < @calm_ticks ->
           "back from a recall for an army near home, #{@calm_ticks - (v.tick - memory.army_recalled_at)} more ticks"
 
@@ -1379,10 +1439,11 @@ defmodule Swarm.Brain do
     end
   end
 
-  # We just beat a raid: it is gone, we killed `@counter_kills` of its fighters at home, and it was
-  # here within `@counter_window` ticks.
+  # We just beat a raid: it has been gone `@raid_gone` ticks (not just stepped out of sight for a
+  # moment: archers do that, and a counterattack left into them and was called straight back), we
+  # killed `@counter_kills` of its fighters at home, and it was here within `@counter_window` ticks.
   defp counter?(%{raid: %{at: at, kills: kills}}, v),
-    do: Roles.raiders(v) == [] and kills >= @counter_kills and v.tick - at <= @counter_window
+    do: Roles.raiders(v) == [] and kills >= @counter_kills and v.tick - at >= @raid_gone and v.tick - at <= @counter_window
 
   defp counter?(_memory, _v), do: false
 
