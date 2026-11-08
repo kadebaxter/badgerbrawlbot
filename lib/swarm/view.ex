@@ -45,8 +45,9 @@ defmodule Swarm.View do
 
   # Ore farther than this from a drop-off isn't worth the walk.
   @drop_off_reach 10
-  # Depots this close to the Command Center are home (see `home_drop_offs/1`).
-  @home_ore 12
+  # Depots this close to the Command Center are home (see `home_drop_offs/1`); one farther out is an
+  # outpost, as `Swarm.Roles` has it.
+  @home_ore 6
 
   @spec new(map()) :: t()
   def new(state) do

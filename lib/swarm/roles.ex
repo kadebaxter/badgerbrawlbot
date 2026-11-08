@@ -471,6 +471,15 @@ defmodule Swarm.Roles do
   def assignments(%View{} = v, wave) do
     held_back = if fall_back?(v, wave), do: MapSet.new(exposed_raiders(v), & &1["id"]), else: MapSet.new()
     enemies = Enum.reject(v.enemy_units, &(&1["type"] == "Worker"))
+    # Where we may go after an enemy: where our side (with the one going) is at least as strong as
+    # theirs (`safe_at?/2`).
+    odds = Map.new(enemies, &{&1["id"], {support_at(v, View.pos(&1)), danger_at(v, View.pos(&1))}})
+
+    safe? = fn o, e ->
+      {ours, theirs} = odds[e["id"]]
+      going = if View.dist(View.pos(o), View.pos(e)) > @engage_radius, do: strength([o], v.me), else: 0
+      ours + going >= theirs
+    end
     extra_armor = if enemy_tech_lab?(v), do: 1, else: 0
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
 
@@ -479,8 +488,10 @@ defmodule Swarm.Roles do
           e <- enemies,
           d = View.dist(View.pos(o), View.pos(e)),
           d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius),
-          (may_chase?(v, wave, o, e) and (o["id"] in members(wave) or not MapSet.member?(held_back, e["id"]))) or
-            fight_back?(e, o) do
+          hits_now?(e, o) or
+            (safe?.(o, e) and
+               ((may_chase?(v, wave, o, e) and (o["id"] in members(wave) or not MapSet.member?(held_back, e["id"]))) or
+                  fight_back?(e, o))) do
         can_hit_us = if d in Map.get(stats(e), :min_range, 0)..stats(e).range//1, do: 0, else: 1
         siege = if e["type"] == "Trebuchet", do: 0, else: 1
         already_on_it = if o["targetId"] == e["id"], do: 0, else: 1
@@ -515,7 +526,10 @@ defmodule Swarm.Roles do
     here = View.pos(unit)
 
     (Enum.filter(v.enemy_units, &(&1["type"] == "Worker")) ++ v.enemy_buildings)
-    |> Enum.filter(&(View.dist(View.pos(&1), here) <= @engage_radius and may_chase?(v, wave, unit, &1)))
+    |> Enum.filter(fn t ->
+      d = View.dist(View.pos(t), here)
+      d <= @engage_radius and may_chase?(v, wave, unit, t) and (d <= stats(unit).range or safe_at?(v, View.pos(t)))
+    end)
     |> Enum.min_by(
       fn t ->
         # After towers and sites, half of us (by id) take workers first and half buildings first:
@@ -594,6 +608,45 @@ defmodule Swarm.Roles do
   # An enemy fighter in range either way (it can hit us, or we can hit it where we stand): anyone
   # may fight it, leash or not. Only fighters: a building next to a unit walking home is no
   # reason to stay.
+  # We can hit it from where we stand: no chasing, so always allowed.
+  defp hits_now?(enemy, ours), do: View.dist(View.pos(enemy), View.pos(ours)) <= stats(ours).range
+
+  @doc """
+  What the enemy has at `pos`: its fighters within `@engage_radius`, and its towers we know of
+  (`enemy_towers/1`) that reach it (range plus one). A Trebuchet counts as one Soldier here.
+  """
+  def danger_at(%View{} = v, pos) do
+    fighters = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @engage_radius))
+    towers = Enum.filter(enemy_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1) + 1))
+    # A Trebuchet can't hit anything close: walking up to one is a Soldier's worth of danger, not
+    # its cost.
+    {siege, rest} = Enum.split_with(fighters, &(&1["type"] == "Trebuchet"))
+    strength(rest ++ towers) + length(siege) * @soldier
+  end
+
+  @doc "What we have at `pos`: our fighters within `@engage_radius`, and our finished towers that reach it."
+  def support_at(%View{} = v, pos) do
+    ours = Enum.filter(fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius))
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    strength(ours ++ towers, v.me)
+  end
+
+  @doc """
+  Whether we may go fight at `pos`: what we have there is at least what they have (`support_at/2`
+  against `danger_at/2`). Nobody chases an enemy into more danger: an archer backing off under
+  its towers, or into its friends, is left alone until we are there in strength.
+  """
+  def safe_at?(%View{} = v, pos), do: support_at(v, pos) >= danger_at(v, pos)
+
+  @doc """
+  Whether home can take on what is at `pos`: everything at home (not in `wave`), and our towers
+  that reach it, against `danger_at/2`. Attackers only go to help once that holds, and go together.
+  """
+  def can_take?(%View{} = v, wave, pos) do
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    strength(home(v, wave) ++ towers, v.me) >= danger_at(v, pos)
+  end
+
   defp fight_back?(enemy, ours) do
     d = View.dist(View.pos(enemy), View.pos(ours))
     d in Map.get(stats(enemy), :min_range, 0)..stats(enemy).range//1 or d <= stats(ours).range

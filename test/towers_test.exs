@@ -26,10 +26,16 @@ defmodule Swarm.TowersTest do
     assert v |> Roles.enemy_towers() |> Enum.map(& &1["id"]) |> Enum.sort() == [800, 801]
   end
 
-  test "a wave member in a tower's reach goes after it" do
+  test "a wave member in a tower's reach goes after it, with enough of us there" do
+    # Five soldiers (4950) against the tower (3960, four soldiers).
+    v = view(soldiers_at(5, 26, 10), buildings: [@tower])
+    assert %{"id" => 800} = Roles.tower_hitting(v, wave(5), hd(soldiers_at(1, 26, 10)))
+    assert {%{"type" => "Attack", "targetId" => 800}, _} = UnitBrain.decide(201, v, attacking(5))
+  end
+
+  test "too few of us there: nobody walks in alone, they fall back" do
     v = view(soldiers_at(3, 26, 10), buildings: [@tower])
-    assert %{"id" => 800} = Roles.tower_hitting(v, wave(3), hd(soldiers_at(1, 26, 10)))
-    assert {%{"type" => "Attack", "targetId" => 800}, _} = UnitBrain.decide(201, v, attacking(3))
+    assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(201, v, attacking(3))
   end
 
   test "enemy fighters come first" do
@@ -48,16 +54,16 @@ defmodule Swarm.TowersTest do
   end
 
   test "one we can't see (remembered in the fog): walk at it until we do" do
-    v = %{view(soldiers_at(3, 26, 13)) | remembered: [remembered(@tower)]}
-    assert {%{"type" => "Move", "x" => 30, "y" => 10}, _} = UnitBrain.decide(201, v, attacking(3))
+    v = %{view(soldiers_at(5, 26, 13)) | remembered: [remembered(@tower)]}
+    assert {%{"type" => "Move", "x" => 30, "y" => 10}, _} = UnitBrain.decide(201, v, attacking(5))
   end
 
   test "a tower that isn't shooting at it is a building like the rest" do
-    # 6 from a tower (out of its reach) and from a Barracks: the Barracks, by id.
-    ours = unit(201, "Soldier", 24, 10)
-    barracks = building(799, "Barracks", 24, 16, 1)
-    v = view([ours], buildings: [%{@tower | "id" => 803}, barracks])
-    assert %{"id" => 799} = Roles.target(v, wave(1), ours)
+    # Five of us 6 from a tower (out of its reach) and from a Barracks: the Barracks, by id.
+    ours = soldiers_at(5, 25, 10)
+    barracks = building(799, "Barracks", 25, 16, 1)
+    v = view(ours, buildings: [%{@tower | "id" => 803, "x" => 31}, barracks])
+    assert %{"id" => 799} = Roles.target(v, wave(5), hd(ours))
   end
 
   test "at home: not this rule" do

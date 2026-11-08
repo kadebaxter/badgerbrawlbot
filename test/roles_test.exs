@@ -92,10 +92,11 @@ defmodule Swarm.RolesTest do
 
     test "come before an enemy that can't hit us yet" do
       ours = unit(201, "Soldier", 20, 20)
+      friend = unit(202, "Soldier", 20, 21)
       treb = unit(900, "Trebuchet", 24, 20, owner: 1)
       soldier = unit(901, "Soldier", 22, 20, owner: 1)
-      wave = %{id: 1, members: [201]}
-      assert %{"id" => 900} = Roles.target(view([ours, treb, soldier]), wave, ours)
+      wave = %{id: 1, members: [201, 202]}
+      assert %{"id" => 900} = Roles.target(view([ours, friend, treb, soldier]), wave, ours)
     end
 
     test "home units leave the base to kill one shelling our tower, from farther away" do
@@ -242,10 +243,14 @@ defmodule Swarm.RolesTest do
       assert %{"id" => 900} = Roles.target(v, %{id: 1, members: [201]}, ours)
     end
 
-    test "but they fight back against an enemy that can hit them" do
+    test "but they fight back against an enemy that can hit them, with enough of us there" do
       ours = unit(201, "Soldier", 20, 20)
+      friend = unit(202, "Soldier", 21, 20)
       archer = unit(900, "Archer", 24, 24, owner: 1)
-      assert %{"id" => 900} = Roles.target(View.new(state(units: [ours, archer])), nil, ours)
+      assert %{"id" => 900} = Roles.target(View.new(state(units: [ours, friend, archer])), nil, ours)
+
+      # Alone against it (an archer is 1.25 soldiers): not chased into more danger.
+      assert Roles.target(View.new(state(units: [ours, archer])), nil, ours) == nil
     end
 
     test "out of the base, a building next to a unit going home doesn't keep it there" do
@@ -262,16 +267,19 @@ defmodule Swarm.RolesTest do
 
     test "an enemy fighter comes before a building" do
       ours = unit(201, "Soldier", 12, 11, target_id: 800)
+      friend = unit(202, "Soldier", 12, 10)
       barracks = building(800, "Barracks", 12, 12, 1)
-      v = View.new(state(units: [ours, archer() |> Map.merge(%{"x" => 15, "y" => 11})], buildings: [barracks]))
+      v = View.new(state(units: [ours, friend, archer() |> Map.merge(%{"x" => 15, "y" => 11})], buildings: [barracks]))
       assert %{"id" => 900} = Roles.target(v, nil, ours)
     end
 
     test "leftovers in the wave hit buildings, towers first; one at home leaves a tower alone" do
       ours = unit(201, "Soldier", 12, 11)
+      # Five of us there (4950) against the tower (3960).
+      friends = for i <- 2..5, do: unit(200 + i, "Soldier", 12, 10)
       buildings = [building(800, "Barracks", 12, 12, 1), building(801, "GuardTower", 13, 14, 1)]
-      v = View.new(state(units: [ours], buildings: buildings))
-      assert %{"id" => 801} = Roles.target(v, %{id: 1, members: [201]}, ours)
+      v = View.new(state(units: [ours | friends], buildings: buildings))
+      assert %{"id" => 801} = Roles.target(v, %{id: 1, members: Enum.to_list(201..205)}, ours)
 
       # Not alone into a tower's reach: everything there waits for a strike.
       assert Roles.target(v, nil, ours) == nil

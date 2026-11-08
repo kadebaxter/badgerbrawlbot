@@ -235,8 +235,8 @@ defmodule Swarm.Brain do
 
   @needs_barracks ["GuardTower", "TechLab"]
 
-  # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore`, or there are
-  # more workers than `@workers_per_deposit` per nearby deposit. Short for `@short_for_ticks` in a
+  # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore` (workers stack
+  # on a deposit, so how many there are says nothing about running out). Short for `@short_for_ticks` in a
   # row, a Resource Depot goes by the closest other ore, ahead of the build order.
   @low_home_ore 1500
   # A Guard Tower this close to an outpost counts as its tower.
@@ -245,7 +245,6 @@ defmodule Swarm.Brain do
   @outpost_towers 2
   # Where we lost a building, no new depot for this long: it was a contested spot.
   @avoid_lost_ticks 300
-  @workers_per_deposit 3
   # Workers mining one far field (no drop-off within reach) that get a depot by it right away.
   @remote_miners 3
   # A depot is built by up to this many of the workers who will use it; the first Barracks by this
@@ -1672,9 +1671,9 @@ defmodule Swarm.Brain do
   defp short_since(memory, v) do
     near = View.near_deposits(v)
     ore_left = Enum.sum_by(near, &(&1["remaining"] || 0))
-    workers = length(View.units_of(v, "Worker"))
 
-    if ore_left < @low_home_ore or workers > @workers_per_deposit * length(near),
+    # Ore actually left, not workers per deposit: they stack, so a crowded field isn't running out.
+    if ore_left < @low_home_ore,
       do: memory.ore_short_since || v.tick,
       else: nil
   end

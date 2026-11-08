@@ -63,6 +63,10 @@ defmodule Swarm.UnitBrain do
   # Regrouping (`View.regroup`), workers this close to the backup Command Center are its own: they
   # mine by it, and run from danger away from it, never to it (secrecy).
   @backup_area 10
+  # A wave member losing where it stands falls back on the wave this far from its middle; a home
+  # attacker this close to the rally point is gathered, and may go help with the rest.
+  @group_up 3
+  @gathered 5
   # A miner moves to other ore once its walk to a drop-off is this much longer than the best's.
   @better_trip 2
   # Ore with an enemy fighter this close is unsafe to mine.
@@ -315,16 +319,59 @@ defmodule Swarm.UnitBrain do
     cond do
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
-      tower = Roles.tower_hitting(v, s.wave, unit) -> hit_tower(v, tower)
+      tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
+      back = regroup_or_retreat(unit, v, s, role) -> {:move, back}
       enemy = Roles.leftover_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       spot = s |> Map.get(:check, %{}) |> Map.get(unit["id"]) -> {:attack_move, spot}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       raze = role in [:attacker, :guard] && Map.get(s, :raze) -> {:attack, raze}
-      s.threat && not Roles.covered?(v, s.threat.pos) -> {:attack_move, cover(v, s, s.threat.pos)}
-      help = role == :attacker && closest_help(v, unit) -> {:attack_move, cover(v, s, help)}
+      s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
+      help = role == :attacker && closest_help(v, unit) -> go_help(unit, v, s, cover(v, s, help))
       role == :guard -> {:move, s.post}
+      true -> {:move, s.rally}
+    end
+  end
+
+  # The tower shooting at this wave member, if we are strong enough where it stands
+  # (`Roles.safe_at?/2`); otherwise nobody walks in alone (`regroup_or_retreat/4`).
+  defp safe_tower(v, wave, unit) do
+    tower = Roles.tower_hitting(v, wave, unit)
+    if tower && Roles.safe_at?(v, View.pos(tower)), do: tower
+  end
+
+  # Losing where it stands, with nothing it may fight (it is never sent to chase into more
+  # danger): a wave member falls back on the wave (its middle, `@group_up` tiles off or more), or,
+  # there already, toward home; anyone else goes back to the rally point. Nil when it holds.
+  defp regroup_or_retreat(unit, v, s, role) do
+    here = View.pos(unit)
+
+    cond do
+      Roles.safe_at?(v, here) -> nil
+      s.rally == nil -> nil
+      role == :wave -> group_up(v, s, here)
+      View.dist(here, s.rally) > 2 -> s.rally
+      true -> nil
+    end
+  end
+
+  defp group_up(v, s, here) do
+    case s.wave && Roles.wave_center(v, s.wave) do
+      nil -> s.rally
+      center -> if View.dist(here, center) >= @group_up, do: center, else: s.rally
+    end
+  end
+
+  # To an attack at `spot` (a raid on the base, an outpost or our workers): those already there
+  # (within `@engage_radius`, 6) carry on; the rest go from the rally point together, once home can
+  # take what is there (`Roles.can_take?/3`), and wait there until then. Nobody trickles in alone.
+  defp go_help(unit, v, s, spot) do
+    here = View.pos(unit)
+
+    cond do
+      View.dist(here, spot) <= 6 -> {:attack_move, spot}
+      View.dist(here, s.rally) <= @gathered and Roles.can_take?(v, s.wave, spot) -> {:attack_move, spot}
       true -> {:move, s.rally}
     end
   end

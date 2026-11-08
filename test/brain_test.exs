@@ -83,20 +83,18 @@ defmodule Swarm.BrainTest do
     assert View.dist({x, y}, {30, 30}) in 2..3
   end
 
-  test "a new Resource Depot once home is crowded, even with ore left" do
+  test "no new Resource Depot just because home is crowded: workers stack, the ore is what counts" do
     home = for {id, x, y} <- [{4, 2, 7}, {5, 2, 9}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 5000}
     far = [%{"id" => 30, "x" => 30, "y" => 30, "remaining" => 900}]
 
-    # Ten workers on two deposits: more than three each. (That first tick also orders the
-    # Barracks; forget it, so this is only about the depot.)
+    # Ten workers on two deposits, with 10000 ore left: not short.
     {_, _, memory} = plan(units: workers(10), deposits: home ++ far, ore: 200, tick: 100)
-    assert memory.ore_short_since == 100
-    {_, commands, _} = plan([units: workers(10), deposits: home ++ far, ore: 200, tick: 130], %{memory | pending: nil})
-    assert Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
-
-    # Six on two is fine.
-    {_, _, memory} = plan(units: workers(6), deposits: home ++ far, ore: 200, tick: 100)
     assert memory.ore_short_since == nil
+
+    # Down to 1000: short.
+    low = for d <- home, do: %{d | "remaining" => 500}
+    {_, _, memory} = plan(units: workers(10), deposits: low ++ far, ore: 200, tick: 100)
+    assert memory.ore_short_since == 100
   end
 
   test "the build order has one Resource Depot; more only when home runs short" do

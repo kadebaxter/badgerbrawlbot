@@ -200,13 +200,14 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Situation | Fighter does |
 |---|---|
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
-| An enemy fighter to fight within 6 tiles | Attack it (see below) |
-| In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog) | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
+| An enemy fighter to fight within 6 tiles, where we are at least as strong as they are (see below) | Attack it |
+| In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog), with us at least as strong as it there | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
+| Losing where it stands, with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
-| Guard or attacker, enemies near the main base | Attack-move to the threat (falling back, if no tower of ours reaches it: to the tower closest to it) |
-| Attacker, an outpost or workers in the field under attack | Go help the closest (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
+| Guard or attacker, enemies near the main base | Attack-move to the threat, together: from the rally point, once everything at home and our towers there are at least as strong as what is there (those already within 6 carry on); otherwise wait at the rally point. Falling back, if no tower of ours reaches it: to the tower closest to it |
+| Attacker, an outpost or workers in the field under attack | Go help the closest the same way, together from the rally point (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
 
 **Towers:** a tower reaches 5 tiles the game's way (diagonals count as one) while a Soldier sees 5
 in a straight line, so a tower often shoots a Soldier that can't see it. The server remembers
@@ -301,7 +302,10 @@ armor is assumed +1 once we have seen an enemy TechLab, since their research is 
 left over hit a tower shooting at them, then construction sites (worth their full cost
 in destruction at a tenth of the HP and no armor), then workers, then other buildings, and
 Command Centers last (a player is eliminated with their last one, and everything they had left
-is removed with no destruction score for anyone). Fighters at home only go after
+is removed with no destruction score for anyone). Nobody chases an enemy into more danger: a fighter only goes after an enemy (or a building)
+where our fighters and towers there, with it, are at least as strong as theirs there (their
+fighters, and their towers we know of that reach the spot; a Trebuchet counts as one Soldier, as
+it can't hit anything close), and otherwise only hits what it can reach without moving. Fighters at home only go after
 enemies inside a base (within 10 of the Command Center or an outpost) or within 5 of one of our
 workers, and fight back against any enemy fighter in range either way (never a building, so a
 recalled wave walks home); the
@@ -343,7 +347,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    or home is falling back (below). Cover is next to the closest of our Guard Towers on their side
    of the enemy (else the closest of our fighters or drop-offs on their side of it). They don't
    mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off, by a drop-off at home first (the Command
-   Center and depots within 12 of it), then by an outpost: the shortest trip, stacked as deep as it
+   Center and depots within 6 of it, as everywhere a depot farther out is an outpost), then by an
+   outpost, once home's ore is gone or unsafe: the shortest trip, stacked as deep as it
    takes (the game has no limit on miners per deposit, and each mines at full speed), so with a
    depot two tiles from its field they mine and bank without walking. A miner moves over once
    another deposit's trip is 2 tiles shorter than its own (a new depot went up by fresh ore). With all of that unsafe, safe ore farther away on our side
@@ -358,7 +363,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    **Ore for workers:** once a Barracks is up, 100 ore (two workers) is kept back from everything but
    workers, and with fewer than 5 workers left, workers are trained before anything else: losing
    every worker with nothing banked would end the economy for good. When home has been short of ore for 30 ticks in a row (under
-   1,500 left within reach of a drop-off, or more than 3 workers per nearby deposit), a Resource
+   1,500 left within reach of a drop-off; how many workers there are doesn't matter, they stack), a Resource
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
    next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
    And whenever 3 or more workers are already mining one field out of reach, a depot goes by

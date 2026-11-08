@@ -116,16 +116,33 @@ defmodule Swarm.UnitBrainTest do
     assert %{"type" => "Attack", "targetId" => 900} = cmd(waiting, @attack, [enemy])
   end
 
-  test "everyone at home goes to the threat" do
+  test "everyone at home goes to the threat, together from the rally point" do
     defend = %{@gather | mode: :defend, threat: %{pos: {16, 9}, size: 1}}
-    assert %{"type" => "Attack", "x" => 16, "y" => 9} = cmd(unit(2, "Soldier", 25, 25), defend)
+    assert %{"type" => "Attack", "x" => 16, "y" => 9} = cmd(unit(2, "Soldier", 10, 11), defend)
+    # From farther off: to the rally point first, not alone into it.
+    assert %{"type" => "Move", "x" => 10, "y" => 10} = cmd(unit(2, "Soldier", 25, 25), defend)
+  end
+
+  test "they don't go to help until home can take what is there: they wait at the rally point" do
+    # Raiders on our workers out in the field; unit 50 is the oldest of eight, an attacker.
+    miners = for i <- 1..2, do: unit(100 + i, "Worker", 26, 10, activity: "Gathering")
+    others = for i <- 1..7, do: unit(60 + i, "Soldier", 10, 10)
+    defend = %{@gather | mode: :defend}
+
+    # Ten raiders (9900) against home's eight (7920): it waits.
+    raid = for i <- 1..10, do: unit(900 + i, "Soldier", 25, 10, owner: 1)
+    refute match?(%{"type" => "Attack"}, cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others))
+
+    # Six (5940): they go, together.
+    raid = Enum.take(raid, 6)
+    assert %{"type" => "Attack", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others)
   end
 
   test "a recalled wave walks home past enemies that aren't fighting it" do
     # Recalled: no wave any more. An enemy soldier nearby that isn't in range isn't worth stopping for.
     defend = %{@gather | mode: :defend, threat: %{pos: {12, 9}, size: 10}}
     camp = unit(900, "Soldier", 52, 45, owner: 1)
-    assert %{"type" => "Attack", "x" => 12, "y" => 9} = cmd(unit(2, "Soldier", 45, 45), defend, [camp])
+    assert %{"type" => "Move", "x" => 10, "y" => 10} = cmd(unit(2, "Soldier", 45, 45), defend, [camp])
   end
 
   test "a unit already carrying out its order sends nothing" do
@@ -144,7 +161,8 @@ defmodule Swarm.UnitBrainTest do
     hitting = unit(2, "Soldier", 40, 39, activity: "Attacking", target_id: 800)
     barracks = building(800, "Barracks", 40, 40, 1)
     archer = unit(900, "Archer", 43, 39, owner: 1)
-    v = View.new(state(units: [hitting, archer], buildings: [barracks]))
+    friend = unit(3, "Soldier", 40, 38)
+    v = View.new(state(units: [hitting, friend, archer], buildings: [barracks]))
     memory = %{intent: {:attack, 800}}
     assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(2, v, @attack, memory)
   end
