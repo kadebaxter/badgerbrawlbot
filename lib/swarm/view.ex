@@ -35,6 +35,10 @@ defmodule Swarm.View do
     fallen_starts: [],
     # How many players the game started with (eliminated ones too).
     players: 2,
+    # Enemy fighters seen in the last few ticks and out of sight now, where we last saw them (set
+    # by `Swarm.Brain.see/2`). Only danger counts them (`Swarm.Roles.danger_at/2`): nobody targets
+    # what it can't see.
+    recent_enemies: [],
     # The backup Command Center we regroup at while the main base is overrun, or nil (set by
     # `Swarm.Brain.see/2`): its own two workers mine by it, in secret (`Swarm.UnitBrain`).
     regroup: nil,

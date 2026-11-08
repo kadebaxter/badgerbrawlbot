@@ -46,6 +46,10 @@ defmodule Swarm.Roles do
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
+  # ...and keeps one it is already attacking this much farther out: a path around a wall can step
+  # farther away first (6 tiles, then 7), and with one radius it dropped the target, stepped back
+  # toward the rally point, picked it up again, every tick.
+  @keep_radius 2
   # Pull back only when they are this many times us (see `losing?/1`); go in at even.
   @hold_margin 1.3
   # A Command Center our fighters by it can bring down in this many ticks is finished first.
@@ -571,7 +575,7 @@ defmodule Swarm.Roles do
       for o <- fighters(v),
           e <- enemies,
           d = View.dist(View.pos(o), View.pos(e)),
-          d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius),
+          d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius) + if(o["targetId"] == e["id"], do: @keep_radius, else: 0),
           hits_now?(e, o) or
             (safe?.(o, e) and
                ((may_chase?(v, wave, o, e) and (o["id"] in members(wave) or not MapSet.member?(held_back, e["id"]))) or
@@ -715,7 +719,9 @@ defmodule Swarm.Roles do
   (`enemy_towers/1`) that reach it (range plus one). A Trebuchet counts as one Soldier here.
   """
   def danger_at(%View{} = v, pos) do
-    fighters = Enum.filter(enemy_fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius))
+    # Fighters in sight, and ones seen in the last few ticks where we last saw them (`View`'s
+    # `recent_enemies`): one step out of sight of a pack doesn't make it safe.
+    fighters = Enum.filter(enemy_fighters(v) ++ v.recent_enemies, &(View.dist(View.pos(&1), pos) <= @engage_radius))
     towers = Enum.filter(enemy_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1) + 1))
     # A Trebuchet can't hit anything close: walking up to one is a Soldier's worth of danger, not
     # its cost.

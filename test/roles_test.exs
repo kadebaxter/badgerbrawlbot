@@ -232,6 +232,42 @@ defmodule Swarm.RolesTest do
       Roles.assignments(v, nil) |> Map.values() |> Enum.count(&(&1 == 900))
     end
 
+    test "one already attacking keeps its target a little farther out (a path around a wall)" do
+      # 7 tiles from the archer: past the 6 it starts a fight from. The path around a wall stepped
+      # it out to 7; dropping the target there sent it back toward the rally point, and it picked
+      # the target up again at 6, every tick. Friends by the archer make it worth fighting.
+      target_of = fn soldier ->
+        v = View.new(state(units: [archer(), soldier | soldiers(5)]))
+        Map.get(Roles.assignments(v, nil), 250)
+      end
+
+      on_it = %{"targetId" => 900, "activity" => "Attacking"}
+      assert target_of.(unit(250, "Soldier", 5, 12)) == nil
+      assert target_of.(Map.merge(unit(250, "Soldier", 5, 12), on_it)) == 900
+      # Not past 8.
+      assert target_of.(Map.merge(unit(250, "Soldier", 3, 12), on_it)) == nil
+    end
+
+    test "a pack that just went out of sight still counts as danger for 5 ticks" do
+      # Seven archers seen at (30, 12) on tick 100; our soldier at (22, 12) can't see that spot.
+      pack = for i <- 1..7, into: %{}, do: {900 + i, %{"id" => 900 + i, "owner" => 1, "type" => "Archer", "hp" => 60, "x" => 30, "y" => 12, "seen" => 100}}
+      memory = %{Swarm.Brain.new_memory() | enemies: pack}
+      soldier = unit(250, "Soldier", 22, 12)
+      at = fn tick, units -> elem(Swarm.Brain.see(View.new(state(units: units, tick: tick)), memory), 0) end
+
+      v = at.(103, [soldier])
+      assert length(v.recent_enemies) == 7
+      # Where it would step to fight: losing there, though nothing is in sight.
+      assert Roles.losing_for?(v, soldier, {25, 12})
+
+      # Not after 5 ticks.
+      assert at.(106, [soldier]).recent_enemies == []
+      # Not once we can see the spot and they aren't there.
+      assert at.(103, [soldier, unit(251, "Soldier", 29, 12)]).recent_enemies == []
+      # Never something to attack: only danger.
+      assert Roles.assignments(at.(103, [soldier]), nil) == %{}
+    end
+
     test "an archer gets just enough attackers to die in one volley" do
       # 60 HP, 9 damage each: 7.
       assert attackers(around(9) ++ [archer()]) == 7

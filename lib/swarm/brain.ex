@@ -158,6 +158,8 @@ defmodule Swarm.Brain do
   @calm_ticks 20
   # An enemy fighter not seen for this long is forgotten: we can't trust where it was.
   @forget_after 300
+  # Enemy fighters out of sight still count as danger this many ticks after we last saw them.
+  @recent_enemy_ticks 5
   # How far from the wave's center enemies count when deciding to pull back.
   @wave_sight 8
   # How close to the rally point an attacker must be to leave with a wave.
@@ -420,8 +422,22 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos}
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies)}
     {View.with_known_ore(v, ore), %{memory | ore: ore}}
+  end
+
+  # Enemy fighters out of sight now that we saw in the last `@recent_enemy_ticks` ticks, where we
+  # last saw them; not ones whose spot we can see (they moved on). A soldier stepping toward a lone
+  # enemy saw an archer pack come into sight, pulled back, lost sight of it, found the odds good
+  # again and stepped in, every tick: the pack still counts for a few ticks after it goes out of sight.
+  defp recent_enemies(%View{} = v, enemies) do
+    visible = MapSet.new(v.enemy_units, & &1["id"])
+
+    for {id, e} <- enemies,
+        not MapSet.member?(visible, id),
+        v.tick - e["seen"] <= @recent_enemy_ticks,
+        not View.in_sight?(v, View.pos(e)),
+        do: e
   end
 
   @doc """

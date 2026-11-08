@@ -219,7 +219,7 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Situation | Fighter does |
 |---|---|
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
-| An enemy fighter to fight within 6 tiles, where we are at least as strong as they are (see below) | Attack it |
+| An enemy fighter to fight within 6 tiles (8 for one it is already attacking: a path around a wall can step it out to 7 first), where we are at least as strong as they are (see below) | Attack it |
 | In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog), with us at least as strong as it there | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
 | Losing where it stands (they are 1.3× us by the same measure that sends it in), with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
@@ -354,7 +354,8 @@ Command Centers last (a player is eliminated with their last one, and everything
 is removed with no destruction score for anyone). Nobody chases an enemy into more danger: a fighter only goes after an enemy (or a building)
 where our fighters and towers there, with it, or the group around it (our fighters within 6 of
 it, who go in with it), whichever is more, are at least as strong as theirs there (their
-fighters, and their towers we know of that reach the spot; a Trebuchet counts as one Soldier, as
+fighters, including ones seen in the last 5 ticks that are out of sight now, where we last saw
+them, so one step out of sight of a pack doesn't make it safe; and their towers we know of that reach the spot; a Trebuchet counts as one Soldier, as
 it can't hit anything close), and otherwise only hits what it can reach without moving. Going in
 and pulling back use that one measure (`Swarm.Roles.odds_for/3`) with a gap between them: a
 fighter goes in at even, and pulls back only when they are 1.3× us; in between it carries on.
