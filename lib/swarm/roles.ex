@@ -63,6 +63,11 @@ defmodule Swarm.Roles do
     "GuardTower" => %{hp: 500, damage: 10, armor: 2, range: 5, cooldown: 1}
   }
 
+  # A full-HP Soldier's strength (its HP x damage per tick, the old measure, so numbers stay where
+  # they were), and every unit's cost (the bot guide's table): see `strength/2`.
+  @soldier 990
+  @cost %{"Worker" => 50, "Soldier" => 100, "Archer" => 125, "Scout" => 75, "Trebuchet" => 350}
+
   # `all_in` is set on the end-of-match push that takes every fighter.
   # `owner` is the opponent (player slot) it is after. A wave with Trebuchets holds at `staging`
   # until `released` (set when they arrive); `at` is the tick it launched.
@@ -180,7 +185,8 @@ defmodule Swarm.Roles do
 
   @doc """
   How much fight a group has: the one measure every comparison uses (launching, recalling, strikes,
-  sorties, the serum, home's defense), so they always agree. A unit is its HP × damage per tick.
+  sorties, the serum, home's defense), so they always agree. A unit is worth its cost in Soldiers
+  (a full Soldier is 990), less as it is hurt: an Archer is 1.25 Soldiers, a Trebuchet 3.5.
   A Guard Tower at full HP, less as it is hurt, is worth some Soldiers: in a straight fight it
   takes about three and a half (four kill it and lose one or two; three lose). We count it on the
   safe side both ways: ours (owner `me`) as `@own_tower_worth`, so we never trust home's defense too
@@ -192,10 +198,13 @@ defmodule Swarm.Roles do
 
   defp strength_of(%{"type" => "GuardTower"} = tower, me) do
     worth = if me != nil and tower["owner"] == me, do: @own_tower_worth, else: @enemy_tower_worth
-    worth * strength_of(%{"type" => "Soldier"}, me) * hp(tower) / stats(tower).hp
+    worth * @soldier * hp(tower) / stats(tower).hp
   end
 
-  defp strength_of(u, _me), do: hp(u) * stats(u).damage / stats(u).cooldown
+  # A unit is worth its cost, in Soldiers (a Soldier is `@soldier`), less as it is hurt. Cost is
+  # what the game itself prices them at, and it rates a ranged unit far better than HP x damage
+  # per tick did: that made an Archer a third of a Soldier, and a pack of them shreds everything.
+  defp strength_of(u, _me), do: @soldier * Map.get(@cost, u["type"], 100) / 100 * hp(u) / stats(u).hp
 
   @doc """
   Enemies near the Command Center: where the closest one is, and how many fighters (not

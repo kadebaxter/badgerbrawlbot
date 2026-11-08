@@ -74,6 +74,10 @@ defmodule Swarm.Brain do
   # building they look, for how long; a sortie's smallest size and longest outing.
   @checkers 4
   @check_radius 7
+  # After a checker dies, no new checkers for this long (a scout looks instead), and how long the
+  # scout has to get there.
+  @check_rest 60
+  @peek_ticks 40
   @check_ticks 60
   @sortie_min 4
   @sortie_ticks 100
@@ -95,6 +99,17 @@ defmodule Swarm.Brain do
   # The first wave in a big game waits for the tower square, but not past this tick.
   @square_deadline 900
   @margin 1.5
+  # Enemy fighters we remember this close to our Command Center are an army near home (see
+  # `army_near_home/3`).
+  @home_watch 20
+  # Falling back holds this many ticks past the last reason to.
+  @fall_back_hold 15
+  # The main base is overrun by enemies this many times all of home; regrouping holds this long
+  # after the last tick it was (see `regroup/2`). The base's reach is `Swarm.Roles`'.
+  @overrun_margin 1.5
+  @regroup_hold 40
+  @backup_workers 2
+  @base_radius 10
   @recall_below 5
   # While a wave is out, attackers at the rally point go after it this many at a time.
   @batch 5
@@ -267,7 +282,9 @@ defmodule Swarm.Brain do
           raze: integer() | nil,
           check: %{integer() => pos()},
           fall_back: boolean(),
-          survey: pos() | nil
+          survey: pos() | nil,
+          regroup: pos() | nil,
+          peek: pos() | nil
         }
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
@@ -311,8 +328,17 @@ defmodule Swarm.Brain do
       # on, %{pos, at}, or nil.
       surveyed: [],
       survey: nil,
-      # Whether home was falling back to the towers last tick (`Roles.fall_back?/2`).
-      fall_back: false
+      # Whether home was falling back to the towers last tick (`Roles.fall_back?/2`), and the last
+      # tick it had reason to (it holds `@fall_back_hold` ticks past that).
+      fall_back: false,
+      fall_back_at: nil,
+      # Regrouping at the backup Command Center while the main base is overrun: %{pos, at: the last
+      # tick it was}, or nil (see `regroup/2`).
+      regroup: nil,
+      # The look where a checker died (see `peek/3`), %{pos, at} or nil, and the tick before which
+      # no new check starts (`@check_rest` after a checker dies), or nil.
+      peek: nil,
+      check_rest: nil
     }
   end
 
@@ -332,6 +358,7 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
+    v = %{v | regroup: memory.regroup && memory.regroup.pos}
     {View.with_known_ore(v, ore), %{memory | ore: ore}}
   end
 
@@ -374,6 +401,51 @@ defmodule Swarm.Brain do
     {current && current.pos, %{memory | surveyed: surveyed, survey: current}, notes}
   end
 
+  # The main base is overrun: enemy fighters inside it at least `@overrun_margin` times all of home
+  # (`Roles.all_home_strength/3`, our towers there included), and we have a finished backup Command
+  # Center. Then we regroup there (`strategy.regroup`), in secret: it trains its own
+  # `@backup_workers` workers, who mine by it and never lead anyone to it (`Swarm.UnitBrain`);
+  # nobody else goes there, and no wave leaves. Over `@regroup_hold` ticks after the base was last
+  # overrun.
+  # Returns {where we regroup or nil, memory, notes for the decision log}.
+  defp regroup(%View{cc: nil}, memory), do: {nil, %{memory | regroup: nil}, []}
+
+  defp regroup(v, memory) do
+    home = View.pos(v.cc)
+    backup = backup_cc(v)
+    inside = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), home) <= @base_radius))
+    {theirs, ours} = {Roles.strength(inside), Roles.all_home_strength(v, memory.wave, inside)}
+    overrun? = backup != nil and inside != [] and theirs >= @overrun_margin * ours
+
+    regroup =
+      cond do
+        overrun? -> %{pos: View.pos(backup), at: v.tick}
+        memory.regroup && backup && v.tick - memory.regroup.at < @regroup_hold -> memory.regroup
+        true -> nil
+      end
+
+    notes =
+      case {memory.regroup, regroup} do
+        {nil, %{pos: pos}} ->
+          [{:regroup, "main base overrun, strength #{round(theirs)} vs #{round(ours)} at home: regrouping at the backup Command Center #{fmt(pos)}"}]
+
+        {%{}, nil} ->
+          [{:regroup, "regroup over: back to the main base"}]
+
+        _ ->
+          []
+      end
+
+    {regroup && regroup.pos, %{memory | regroup: regroup}, notes}
+  end
+
+  # Our finished Command Center that isn't the main one, or nil.
+  defp backup_cc(v) do
+    v
+    |> View.buildings_of("CommandCenter")
+    |> Enum.find(&(&1["completed"] and &1["id"] != v.cc["id"]))
+  end
+
   # The scout that surveys: the first by id (`Swarm.UnitBrain` gives it the same job).
   defp surveyor(v), do: v |> View.units_of("Scout") |> Enum.min_by(& &1["id"], fn -> nil end)
 
@@ -408,7 +480,8 @@ defmodule Swarm.Brain do
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
     {survey, memory, surveyed} = survey(v, memory, terrain)
-    strategy = %{strategy | survey: survey, why: strategy.why ++ surveyed}
+    {regroup, memory, regrouped} = regroup(v, memory)
+    strategy = %{strategy | survey: survey, regroup: regroup, why: strategy.why ++ surveyed ++ regrouped}
     memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
 
@@ -424,6 +497,7 @@ defmodule Swarm.Brain do
       |> army_floor(v)
       |> build(v, terrain)
       |> with_reserve(reserve, &train_workers(&1, v))
+      |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> research(v)
       |> train_scout(v)
       |> train_siege(v)
@@ -436,7 +510,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, survey: nil}, memory}
+       fall_back: false, survey: nil, regroup: nil, peek: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -451,8 +525,11 @@ defmodule Swarm.Brain do
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
     {look, looked} = look(memory, v, rally, owner, target)
-    {check, checked} = siege_watch(memory, v)
-    memory = %{memory | look: look, check: check}
+    {check, checked, died_at} = siege_watch(memory, v)
+    {peek, peeked} = peek(memory, v, died_at)
+    check_rest = if died_at, do: v.tick + @check_rest, else: memory.check_rest
+    checked = checked ++ peeked
+    memory = %{memory | look: look, check: check, peek: peek, check_rest: check_rest}
     memory_wave = memory.wave
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
     # A raid answered with a counterattack is done with.
@@ -471,7 +548,10 @@ defmodule Swarm.Brain do
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
 
     # Home falls back to the towers when the raiders outside their reach are too strong for it.
-    fall_back = Roles.fall_back?(v, wave)
+    # It holds `@fall_back_hold` ticks past the last reason to: raiders stepping in and out of
+    # sight would flip it every tick, and workers and defenders with it.
+    fall_back_at = if Roles.fall_back?(v, wave), do: v.tick, else: memory.fall_back_at
+    fall_back = fall_back_at != nil and v.tick - fall_back_at < @fall_back_hold
     why = why ++ fall_back_note(v, wave, fall_back, memory.fall_back)
 
     mode =
@@ -491,11 +571,13 @@ defmodule Swarm.Brain do
       why: looked ++ checked ++ why,
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
+      peek: peek && peek.pos,
       serum: if(memory.serum == nil and serum_moment?(v, memory_wave), do: :take),
       raze: raze(v),
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
-      survey: nil
+      survey: nil,
+      regroup: nil
     }
 
     {strategy,
@@ -507,7 +589,8 @@ defmodule Swarm.Brain do
          raid: raid,
          check: check,
          strike_back_at: strike_back_at,
-         fall_back: fall_back
+         fall_back: fall_back,
+         fall_back_at: fall_back_at
      }}
   end
 
@@ -628,6 +711,7 @@ defmodule Swarm.Brain do
       memory.wave && Map.get(memory.wave, :kind) == :strike -> keep_strike(v, memory)
       memory.wave && Map.get(memory.wave, :kind) == :sortie -> keep_sortie(v, memory)
       memory.wave -> keep_wave(v, memory, rally, target)
+      memory.regroup -> {nil, memory.next_wave, [], "regrouping at the backup Command Center"}
       spot = siege_spot(v, memory) -> sortie(v, memory, spot)
       strike = strike(v, memory) -> strike
       true -> launch(v, memory, rally, calm?, owner, target)
@@ -658,7 +742,7 @@ defmodule Swarm.Brain do
         pos = View.pos(tower)
         roles = Roles.home_roles(v, nil)
         # The attackers: the guards stay home, so the base is never left empty.
-        group = for u <- Roles.home(v, nil), roles[u["id"]] == :attacker, do: u
+        group = for u <- Roles.home(v, nil), roles[u["id"]] == :attacker, at_home?(v, u), do: u
         guards = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @wave_sight))
         {_, theirs} = strongest_player(guards) || {nil, 0}
         need = Roles.strength([tower]) + @margin * theirs
@@ -690,11 +774,12 @@ defmodule Swarm.Brain do
   # Siege at our door. A building of ours losing HP with nothing we can see able to reach it is
   # being shelled from out of sight (a Trebuchet outranges a tower, and a tower can't see its own
   # corners): up to `@checkers` home fighters go to look, one each to the four sides of it,
-  # `@check_radius` out, as shells can come from anywhere. A checker that dies has found them:
-  # `found` is its spot, and a sortie goes there. Over once we see them (a sortie takes over),
-  # or after `@check_ticks`. Returns {check, what to log}.
+  # `@check_radius` out, as shells can come from anywhere. Over once we see Trebuchets (a sortie
+  # takes over), a checker dies (whatever killed it we still can't see: nobody goes in after it, it
+  # was an archer pack as often as siege), or after `@check_ticks`. Returns {check, what to log}.
   defp siege_watch(memory, v) do
     check = memory.check
+    resting? = memory.check_rest != nil and v.tick < memory.check_rest
     alive = MapSet.new(v.my_units, & &1["id"])
     hit = for b <- v.my_buildings, prev = Map.get(memory.hp, b["id"]), b["hp"] != nil and prev != nil and b["hp"] < prev, do: b
 
@@ -714,7 +799,7 @@ defmodule Swarm.Brain do
 
       lost ->
         {_id, spot} = lost
-        {%{check | found: spot}, [{:siege_found, "a checker died by #{fmt(spot)}: attacking into the area"}]}
+        {nil, [{:siege_check, "a checker died by #{fmt(spot)}: a scout goes to look, no more checkers for #{@check_rest} ticks"}], spot}
 
       check && v.tick - check.at > @check_ticks ->
         {nil, [{:siege_check, "nothing found around #{fmt(check.pos)}"}]}
@@ -722,13 +807,43 @@ defmodule Swarm.Brain do
       check ->
         {check, []}
 
-      unseen != [] and v.cc != nil ->
+      unseen != [] and v.cc != nil and not resting? ->
         new_check(v, hd(unseen))
 
       true ->
         {nil, []}
     end
+    |> case do
+      {check, notes} -> {check, notes, nil}
+      found -> found
+    end
   end
+
+  # Where a checker died, the scout closest to it goes to look (`strategy.peek`): it sees 8 tiles
+  # and steps back once anything can reach it, so it comes back with what is there, and we
+  # remember it. The rest of the brain then answers with real numbers (a sortie for Trebuchets,
+  # holding and recalls for an army). Over once a scout gets within `@look_sight` of it, or after
+  # `@peek_ticks`. Returns {the look going on, %{pos, at} or nil; notes for the decision log}.
+  defp peek(memory, v, nil) do
+    case memory.peek do
+      nil ->
+        {nil, []}
+
+      %{pos: pos, at: at} = peek ->
+        cond do
+          Enum.any?(View.units_of(v, "Scout"), &(View.dist(View.pos(&1), pos) <= @look_sight)) ->
+            {nil, [{:siege_check, "scout looked by #{fmt(pos)}: #{map_size(memory.enemies)} enemy fighters known"}]}
+
+          v.tick - at > @peek_ticks ->
+            {nil, []}
+
+          true ->
+            {peek, []}
+        end
+    end
+  end
+
+  defp peek(_memory, v, spot), do: {%{pos: spot, at: v.tick}, []}
 
   defp new_check(v, building) do
     {bx, by} = pos = View.pos(building)
@@ -764,12 +879,12 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Where a sortie goes: the enemy Trebuchet in reach of our buildings nearest one of them, or
-  # where a checker died. Nil if neither.
-  defp siege_spot(v, memory) do
+  # Where a sortie goes: the enemy Trebuchet we can see in reach of our buildings nearest one of
+  # them. Nil with none: we never go in after what we can't see.
+  defp siege_spot(v, _memory) do
     case Roles.siege_threats(v) do
       [] ->
-        memory.check && memory.check.found
+        nil
 
       spots ->
         mine = Enum.map(v.my_buildings, &View.pos/1)
@@ -783,7 +898,8 @@ defmodule Swarm.Brain do
   # can't hit anything close, and each is 350.
   defp sortie(v, memory, spot) do
     roles = Roles.home_roles(v, nil)
-    group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], do: u
+    # Only those at home: a recalled wave walking back isn't sent straight into another fight.
+    group = for u <- Roles.home(v, nil), roles[u["id"]] in [:guard, :attacker], at_home?(v, u), do: u
     theirs = v.enemy_units |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), spot) <= @wave_sight)) |> Roles.strength()
     ours = Roles.strength(group)
 
@@ -905,6 +1021,11 @@ defmodule Swarm.Brain do
         why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
+      coming = army_near_home(v, memory, wave) ->
+        {player, theirs, ours} = coming
+        why = "wave #{wave.id}: player #{player}'s army is near home, strength #{round(theirs)} vs #{round(ours)} at home"
+        {nil, memory.next_wave, [{:wave_recalled, why}], nil}
+
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}], nil}
 
@@ -918,6 +1039,35 @@ defmodule Swarm.Brain do
         {wave, more, hold} = reinforce(v, wave, rally)
         {wave, next_wave, why} = release(v, wave, memory.next_wave)
         {wave, next_wave, more ++ why, hold}
+    end
+  end
+
+  # Within `@home_watch` of the Command Center (everything is, with none).
+  defp at_home?(%View{cc: nil}, _unit), do: true
+  defp at_home?(v, unit), do: View.dist(View.pos(unit), View.pos(v.cc)) <= @home_watch
+
+  # An enemy army near home that what stays home (everything not in `wave`, and our towers by it)
+  # can't meet: the strongest single player's fighters we remember within `@home_watch` of the
+  # Command Center, as {player, their strength, ours}, or nil. Raids are only counted once they are
+  # in a base (`Roles.recall/2`); this sees them coming, so a wave doesn't leave as they arrive, and
+  # one out comes back before home is overrun.
+  defp army_near_home(%View{cc: nil}, _memory, _wave), do: nil
+
+  defp army_near_home(v, memory, wave) do
+    home = View.pos(v.cc)
+
+    near =
+      for {_id, e} <- memory.enemies,
+          e["type"] not in ["Worker", "Scout"],
+          View.dist(View.pos(e), home) <= @home_watch,
+          do: e
+
+    with {player, theirs} <- strongest_player(near),
+         ours = Roles.all_home_strength(v, wave, Enum.filter(near, &(&1["owner"] == player))),
+         true <- theirs > ours do
+      {player, theirs, ours}
+    else
+      _ -> nil
     end
   end
 
@@ -1114,6 +1264,10 @@ defmodule Swarm.Brain do
         home != nil ->
           {raid, left} = home
           "home couldn't hold the raid without them (#{round(raid)} vs #{round(left)} left home)"
+
+        coming = army_near_home(v, memory, leaving) ->
+          {player, theirs, left} = coming
+          "player #{player}'s army is near home (#{round(theirs)} vs #{round(left)} left home)"
 
         true ->
           nil
@@ -1637,6 +1791,23 @@ defmodule Swarm.Brain do
       _ -> acc
     end
   end
+
+  # Regrouping: the backup Command Center trains its own `@backup_workers` workers (the ones within
+  # 10 of it, counting those queued), who mine by it in secret. Nobody else is sent there.
+  defp train_backup_workers({cmds, %{regroup: %{}} = mem, ore} = acc, v) do
+    with %{} = backup <- backup_cc(v),
+         queued = length(backup["production"]),
+         near = Enum.count(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(backup)) <= 10)),
+         true <- near + queued < @backup_workers,
+         true <- ore >= @costs["Worker"] do
+      cmd = %{"type" => "Produce", "buildingId" => backup["id"], "unitType" => "Worker"}
+      {[cmd | cmds], mem, ore - @costs["Worker"]}
+    else
+      _ -> acc
+    end
+  end
+
+  defp train_backup_workers(acc, _v), do: acc
 
   defp research({cmds, mem, ore} = acc, v) do
     lab = Enum.find(View.buildings_of(v, "TechLab"), &(&1["completed"] and &1["research"] == nil))

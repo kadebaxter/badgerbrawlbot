@@ -219,13 +219,24 @@ everything at home, wherever it stands, home falls back to the towers (`Swarm.Ro
 `strategy.fall_back`): workers run for cover, defenders gather by the towers nearest the attack to
 cover them and fight whatever follows them there (with the towers), and home fighters don't go
 after those raiders, only fight back against one in range. It is the same comparison that calls
-a wave home, so the wave coming back usually ends it.
+a wave home, so the wave coming back usually ends it. It holds 15 ticks past the last reason to, so
+raiders stepping in and out of sight don't flip it every tick.
+
+**Regrouping:** when enemy fighters inside the main base (within 10 of the Command Center) are at
+least 1.5× everything at home, towers there included, and we have a finished backup Command
+Center, we regroup there (`strategy.regroup`), in secret: the backup trains two workers of its
+own, who mine by it and bank there. Attacked, one runs straight away from the enemy but never closer
+to the backup, keeping its ore until it is safe, so nobody is led to it. Nobody else goes there:
+home fighters and the main base's workers carry on as before, and no worker ever mines by a backup
+otherwise. No wave leaves meanwhile. It ends 40 ticks after the base was last overrun.
 | Guard | Stand at the post (behind the front tower, else the rally point) |
 | Attacker | Wait at the rally point |
 
 Every strength comparison (launching, recalling, strikes, sorties, the serum, home's defense) uses
-one measure, `Swarm.Roles.strength/2`, so they always agree: a unit is its HP × damage per tick,
-and a Guard Tower at full HP (less as it is hurt) is worth some Soldiers. In a straight fight it
+one measure, `Swarm.Roles.strength/2`, so they always agree: a unit is worth its cost in Soldiers
+(a full Soldier is 990, an Archer 1.25 Soldiers, a Trebuchet 3.5), less as it is hurt. HP × damage
+per tick, the old measure, made an Archer a third of a Soldier, and packs of them overran us while
+every comparison said home could hold. A Guard Tower at full HP (less as it is hurt) is worth some Soldiers. In a straight fight it
 takes about three and a half (four kill it and lose one or two; three lose), so it is counted on
 the safe side both ways: ours as 3, so we never trust home's defense too much, theirs as 4, so we
 never go at one too light. Whose it is decides, not who asks: a strike's launch and its recall
@@ -236,8 +247,11 @@ or our workers are stronger than what can meet them: our fighters not in the wav
 of a raider, and the towers that can reach one. Defenders at another base don't count. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
 on the way. A wave only leaves if what stays home can hold the raid going on (by the same
-comparison, so a scout poking at the base holds nothing up), and not within 20 ticks of a recall
-for home. Right after we beat a raid (3 of its fighters killed at home, the last of it gone within
+comparison, so a scout poking at the base holds nothing up) and any enemy army we remember within
+20 tiles of the Command Center (the strongest single player's, against everything that stays home
+and our towers by it), and not within 20 ticks of a recall for home. A wave out comes home for such
+an army too, before it is in the base. Strikes and sorties only take fighters within 20 tiles of
+the Command Center, so a recalled wave walking back isn't sent straight into another fight. Right after we beat a raid (3 of its fighters killed at home, the last of it gone within
 30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
 counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
@@ -254,8 +268,10 @@ and not under a tower, is razed at once by home fighters (`strategy.raze`).
 Siege at our door. The leader remembers our buildings' HP; one losing HP with nothing we can see
 able to reach it is being shelled from out of sight (a Trebuchet reaches 7, a tower 5, and a tower
 can't see its own corners). Up to 4 home fighters go to look, one each to the four sides of it, 7
-tiles out, since shells can come from anywhere; a checker that dies has found them, and everyone at
-home attacks into that area. Once we can see enemy Trebuchets in reach of our buildings, a sortie
+tiles out, since shells can come from anywhere. A checker that dies ends the check: nobody goes in
+after what we can't see (it was an archer pack as often as siege). The closest scout goes to look
+there instead (it sees 8 and steps back once anything can reach it), so we learn what it is and the
+usual rules answer it with real numbers; no new checkers go out for 60 ticks meanwhile. Once we can see enemy Trebuchets in reach of our buildings, a sortie
 goes at them: everyone at home (guards and attackers) at once, at even strength with the enemy
 units there (not the 1.5 a wave wants: they are knocking our buildings down meanwhile), at least 4,
 Trebuchets first. It follows the siege and comes home once it is cleared (or too few are left, it
@@ -326,7 +342,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    from one within 6 tiles when the enemies there are stronger than our fighters and towers there
    or home is falling back (below). Cover is next to the closest of our Guard Towers on their side
    of the enemy (else the closest of our fighters or drop-offs on their side of it). They don't
-   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off: the shortest trip, stacked as deep as it
+   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off, by a drop-off at home first (the Command
+   Center and depots within 12 of it), then by an outpost: the shortest trip, stacked as deep as it
    takes (the game has no limit on miners per deposit, and each mines at full speed), so with a
    depot two tiles from its field they mine and bank without walking. A miner moves over once
    another deposit's trip is 2 tiles shorter than its own (a new depot went up by fresh ore). With all of that unsafe, safe ore farther away on our side

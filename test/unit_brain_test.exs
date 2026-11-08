@@ -219,9 +219,10 @@ defmodule Swarm.UnitBrainTest do
     defp archer_decides(archer, others),
       do: elem(UnitBrain.decide(archer["id"], View.new(state(units: [archer | others])), @gather), 0)
 
-    test "a soldier about to reach an archer: it steps back toward home" do
-      soldier = unit(900, "Soldier", 32, 32, owner: 1)
-      assert %{"type" => "Move", "x" => 27, "y" => 27} = archer_decides(unit(2, "Archer", 30, 30), [soldier])
+    # Two soldiers (1980) outweigh one archer (1237.5, its cost: 1.25 soldiers).
+    test "soldiers about to reach an archer: it steps back toward home" do
+      soldiers = for i <- 0..1, do: unit(900 + i, "Soldier", 32, 32, owner: 1)
+      assert %{"type" => "Move", "x" => 27, "y" => 27} = archer_decides(unit(2, "Archer", 30, 30), soldiers)
     end
 
     test "with the soldier still out of reach, it shoots" do
@@ -239,8 +240,8 @@ defmodule Swarm.UnitBrainTest do
     end
 
     test "with the enemy between it and home, it goes around, never closer" do
-      soldier = unit(900, "Soldier", 28, 28, owner: 1)
-      assert %{"type" => "Move", "x" => x, "y" => y} = archer_decides(unit(2, "Archer", 30, 30), [soldier])
+      soldiers = for i <- 0..1, do: unit(900 + i, "Soldier", 28, 28, owner: 1)
+      assert %{"type" => "Move", "x" => x, "y" => y} = archer_decides(unit(2, "Archer", 30, 30), soldiers)
       assert View.dist({x, y}, {28, 28}) > 2
     end
 

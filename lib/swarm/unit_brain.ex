@@ -60,6 +60,9 @@ defmodule Swarm.UnitBrain do
   # Where a unit steps to get off a tile: sideways first, then diagonally.
   @steps [{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}]
 
+  # Regrouping (`View.regroup`), workers this close to the backup Command Center are its own: they
+  # mine by it, and run from danger away from it, never to it (secrecy).
+  @backup_area 10
   # A miner moves to other ore once its walk to a drop-off is this much longer than the best's.
   @better_trip 2
   # Ore with an enemy fighter this close is unsafe to mine.
@@ -109,10 +112,49 @@ defmodule Swarm.UnitBrain do
     end
   end
 
+  defp act(%{"type" => "Worker"} = unit, %View{regroup: {_, _} = at} = v, strategy, memory) do
+    if View.dist(View.pos(unit), at) <= @backup_area,
+      do: {backup_miner(unit, v, at), memory},
+      else: {worker(unit, v, strategy), memory}
+  end
+
   defp act(%{"type" => "Worker"} = unit, v, strategy, memory), do: {worker(unit, v, strategy), memory}
   defp act(%{"type" => "Scout"} = unit, v, strategy, memory), do: scout(unit, v, strategy, memory)
   defp act(%{"type" => "Trebuchet"} = unit, v, strategy, memory), do: siege(unit, v, strategy, memory)
   defp act(unit, v, strategy, memory), do: fighter(unit, v, strategy, memory)
+
+  # One of the backup Command Center's own workers while we regroup there: it mines the safe ore
+  # closest to the backup and banks it there. With an enemy fighter within `@worker_alarm` it runs,
+  # straight away from the enemy but never closer to the backup, so it doesn't lead anyone there;
+  # its ore stays with it until it is safe again.
+  defp backup_miner(unit, v, at) do
+    here = View.pos(unit)
+    enemies = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= @worker_alarm))
+
+    case Enum.min_by(enemies, &{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end) do
+      nil ->
+        ore = Enum.filter(v.deposits, &(View.dist(View.pos(&1), at) <= @backup_area and not unsafe?(&1, v)))
+        current = Enum.find(ore, &(&1["id"] == unit["targetId"]))
+
+        cond do
+          current && unit["activity"] in ["Gathering", "Returning"] -> :no_change
+          ore == [] -> :no_change
+          true -> %{"type" => "Gather", "unitIds" => [unit["id"]], "targetId" => Enum.min_by(ore, &{View.dist(View.pos(&1), at), &1["id"]})["id"]}
+        end
+
+      enemy ->
+        {x, y} = run_from(v, here, View.pos(enemy), at)
+        %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+    end
+  end
+
+  # Six tiles away from `from`: of the eight ways, the farthest from it that isn't closer to `keep`
+  # (the secret we don't lead anyone to); straight away if none is.
+  defp run_from(v, {x, y} = here, from, keep) do
+    for({dx, dy} <- @steps, do: {clamp(x + 6 * dx, v.map_width), clamp(y + 6 * dy, v.map_height)})
+    |> Enum.filter(&(View.dist(&1, from) > View.dist(here, from) and View.dist(&1, keep) >= View.dist(here, keep)))
+    |> Enum.max_by(&{View.dist(&1, from), &1}, fn -> away(v, here, from) end)
+  end
 
   # A miner in danger runs to cover: to the closest of our Guard Towers on our side of the enemy
   # (else help or a drop-off). Once it is safe and idle it goes back to mining, but not to ore
@@ -172,7 +214,8 @@ defmodule Swarm.UnitBrain do
     Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
   end
 
-  # An idle worker picks a deposit: the shortest walk to a drop-off, stacked as deep as it takes
+  # An idle worker picks a deposit, ore by a drop-off at home (`View.home_deposits/1`) first, then
+  # by an outpost: the shortest walk to a drop-off, stacked as deep as it takes
   # (the game has no limit on miners per deposit, and every one mines at full speed). So does one
   # mining a deposit too far from any drop-off (once there is a closer one), one with enemies by
   # it, and one whose walk is `@better_trip` tiles longer than the best there is now (a new depot
@@ -191,15 +234,19 @@ defmodule Swarm.UnitBrain do
     current = Enum.find(v.deposits, &(&1["id"] == unit["targetId"]))
     mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
 
+    # Home first: the whole workforce follows the newest far depot otherwise, away from the army.
+    home = Enum.filter(near, &(&1 in View.home_deposits(v)))
+
     choices =
-      case Enum.reject(near, &unsafe?(&1, v)) do
-        [] -> far_ore(v, near)
-        safe -> safe
+      case {Enum.reject(home, &unsafe?(&1, v)), Enum.reject(near, &unsafe?(&1, v))} do
+        {[_ | _] = safe_home, _} -> safe_home
+        {[], [_ | _] = safe} -> safe
+        {[], []} -> far_ore(v, near)
       end
 
     move? =
       unit["activity"] == "Idle" or
-        (mining? and near != [] and current not in near) or
+        (mining? and choices != [] and current not in choices) or
         (mining? and unsafe?(current, v)) or
         (mining? and choices != [] and trip(v, unit, current) >= trip(v, unit, best(unit, v, choices)) + @better_trip)
 
@@ -218,10 +265,13 @@ defmodule Swarm.UnitBrain do
 
   defp worker(unit, v), do: take_cover(unit, v)
 
-  # Safe ore away from our drop-offs: on our side of the map; with none there and none by a
+  # Safe ore away from our drop-offs (not by a backup Command Center): on our side of the map; with none there and none by a
   # drop-off at all, any we can see (as before we remembered ore).
+  # Never by a backup Command Center (`View.backups/1`): that would show the enemy where it is.
   defp far_ore(v, near) do
-    far = Enum.reject(v.deposits, &(&1 in near or unsafe?(&1, v)))
+    backups = View.backups(v)
+    by_backup? = fn d -> Enum.any?(backups, &(View.dist(&1, View.pos(d)) <= @backup_area)) end
+    far = Enum.reject(v.deposits, &(&1 in near or unsafe?(&1, v) or by_backup?.(&1)))
 
     case Enum.filter(far, &View.ours?(v, View.pos(&1))) do
       [] when near == [] -> Enum.filter(far, &(not Map.has_key?(&1, "seen")))
@@ -408,12 +458,22 @@ defmodule Swarm.UnitBrain do
     front = s.wave && s.target && s.rally && wave_front(v, s.wave, s.target)
 
     survey = Map.get(s, :survey)
+    peek = Map.get(s, :peek)
 
     cond do
+      peek && peeker(v, peek) == unit["id"] -> {:look, peek}
       spot && looker(v, spot) == unit["id"] -> {:look, spot}
       front && looker(v, s.target) == unit["id"] -> {:wave, front}
       survey && surveyor?(v, unit) -> {:survey, survey}
       true -> {:post, watch_post(v, unit)}
+    end
+  end
+
+  # The scout that goes to look where a checker died (`strategy.peek`): the closest to it.
+  defp peeker(v, spot) do
+    case View.units_of(v, "Scout") do
+      [] -> nil
+      scouts -> Enum.min_by(scouts, &{View.dist(View.pos(&1), spot), &1["id"]})["id"]
     end
   end
 

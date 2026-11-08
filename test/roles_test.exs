@@ -86,8 +86,8 @@ defmodule Swarm.RolesTest do
   end
 
   describe "Trebuchets" do
-    test "are worth HP x damage per tick like everything else" do
-      assert Roles.strength([unit(900, "Trebuchet", 0, 0)]) == 150 * 40 / 8
+    test "are worth their cost like everything else: 350, three and a half soldiers" do
+      assert Roles.strength([unit(900, "Trebuchet", 0, 0)]) == 3.5 * 990
     end
 
     test "come before an enemy that can't hit us yet" do

@@ -1003,26 +1003,40 @@ defmodule Swarm.BrainTest do
       assert check == %{}
     end
 
-    test "a checker dies: everyone at home attacks into that area" do
-      {s, _, memory} = plan([units: soldiers(12), buildings: [hit_tower()]], was_whole())
-      {dead, spot} = Enum.find(s.check, fn {_id, spot} -> spot == {21, 7} end)
-      left = Enum.reject(soldiers(12), &(&1["id"] == dead))
+    test "a checker dies: nobody goes in after what we can't see; a scout looks, no more checkers a while" do
+      scout = unit(300, "Scout", 7, 7)
+      {s, _, memory} = plan([units: [scout | soldiers(12)], buildings: [hit_tower()]], was_whole())
+      {dead, _spot} = Enum.find(s.check, fn {_id, spot} -> spot == {21, 7} end)
+      left = [scout | Enum.reject(soldiers(12), &(&1["id"] == dead))]
 
-      assert {%{wave: %{kind: :sortie, spot: ^spot}, target: ^spot, why: why}, _, _} =
+      assert {%{wave: nil, check: check, peek: {21, 7}, why: why}, _, memory} =
                plan([units: left, buildings: [hit_tower()], tick: 101], memory)
 
-      assert Enum.any?(why, &match?({:siege_found, _}, &1))
-      assert Enum.any?(why, &match?({:wave_launched, "sortie at the siege by (21,7)" <> _}, &1))
+      assert check == %{} and memory.check == nil
+      assert Enum.any?(why, &match?({:siege_check, "a checker died by (21,7): a scout goes to look" <> _}, &1))
+
+      # The scout goes there.
+      v = View.new(state(units: left, buildings: [hit_tower()], tick: 102))
+      assert {%{"type" => "Move", "x" => 21, "y" => 7}, _} = Swarm.UnitBrain.decide(300, v, %{s | peek: {21, 7}})
+
+      # Hit again meanwhile: no new checkers.
+      hit = Map.put(hit_tower(), "hp", 250)
+      assert {%{check: %{}}, _, memory} = plan([units: left, buildings: [hit], tick: 102], %{memory | hp: %{40 => 300}})
+
+      # The scout gets there: the look is done.
+      there = [%{scout | "x" => 21, "y" => 8} | tl(left)]
+      assert {%{peek: nil}, _, _} = plan([units: there, buildings: [hit_tower()], tick: 110], memory)
     end
 
     test "trebuchets in sight by our buildings: a sortie at even strength, trebuchets and all" do
       trebs = for i <- 1..2, do: unit(900 + i, "Trebuchet", 20, 12, owner: 1)
       escort = for i <- 1..5, do: unit(910 + i, "Soldier", 21, 13, owner: 1)
 
-      # 2 x 750 + 5 x 990 = 6450 there: six soldiers (5940) aren't enough, seven (6930) are.
-      assert {%{wave: nil, hold: "sortie at the siege" <> _}, _, _} = plan(units: soldiers(6) ++ trebs ++ escort, buildings: [hit_tower()])
-      assert {%{wave: %{kind: :sortie, members: members}}, _, _} = plan(units: soldiers(7) ++ trebs ++ escort, buildings: [hit_tower()])
-      assert length(members) == 7
+      # 2 x 3465 (a Trebuchet is 3.5 soldiers by cost) + 5 x 990 = 11880 there: eleven soldiers
+      # (10890) aren't enough, twelve (11880) are.
+      assert {%{wave: nil, hold: "sortie at the siege" <> _}, _, _} = plan(units: soldiers(11) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert {%{wave: %{kind: :sortie, members: members}}, _, _} = plan(units: soldiers(12) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert length(members) == 12
     end
 
     test "the sortie comes home once the siege is gone and it has been there" do

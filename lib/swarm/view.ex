@@ -33,6 +33,9 @@ defmodule Swarm.View do
     start_owner: %{},
     # How many players the game started with (eliminated ones too).
     players: 2,
+    # The backup Command Center we regroup at while the main base is overrun, or nil (set by
+    # `Swarm.Brain.see/2`): its own two workers mine by it, in secret (`Swarm.UnitBrain`).
+    regroup: nil,
     # player slot => survival score (the ore value of everything they have alive), opponents only
     enemy_survival: %{}
   ]
@@ -42,6 +45,8 @@ defmodule Swarm.View do
 
   # Ore farther than this from a drop-off isn't worth the walk.
   @drop_off_reach 10
+  # Depots this close to the Command Center are home (see `home_drop_offs/1`).
+  @home_ore 12
 
   @spec new(map()) :: t()
   def new(state) do
@@ -133,6 +138,16 @@ defmodule Swarm.View do
     Enum.filter(deposits, fn d -> Enum.any?(sites, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
   end
 
+  @doc "Drop-offs at home: the Command Center and depots within #{@home_ore} of it."
+  def home_drop_offs(%__MODULE__{cc: nil}), do: []
+  def home_drop_offs(%__MODULE__{cc: cc} = v), do: Enum.filter(drop_offs(v), &(dist(&1, pos(cc)) <= @home_ore))
+
+  @doc "Deposits worth mining from a drop-off at home (`home_drop_offs/1`)."
+  def home_deposits(%__MODULE__{} = v) do
+    home = home_drop_offs(v)
+    Enum.filter(v.deposits, fn d -> Enum.any?(home, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+  end
+
   @doc "How far ore can be from a drop-off and still be worth mining."
   def drop_off_reach, do: @drop_off_reach
 
@@ -155,6 +170,14 @@ defmodule Swarm.View do
     ids = MapSet.new(visible, & &1["id"])
     remembered = for {id, d} <- Enum.sort(known), not MapSet.member?(ids, id), do: d
     %{v | deposits: visible ++ remembered}
+  end
+
+  @doc """
+  Our finished Command Centers other than the main one: backups, kept secret. Nobody mines by one
+  but its own workers while we regroup there.
+  """
+  def backups(%__MODULE__{cc: cc} = v) do
+    for b <- buildings_of(v, "CommandCenter"), b["completed"], cc == nil or b["id"] != cc["id"], do: pos(b)
   end
 
   @doc "Deposits in sight right now (not remembered ones)."

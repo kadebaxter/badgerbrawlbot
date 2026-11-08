@@ -9,7 +9,7 @@ defmodule SwarmTest do
     }
 
     assert Swarm.enemy_report(enemies, 100) ==
-             "player 1: 2 (1 Archer, 1 Soldier), strength 1350, seen 0-10 ticks ago\n" <>
+             "player 1: 2 (1 Archer, 1 Soldier), strength 2228, seen 0-10 ticks ago\n" <>
                "player 2: 1 (1 Soldier), strength 990, seen 60-60 ticks ago"
 
     assert Swarm.enemy_report(%{}, 100) == "no enemy fighters seen yet"
