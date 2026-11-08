@@ -354,8 +354,9 @@ wave fights anything.
 Siege: an enemy Trebuchet (range 3–7, outranges towers) is fought before anything that can't hit
 us yet, from up to 10 tiles away. One within 9 of any of our buildings counts as an attack (the
 leader holds waves; attackers go), and home units may leave the base to kill it. Any unit on a
-tile where an enemy shell is about to land (the `shells` in the state) steps off it first, unless
-it is already moving. Each unit
+tile where an enemy shell is about to land (the `shells` in the state) steps off it first, moving or
+not, and keeps at it until the shell has landed: nothing else it would do overrules the step (an
+archer, slower than a tile a tick, used to turn back to its target before clearing the tile). Each unit
 remembers the order it is carrying out, so it sends nothing while that order still stands.
 
 Leader's team strategy (`Swarm.Brain`), built in stages:

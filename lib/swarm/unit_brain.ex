@@ -36,9 +36,9 @@ defmodule Swarm.UnitBrain do
   look from that an enemy we can see covers is pulled back out of its reach first. Its memory holds
   its HP last tick and when it last stepped back.
 
-  Any unit standing on a tile where an enemy shell is about to land steps off it first: a
-  Trebuchet's shell hits whatever is on the tile when it lands, and it aims at units standing
-  still.
+  Any unit standing on a tile where an enemy shell is about to land steps off it first, and keeps
+  at it until the shell has landed (its memory's `dodge_until`): a Trebuchet's shell hits whatever
+  is on the tile when it lands, and it aims at units standing still.
 
   The memory is the order the unit last gave itself. Orders persist in the game, so a unit that
   is still carrying out the same order sends nothing. Losing the memory (the process restarted)
@@ -95,27 +95,46 @@ defmodule Swarm.UnitBrain do
     # With the team's answers in hand (`prepare/2`), the lists they leave out, once for this decision.
     v = Roles.localize(v)
     unit = View.my_unit(v, unit_id)
-    step = unit && dodge(unit, v)
+    landing = landing(v)
+    under? = unit != nil and Map.has_key?(landing, View.pos(unit))
+    dodging? = Map.get(memory, :dodge_until) != nil and v.tick <= memory.dodge_until
+    step = under? && step_aside(unit, v, landing)
 
     cond do
-      unit == nil -> {:no_change, memory}
-      step -> {command(unit, {:move, step}), %{memory | intent: {:move, step}}}
-      true -> act(unit, v, strategy, memory)
+      unit == nil ->
+        {:no_change, memory}
+
+      # Stepping out from under a shell: keep at it until it has landed. Its usual order would
+      # call it back (an archer, slower than a tile a tick, takes two ticks to clear the tile, and
+      # flipped between the step and its target every tick until the shell hit it), so nothing
+      # overrules the step: neither while it is still on the tile, moving off, nor once it is off.
+      dodging? and (not under? or unit["activity"] == "Moving") ->
+        {:no_change, memory}
+
+      # Under a shell, moving or not (a unit on the move can still be on the tile when it lands).
+      step ->
+        lands = landing[View.pos(unit)]
+        {command(unit, {:move, step}), memory |> Map.put(:intent, {:move, step}) |> Map.put(:dodge_until, lands)}
+
+      true ->
+        act(unit, v, strategy, memory)
     end
   end
 
-  # A shell lands on a tile; a unit already on the move is gone by then.
-  defp dodge(%{"activity" => "Moving"}, _v), do: nil
+  # Tiles enemy shells are about to land on => the last tick one lands there.
+  defp landing(v) do
+    for s <- v.shells, s["owner"] != v.me, s["landsTick"] >= v.tick, reduce: %{} do
+      acc -> Map.update(acc, {s["x"], s["y"]}, s["landsTick"], &max(&1, s["landsTick"]))
+    end
+  end
 
-  defp dodge(unit, v) do
-    landing = for s <- v.shells, s["owner"] != v.me, s["landsTick"] >= v.tick, into: MapSet.new(), do: {s["x"], s["y"]}
+  # A tile next to the unit that no shell is about to land on, or nil.
+  defp step_aside(unit, v, landing) do
     {x, y} = View.pos(unit)
 
-    if MapSet.member?(landing, {x, y}) do
-      Enum.find(for({dx, dy} <- @steps, do: {x + dx, y + dy}), fn {nx, ny} = tile ->
-        nx in 0..(v.map_width - 1)//1 and ny in 0..(v.map_height - 1)//1 and not MapSet.member?(landing, tile)
-      end)
-    end
+    Enum.find(for({dx, dy} <- @steps, do: {x + dx, y + dy}), fn {nx, ny} = tile ->
+      nx in 0..(v.map_width - 1)//1 and ny in 0..(v.map_height - 1)//1 and not Map.has_key?(landing, tile)
+    end)
   end
 
   defp act(%{"type" => "Worker"} = unit, %View{regroup: {_, _} = at} = v, strategy, memory) do

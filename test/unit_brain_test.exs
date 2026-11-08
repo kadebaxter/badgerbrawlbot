@@ -332,9 +332,31 @@ defmodule Swarm.UnitBrainTest do
       assert {%{"type" => "Move", "x" => 4, "y" => 7}, _} = UnitBrain.decide(101, v, @gather)
     end
 
-    test "a unit on the move is gone before it lands" do
+    test "a unit on the move still steps aside: it may still be on the tile when it lands" do
       v = under_fire(unit(2, "Soldier", 20, 20, activity: "Moving"), [{20, 20}])
-      refute match?({%{"x" => 21}, _}, UnitBrain.decide(2, v, @gather))
+      assert {%{"type" => "Move", "x" => 21, "y" => 20}, %{dodge_until: 102}} = UnitBrain.decide(2, v, @gather)
+    end
+
+    test "an archer keeps stepping off until the shell has landed: its target doesn't call it back" do
+      # An archer shooting a soldier in reach, a shell coming down on it at tick 102.
+      archer = unit(2, "Archer", 20, 20, activity: "Attacking", target_id: 900)
+      enemy = unit(900, "Soldier", 23, 20, owner: 1)
+      shell = %{"owner" => 1, "x" => 20, "y" => 20, "firedTick" => 99, "landsTick" => 102}
+      at = fn a, tick -> View.new(state(units: [a, enemy], tick: tick) |> Map.put("shells", [shell])) end
+
+      {%{"type" => "Move", "x" => x, "y" => y}, memory} = UnitBrain.decide(2, at.(archer, 100), @gather)
+
+      # Tick 101: still on the tile, moving off (an archer needs two ticks to clear it). Before,
+      # it turned back to shoot here and never left.
+      assert {:no_change, memory} = UnitBrain.decide(2, at.(%{archer | "activity" => "Moving"}, 101), @gather, memory)
+
+      # Off the tile before it lands: it waits there.
+      off = %{archer | "x" => x, "y" => y, "activity" => "Idle"}
+      assert {:no_change, memory} = UnitBrain.decide(2, at.(off, 102), @gather, memory)
+
+      # After it lands, back to the fight.
+      v = View.new(state(units: [off, enemy], tick: 103))
+      assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(2, v, @gather, memory)
     end
 
     test "our own shells don't scare us" do
