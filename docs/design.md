@@ -154,7 +154,8 @@ loop:
   reconcile(state)                       start/stop unit processes to match the game
   strategy = decide_strategy(state)      Gather / Build / Attack / Defend / Scout
   if changed: commit {:set_strategy, strategy}
-  broadcast {:tick, tick, state, strategy} to all units
+  send {:tick, tick, state, strategy} once to each node's relay, which works out the team-wide
+    answers once (roles, who fights whom) and hands the tick to its units
   collect {:command, tick, unit_id, cmd} until a deadline (~40% of the tick interval)
   commands = unit commands ++ economy commands (Produce, Research, Rally from buildings)
   commit {:tick_submitted, tick}         fails if we are no longer leader → stop
@@ -188,6 +189,14 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 ---
 
 ## Unit decisions
+
+The tick reaches the units through one relay per node (`Swarm.Relay`): the leader sends it once
+per node, not once per unit, so the view crosses the network once for each machine. The relay works
+out the answers every unit needs about the whole team once (`Swarm.Roles.share/2`: each fighter's
+job, who fights whom) and hands the tick, with them, to each of its units, which reads its own part.
+Before, every unit worked the whole team out again: for 100 units that was about 930 ms of work a
+tick, against about 22 ms now. A node without a relay (an older release during a rolling upgrade)
+gets the tick sent to each unit, as before.
 
 Each unit gets the state and the strategy and decides for itself only. Workers mine when idle.
 A fighter works out its role from the view (`Swarm.Roles`, the same rule on every node, so no

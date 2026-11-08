@@ -497,9 +497,18 @@ defmodule Swarm.GameLoop do
     if memory != st.memory, do: Ra.command({:brain, memory})
     planned = System.monotonic_time(:millisecond)
 
-    # Ask every unit, wherever it runs, and give them part of the tick to answer.
+    # Ask every unit, wherever it runs, and give them part of the tick to answer: through each
+    # node's relay (`Swarm.Relay`), one message per node; straight to the units on a node without
+    # one.
     ref = make_ref()
-    for {_id, pid} <- units, do: send(pid, {:tick, ref, self(), view, strategy})
+    relays = Swarm.Relay.all()
+
+    for {on, pids} <- Enum.group_by(Map.values(units), &node/1) do
+      case relays do
+        %{^on => relay} -> send(relay, {:tick, ref, self(), view, strategy, pids})
+        _ -> for pid <- pids, do: send(pid, {:tick, ref, self(), view, strategy})
+      end
+    end
     deadline_ms = max(100, div((st.state["tickIntervalMs"] || 1000) * 2, 5))
     replies = collect(ref, map_size(units), System.monotonic_time(:millisecond) + deadline_ms, [])
     answered = System.monotonic_time(:millisecond)

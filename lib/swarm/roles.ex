@@ -105,6 +105,8 @@ defmodule Swarm.Roles do
   3. an outpost still short gets the closest of the rest
   4. everyone else attacks
   """
+  def home_roles(%View{shared: %{wave: wave, home_roles: roles}}, wave), do: roles
+
   def home_roles(%View{} = v, wave) do
     newest_first = &Enum.sort_by(&1, fn u -> u["id"] end, :desc)
     manned = Enum.filter(outposts(v), &(miners(v, &1) > 0))
@@ -138,6 +140,17 @@ defmodule Swarm.Roles do
   end
 
   defp siege_role(_v, wave, id), do: if(id in members(wave), do: :wave, else: :siege_out)
+
+  @doc """
+  The view with the team-wide answers worked out once (`View.shared`): every fighter's job at home
+  (`home_roles/2`) and who fights whom (`assignments/2`), for this tick's wave. Every unit on a
+  node reads its own part instead of each working out the whole team again (`Swarm.Relay`). The
+  answers are the same either way; this is only so they are computed once.
+  """
+  def share(%View{} = v, wave) do
+    v = %{v | shared: nil}
+    %{v | shared: %{wave: wave, home_roles: home_roles(v, wave), assignments: assignments(v, wave)}}
+  end
 
   @doc "Ids of the guards."
   def guards(%View{} = v, wave) do
@@ -468,6 +481,8 @@ defmodule Swarm.Roles do
   Our fighter id => the enemy fighter id it goes after. Falling back (`fall_back?/2`), home
   fighters don't go after raiders out of our towers' reach: only fight back.
   """
+  def assignments(%View{shared: %{wave: wave, assignments: assigned}}, wave), do: assigned
+
   def assignments(%View{} = v, wave) do
     held_back = if fall_back?(v, wave), do: MapSet.new(exposed_raiders(v), & &1["id"]), else: MapSet.new()
     enemies = Enum.reject(v.enemy_units, &(&1["type"] == "Worker"))

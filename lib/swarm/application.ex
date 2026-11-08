@@ -37,8 +37,9 @@ defmodule Swarm.Application do
         {Cluster.Supervisor, [Application.get_env(:libcluster, :topologies, []), [name: Swarm.ClusterSupervisor]]},
         # Cluster-wide process groups: :nodes, :units, {:unit, id}.
         %{id: :pg, start: {:pg, :start_link, [:swarm]}},
-        # Unit processes the leader placed on this node.
+        # Unit processes the leader placed on this node, and the relay that hands them each tick.
         {DynamicSupervisor, name: Swarm.UnitSupervisor, strategy: :one_for_one},
+        Swarm.Relay,
         # The game loop, while this node leads.
         {DynamicSupervisor, name: Swarm.LeaderSupervisor, strategy: :one_for_one},
         Swarm.Leader,

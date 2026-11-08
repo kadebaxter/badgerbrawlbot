@@ -36,6 +36,8 @@ defmodule Swarm.View do
     # The backup Command Center we regroup at while the main base is overrun, or nil (set by
     # `Swarm.Brain.see/2`): its own two workers mine by it, in secret (`Swarm.UnitBrain`).
     regroup: nil,
+    # Team-wide answers worked out once per tick on each node (`Swarm.Roles.share/2`), or nil.
+    shared: nil,
     # player slot => survival score (the ore value of everything they have alive), opponents only
     enemy_survival: %{}
   ]
