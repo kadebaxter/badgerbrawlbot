@@ -522,7 +522,10 @@ defmodule Swarm.GameLoop do
         {key, st} = serum_on(view, memory, st)
 
         # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
-        Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands, key)
+        {_, gone} = Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands, key)
+        # Ore the server says is gone (mined out in the fog): forgotten, so workers move on.
+        memory = Brain.forget_ore(memory, gone)
+        if gone != [], do: Ra.command({:brain, memory})
         send(self(), :poll)
 
         if rem(view.tick, 10) == 0 do

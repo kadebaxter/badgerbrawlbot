@@ -159,7 +159,8 @@ loop:
   collect {:command, tick, unit_id, cmd} until a deadline (~40% of the tick interval)
   commands = unit commands ++ economy commands (Produce, Research, Rally from buildings)
   commit {:tick_submitted, tick}         fails if we are no longer leader → stop
-  POST /matches/{id}/commands
+  POST /matches/{id}/commands           at most 100 a request (the server rejects a whole request
+                                         past that), in order; rejections logged as a warning
 ```
 
 - **Buildings are not units.** Production, research and rally points are part of the leader's
@@ -422,8 +423,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    closest of our towers instead of standing in the field.
    **Ore is remembered:** the server only sends the deposits in sight, but deposits never move and a
    Gather may name one in the fog, so the leader keeps every deposit it has seen (forgetting one
-   once it should see it and doesn't: mined out) and adds them to the view the brain and every unit
-   plan with. Once we have a scout, the first one **surveys** our side for ore before taking its post:
+   once it should see it and doesn't: mined out, or once the server rejects a Gather on it as gone)
+   and adds them to the view the brain and every unit plan with. Once we have a scout, the first one **surveys** our side for ore before taking its post:
    spots on two rings (10 and 20 tiles) around the Command Center, on our side of the map, each
    done once anything of ours sees it (or after 40 ticks of trying).
    **Ore for workers:** once a Barracks is up (or from tick 300 on), 100 ore (two workers) is kept
@@ -436,7 +437,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
    next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
    And whenever 3 or more workers are mining one field more than 2 tiles from a drop-off (a
-   depot going up counts), a depot goes right by that field, 2 tiles from the ore, right away: a
+   depot going up counts) with at least 1,000 ore left, a depot goes right by that field, 2 tiles
+   from the ore, right away: a
    worker stands one tile from each, so it mines and banks without a step; a depot costs one
    Soldier and saves them all the walk. Only a spot within 2 tiles counts (none open, none
    ordered, or the field would keep asking for another). The home ore waits for the build

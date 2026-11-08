@@ -165,11 +165,34 @@ defmodule Swarm.Match do
     terrain
   end
 
-  @doc "Posts commands and logs any that were rejected. With `serum_key`, they carry the serum."
+  # The server takes at most this many commands in one request, and rejects all of them past it.
+  @max_commands 100
+
+  @doc """
+  Posts commands, at most #{@max_commands} to a request (the server rejects a whole request past
+  that: with 148 units, every order of a tick was thrown away and nobody moved). The requests go
+  one after another, in order: the latest order for a unit wins. Logs any the server rejected.
+  With `serum_key`, they carry the serum.
+
+  Returns `{:ok, gone}` (or `{:error, gone}` if a request didn't get through): the deposits a
+  Gather named that the server says are gone, mined out in the fog, for the brain to forget.
+  """
   def submit(client, match_id, tick, commands, serum_key \\ nil)
-  def submit(_client, _match_id, _tick, [], _serum_key), do: :ok
+  def submit(_client, _match_id, _tick, [], _serum_key), do: {:ok, []}
 
   def submit(client, match_id, tick, commands, serum_key) do
+    commands
+    |> Enum.chunk_every(@max_commands)
+    |> Enum.reduce({:ok, []}, fn batch, {status, gone} ->
+      case post(client, match_id, tick, batch, serum_key) do
+        {:ok, more} -> {status, gone ++ more}
+        :error -> {:error, gone}
+      end
+    end)
+    |> then(fn {status, gone} -> {status, Enum.uniq(gone)} end)
+  end
+
+  defp post(client, match_id, tick, commands, serum_key) do
     sent =
       if serum_key,
         do: NetRts.commands(client, match_id, commands, serum_key),
@@ -178,13 +201,20 @@ defmodule Swarm.Match do
     case sent do
       {:ok, %{"results" => results}} ->
         rejected =
-          for %{"accepted" => false, "index" => i, "error" => err} <- results do
-            Logger.debug("tick #{tick}: rejected #{Enum.at(commands, i)["type"]}: #{err["message"]}")
-          end
+          for %{"accepted" => false, "index" => i, "error" => err} <- results, do: {Enum.at(commands, i), err}
+
+        if rejected != [] do
+          codes = rejected |> Enum.frequencies_by(fn {_, err} -> err["code"] end) |> Enum.map_join(", ", fn {c, n} -> "#{c} x#{n}" end)
+          Logger.warning("tick #{tick}: the server rejected #{length(rejected)} of #{length(commands)} commands: #{codes}")
+        end
 
         Swarm.Metrics.inc(:swarm_commands_total, %{result: "accepted"}, length(results) - length(rejected))
         Swarm.Metrics.inc(:swarm_commands_total, %{result: "rejected"}, length(rejected))
-        :ok
+
+        gone =
+          for {%{"type" => "Gather", "targetId" => id}, %{"code" => "RESOURCE_NOT_FOUND"}} <- rejected, do: id
+
+        {:ok, gone}
 
       {:error, reason} ->
         Logger.warning("tick #{tick}: commands not sent: #{inspect(reason)}")

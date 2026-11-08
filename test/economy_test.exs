@@ -40,6 +40,18 @@ defmodule Swarm.EconomyTest do
       assert v.deposits == [] and memory.ore == %{}
     end
 
+    test "one the server says is gone (mined out in the fog) is forgotten, and workers move on" do
+      far = %{"id" => 10, "x" => 7, "y" => 34, "remaining" => 800}
+      {_, memory} = see([unit(300, "Scout", 7, 30)], [@south, far], 100)
+      # Out of sight now; a Gather on deposit 10 came back RESOURCE_NOT_FOUND.
+      memory = Brain.forget_ore(memory, [10])
+      {v, _} = see([unit(300, "Scout", 7, 12)], [], 110, memory)
+      assert [%{"id" => 9}] = v.deposits
+
+      worker = unit(1, "Worker", 7, 20)
+      assert {%{"type" => "Gather", "targetId" => 9}, _} = UnitBrain.decide(1, %{v | my_units: [worker]}, @gather)
+    end
+
     test "deposits in sight are the server's, not doubled" do
       {_, memory} = see([unit(300, "Scout", 7, 26)], [@south], 100)
       {v, _} = see([unit(300, "Scout", 7, 26)], [@south], 101, memory)

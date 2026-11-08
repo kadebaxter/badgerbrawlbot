@@ -293,6 +293,9 @@ defmodule Swarm.Brain do
   @remote_miners 3
   # A field whose walk to a drop-off is longer than this gets a depot by it (see `remote_depot/3`).
   @depot_walk 2
+  # ...and has at least this much ore left: a depot (100) by a field about to run dry is wasted (one
+  # went up by 342 ore that ran out two ticks later, leaving us 101, short of the next one).
+  @depot_ore 1000
   # A depot is built by up to this many of the workers who will use it; the first Barracks by this
   # many (see `builders/4`).
   @depot_builders 5
@@ -420,6 +423,13 @@ defmodule Swarm.Brain do
     v = %{v | regroup: memory.regroup && memory.regroup.pos}
     {View.with_known_ore(v, ore), %{memory | ore: ore}}
   end
+
+  @doc """
+  Forgets deposits the server says are gone (a Gather on one was rejected: mined out where we
+  couldn't see it). Workers that picked one pick other ore next tick.
+  """
+  def forget_ore(memory, []), do: memory
+  def forget_ore(memory, ids), do: %{memory | ore: Map.drop(memory.ore, ids)}
 
   # The survey: a scout goes round our side of the map looking for ore, spot by spot (`survey_spots/2`),
   # so we know where to go when the ore by our drop-offs runs out or the enemy sits on it. A spot
@@ -1893,12 +1903,17 @@ defmodule Swarm.Brain do
     with [_ | _] <- far,
          target = Enum.max_by(far, fn d -> {Enum.count(far, &(View.dist(View.pos(&1), View.pos(d)) <= 4)), -d["id"]} end),
          true <- Enum.count(far, &(View.dist(View.pos(&1), View.pos(target)) <= 4)) >= @remote_miners,
+         true <- field_ore(v, target) >= @depot_ore,
          false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)) do
       right_by(terrain, v, target)
     else
       _ -> nil
     end
   end
+
+  # The ore left in the field around `target` (the deposits a depot by it serves, see `by_field/3`).
+  defp field_ore(v, target),
+    do: v.deposits |> Enum.filter(&(View.dist(View.pos(&1), View.pos(target)) <= 4)) |> Enum.sum_by(&(&1["remaining"] || 0))
 
   # How far a deposit is from the closest drop-off, finished or a depot going up.
   defp walk(v, deposit) do

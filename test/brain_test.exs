@@ -787,13 +787,21 @@ defmodule Swarm.BrainTest do
       # The depot is 4 tiles from the home ore: every trip is a walk. A depot right by the ore (2
       # tiles: a worker between them mines and banks without a step).
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
-      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, ore: 200)
+      rich = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 2000}]
+      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, deposits: rich, ore: 200)
       assert [%{"x" => x, "y" => y}] = depot_builds(commands)
       assert View.dist({x, y}, {2, 7}) <= 2
 
       # Not once there is one within two tiles.
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
-      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, ore: 200)
+      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, deposits: rich, ore: 200)
+      assert depot_builds(commands) == []
+    end
+
+    test "not by a field about to run dry" do
+      # 342 ore left (a depot went up by this much and the field ran out two ticks later).
+      dry = for(d <- far_field(), do: %{d | "remaining" => 114})
+      {_, commands, _} = plan(units: far_miners(5), deposits: dry, ore: 200)
       assert depot_builds(commands) == []
     end
 
