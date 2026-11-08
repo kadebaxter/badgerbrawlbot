@@ -1111,7 +1111,12 @@ defmodule Swarm.Brain do
   defp reinforce(v, wave, rally) do
     in_wave = Enum.count(Roles.fighters(v), &(&1["id"] in wave.members))
     room = max(wave_cap(v) - in_wave, 0)
-    staged = staged(v, wave, rally, @staged_radius)
+    # Only as many as fit under the cap, the closest to the rally point first.
+    staged =
+      staged(v, wave, rally, @staged_radius)
+      |> Enum.sort_by(&{View.dist(View.pos(&1), rally), &1["id"]})
+      |> Enum.take(room)
+
     ids = Enum.map(staged, & &1["id"])
 
     cond do

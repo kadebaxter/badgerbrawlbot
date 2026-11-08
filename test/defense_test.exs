@@ -75,6 +75,16 @@ defmodule Swarm.DefenseTest do
     end
   end
 
+  test "reinforcements only fill the room under the cap, never past it" do
+    # 45 fighters: the cap is 30. The wave has 24; 14 wait at the rally point: 6 go.
+    wave = %{id: 1, members: Enum.to_list(201..224), released: true, owner: 1}
+    out = for i <- 1..24, do: unit(200 + i, "Soldier", 40, 40)
+    waiting = for i <- 25..45, do: unit(200 + i, "Soldier", 10, 10)
+    memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
+    assert {%{wave: %{members: members}}, _, _} = plan([units: out ++ waiting], memory)
+    assert length(members) == 30
+  end
+
   describe "after a recall for an army near home" do
     test "no new wave for a while, counterattack or not" do
       army = for i <- 1..20, do: unit(900 + i, "Archer", 22, 7, owner: 2)
