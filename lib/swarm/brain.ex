@@ -254,6 +254,26 @@ defmodule Swarm.Brain do
                    ] ++ for(n <- 4..10, do: {"GuardTower", n, 20, :square, 15})
   @big_towers 10
 
+  # A medium game (6 to 9 players, see `medium?/1`): a tower facing each neighbor and two more (4 in
+  # all, not 10), three Barracks, and the backup Command Center last, at 20 fighters. The ore goes
+  # into the army: the first wave at `@medium_first_wave`, at the weaker neighbor.
+  @medium_build_order [
+                        {"Barracks", 1, 7, :base},
+                        {"ResourceDepot", 1, 9, :ore},
+                        {"GuardTower", 1, 10, :front},
+                        {"GuardTower", 2, 11, :front},
+                        {"Barracks", 2, 12, :base},
+                        {"TechLab", 1, 13, :base},
+                        {"Barracks", 3, 15, :base},
+                        {"GuardTower", 3, 16, :front},
+                        {"GuardTower", 4, 18, :front},
+                        {"CommandCenter", 2, 18, :hideout, 20}
+                      ]
+  @huge_game 10
+  # The ore of an eliminated neighbor: deposits this close to where it started.
+  @conquest_reach 10
+  @medium_first_wave 15
+
   @needs_barracks ["GuardTower", "TechLab"]
 
   # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore`, early enough
@@ -1732,7 +1752,7 @@ defmodule Swarm.Brain do
   defp next_build(%View{cc: nil}, _terrain, _mem), do: nil
 
   defp next_build(%View{} = v, terrain, mem) do
-    depot = if may_expand?(v), do: remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
+    depot = if may_expand?(v), do: conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
 
     case depot do
       nil ->
@@ -1754,15 +1774,27 @@ defmodule Swarm.Brain do
   # going up) while short of it, else nil. Not forever: past `@square_deadline`, it goes anyway.
   defp towers_short(v, memory) do
     n = count(v, "GuardTower")
-    if big?(v) and memory.next_wave == 1 and n < @big_towers and v.tick < @square_deadline, do: n
+    if big?(v) and not medium?(v) and memory.next_wave == 1 and n < @big_towers and v.tick < @square_deadline, do: n
   end
 
   # A big game: started with `@big_game` players or more.
   defp big?(%View{players: players}), do: players >= @big_game
 
+  # A medium game: big (`@big_game` players or more) but under `@huge_game`. Two neighbors on top of
+  # us and home ore gone by about tick 450: army first, a few towers, take the weaker neighbor and
+  # its ore. The big game's tower square is for the 10+ player games it was made for.
+  defp medium?(%View{players: players}), do: players >= @big_game and players < @huge_game
+
   # The build order as {type, how many, workers first, where, fighters first}.
   defp build_order(v) do
-    for entry <- if(big?(v), do: @big_build_order, else: @build_order) do
+    order =
+      cond do
+        medium?(v) -> @medium_build_order
+        big?(v) -> @big_build_order
+        true -> @build_order
+      end
+
+    for entry <- order do
       case entry do
         {type, wanted, workers, where} -> {type, wanted, workers, where, 0}
         full -> full
@@ -1789,6 +1821,8 @@ defmodule Swarm.Brain do
   # The fewest attackers a wave may leave with (see `@min_wave`).
   defp wave_min(v, memory) do
     cond do
+      medium?(v) and memory.next_wave == 1 -> @medium_first_wave
+      medium?(v) -> @min_wave
       big?(v) and memory.next_wave == 1 -> @big_first_wave
       big?(v) -> @big_min_wave
       true -> @min_wave
@@ -1816,6 +1850,29 @@ defmodule Swarm.Brain do
       by_field(terrain, v, target)
     else
       _ -> nil
+    end
+  end
+
+  # A medium game: a neighbor we eliminated left its ore by its start (no longer enemy ground, see
+  # `View.fallen_starts`). A depot goes there as soon as we can, the side of its field nearest us,
+  # and like every outpost it gets a tower (`outpost_tower/2`): a second base in a corner next to
+  # us, not out in the middle of the map, where every army passes. Nil if there is none to take.
+  defp conquest_depot(v, terrain, mem) do
+    home = View.pos(v.cc)
+    ours = View.drop_offs(v) ++ for(b <- View.buildings_of(v, "ResourceDepot"), not b["completed"], do: View.pos(b))
+    avoid = avoid(v, mem)
+
+    fields =
+      for start <- v.fallen_starts,
+          field = Enum.filter(v.deposits, &(View.dist(View.pos(&1), start) <= @conquest_reach)),
+          field != [],
+          not Enum.any?(field, fn d -> Enum.any?(ours, &(View.dist(&1, View.pos(d)) <= View.drop_off_reach())) end),
+          target = Enum.min_by(field, &{View.dist(View.pos(&1), home), &1["id"]}),
+          not Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)),
+          do: target
+
+    if medium?(v) and fields != [] do
+      by_field(terrain, v, Enum.min_by(fields, &{View.dist(View.pos(&1), home), &1["id"]}))
     end
   end
 

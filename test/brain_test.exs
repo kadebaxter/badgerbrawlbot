@@ -1127,10 +1127,10 @@ defmodule Swarm.BrainTest do
   # A backup Command Center out of the way, as the build order puts one.
   defp backup_cc, do: building(19, "CommandCenter", 40, 20)
 
-  describe "a big game (six players or more)" do
-    # Eight players: us at (7, 7), player 1 at (56, 56), and six more around the edge.
+  describe "a big game (ten players or more)" do
+    # Twelve players: us at (7, 7), player 1 at (56, 56), and ten more around the edge.
     defp big(state) do
-      more = [{2, 31, 7}, {3, 56, 7}, {4, 7, 31}, {5, 56, 31}, {6, 7, 56}, {7, 31, 56}]
+      more = [{2, 31, 7}, {3, 56, 7}, {4, 7, 31}, {5, 56, 31}, {6, 7, 56}, {7, 31, 56}, {8, 43, 63}, {9, 63, 43}, {10, 63, 20}, {11, 20, 63}]
 
       Map.update!(state, "players", fn ps ->
         ps ++ for({slot, x, y} <- more, do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}})

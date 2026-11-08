@@ -367,6 +367,14 @@ remembers the order it is carrying out, so it sends nothing while that order sti
 
 Leader's team strategy (`Swarm.Brain`), built in stages:
 
+**Game sizes.** Three plans, by how many players the game started with:
+
+| Players | Plan |
+|---|---|
+| 2–5 (small) | 20 workers; Barracks → depot → tower → TechLab → 2nd Barracks → 2nd tower → backup Command Center (at 10 fighters); first wave at 15, then 12 |
+| 6–9 (medium) | 30 workers; army first: Barracks → depot → a tower facing each neighbor (2) → 2nd Barracks → TechLab → 3rd Barracks → 2 more towers (4 in all) → backup Command Center (at 20 fighters); first wave at 15, then 12, at the weaker neighbor, no waiting for a tower square. Once a neighbor is eliminated, a depot goes on its ore (the side nearest us) with a tower: a second base in a corner next to us, not in the middle |
+| 10+ (big) | 30 workers; three Barracks early and a square of 10 towers around the base; first wave at 18 once the square is up (or tick 900), then 15 |
+
 1. **Economy (done):** grow to ~20 workers (30 in a big game) while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13) → 2nd Barracks
    (15) → 2nd Guard Tower (17) → backup Command Center (17, once we have 10 fighters: in a small

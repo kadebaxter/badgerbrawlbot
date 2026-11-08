@@ -31,6 +31,8 @@ defmodule Swarm.View do
     enemy_starts: [],
     # start position => player slot, for the opponents still in
     start_owner: %{},
+    # Where opponents who have been eliminated started: their ore is ours to take.
+    fallen_starts: [],
     # How many players the game started with (eliminated ones too).
     players: 2,
     # The backup Command Center we regroup at while the main base is overrun, or nil (set by
@@ -95,6 +97,12 @@ defmodule Swarm.View do
           p["slot"] != me and not p["eliminated"],
           into: %{},
           do: {pos(p["startPosition"]), p["slot"]}
+        ),
+      fallen_starts:
+        for(
+          p <- state["players"],
+          p["slot"] != me and p["eliminated"] and p["startPosition"] != nil,
+          do: pos(p["startPosition"])
         ),
       enemy_survival:
         for(
