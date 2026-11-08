@@ -100,7 +100,7 @@ defmodule Swarm.BrainTest do
   test "the build order has one Resource Depot; more only when home runs short" do
     buildings = [
       building(2, "Barracks", 11, 7),
-      building(3, "ResourceDepot", 4, 11),
+      building(3, "ResourceDepot", 4, 9),
       building(5, "GuardTower", 12, 12),
       building(6, "TechLab", 7, 12),
       building(7, "Barracks", 12, 3),
@@ -760,7 +760,7 @@ defmodule Swarm.BrainTest do
 
     test "the second Barracks: the usual one builder" do
       barracks = building(2, "Barracks", 11, 7)
-      depot = building(3, "ResourceDepot", 4, 11)
+      depot = building(3, "ResourceDepot", 4, 9)
       tower = building(5, "GuardTower", 12, 12)
       lab = building(6, "TechLab", 7, 12)
       # Soldiers enough to be past the army floor, which would take the ore first.
@@ -783,16 +783,30 @@ defmodule Swarm.BrainTest do
       assert View.dist({x, y}, {41, 40}) <= 4
     end
 
+    test "ore a drop-off is more than two tiles from gets its own depot, right by it" do
+      # The depot is 4 tiles from the home ore: every trip is a walk. A depot right by the ore (2
+      # tiles: a worker between them mines and banks without a step).
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, ore: 200)
+      assert [%{"x" => x, "y" => y}] = depot_builds(commands)
+      assert View.dist({x, y}, {2, 7}) <= 2
+
+      # Not once there is one within two tiles.
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
+      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, ore: 200)
+      assert depot_builds(commands) == []
+    end
+
     test "not for two" do
       {_, commands, _} = plan(units: far_miners(2), deposits: far_field(), ore: 200)
       assert depot_builds(commands) == []
     end
 
     test "not when one is already going up there" do
-      site = Map.put(building(50, "ResourceDepot", 41, 43), "completed", false)
+      site = Map.put(building(50, "ResourceDepot", 41, 42), "completed", false)
       {_, commands, _} = plan(units: far_miners(3), deposits: far_field(), buildings: [site], ore: 200)
       # Only a worker sent to finish that one, no second depot.
-      assert Enum.all?(depot_builds(commands), &({&1["x"], &1["y"]} == {41, 43}))
+      assert Enum.all?(depot_builds(commands), &({&1["x"], &1["y"]} == {41, 42}))
     end
   end
 
@@ -801,7 +815,7 @@ defmodule Swarm.BrainTest do
     defp small_order_built do
       [
         building(2, "Barracks", 11, 7),
-        building(3, "ResourceDepot", 4, 11),
+        building(3, "ResourceDepot", 4, 9),
         building(4, "GuardTower", 12, 12),
         building(5, "TechLab", 7, 12),
         building(6, "Barracks", 12, 3),
@@ -810,7 +824,7 @@ defmodule Swarm.BrainTest do
     end
 
     test "in a small game, not before the rest of the build order and ten fighters" do
-      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(4, "GuardTower", 12, 12)]
       {_, commands, _} = plan(units: workers(17) ++ soldiers(10), buildings: start, ore: 1000)
       refute Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
 
@@ -1218,7 +1232,7 @@ defmodule Swarm.BrainTest do
 
     test "army first: Barracks early, the backup at 10 fighters, the rest of the square at 15" do
       builds = fn commands -> for %{"type" => "Build", "buildingType" => t} <- commands, do: t end
-      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
 
       # A first tower, then a second Barracks before more towers.
       {_, commands, _} = big_plan(units: workers(13) ++ soldiers(10), buildings: start, ore: 1000)
@@ -1270,7 +1284,7 @@ defmodule Swarm.BrainTest do
     test "a co-op's tower comes before the rest of the build order" do
       outpost = building(20, "ResourceDepot", 30, 30)
       miners = for i <- 1..6, do: unit(100 + i, "Worker", 31, 31, activity: "Gathering")
-      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
       {_, commands, _} = big_plan(units: miners ++ workers(6) ++ soldiers(10), buildings: [outpost | start], ore: 300)
       assert [%{"buildingType" => "GuardTower", "x" => x, "y" => y}] = for(%{"type" => "Build"} = c <- commands, do: c)
       assert View.dist({x, y}, {30, 30}) <= 4
@@ -1295,7 +1309,7 @@ defmodule Swarm.BrainTest do
     defp built do
       [
         building(2, "Barracks", 11, 7),
-        building(3, "ResourceDepot", 4, 11),
+        building(3, "ResourceDepot", 4, 9),
         building(5, "GuardTower", 12, 12),
         building(6, "TechLab", 7, 12),
         building(7, "Barracks", 12, 3),

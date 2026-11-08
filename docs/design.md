@@ -435,8 +435,12 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    workers there are doesn't matter, they stack), a Resource
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
    next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
-   And whenever 3 or more workers are already mining one field out of reach, a depot goes by
-   that field right away (a depot costs one Soldier and saves them all the walk). Depots only go by ore on our
+   And whenever 3 or more workers are mining one field more than 2 tiles from a drop-off (a
+   depot going up counts), a depot goes right by that field, 2 tiles from the ore, right away: a
+   worker stands one tile from each, so it mines and banks without a step; a depot costs one
+   Soldier and saves them all the walk. Only a spot within 2 tiles counts (none open, none
+   ordered, or the field would keep asking for another). The home ore waits for the build
+   order's own depot. Depots only go by ore on our
    side (closer to our Command Center than to any enemy start, so never a contested deposit
    between players; an eliminated player's start doesn't count) and not within 4 tiles of where
    we lost a building in the last 300 ticks while enemy fighters we know of are within 10 of it

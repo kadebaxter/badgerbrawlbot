@@ -24,7 +24,7 @@ defmodule Swarm.MediumGameTest do
 
   test "after the Barracks and the depot, a tower toward each neighbor, then the Barracks" do
     # Eight soldiers: past the army floor, which would take the ore first.
-    start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+    start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
     assert ["GuardTower"] = builds(elem(plan(units: workers(11) ++ soldiers(8), buildings: start, ore: 300), 1))
 
     one_tower = start ++ [building(4, "GuardTower", 12, 12)]
@@ -36,7 +36,7 @@ defmodule Swarm.MediumGameTest do
 
   test "four towers in all, and the backup Command Center only at twenty fighters" do
     done =
-      [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(6, "Barracks", 12, 3),
+      [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(6, "Barracks", 12, 3),
        building(7, "TechLab", 7, 12), building(8, "Barracks", 3, 3)] ++
         for({id, x, y} <- [{10, 12, 12}, {11, 12, 4}, {12, 4, 12}, {13, 14, 8}], do: building(id, "GuardTower", x, y))
 
@@ -55,7 +55,7 @@ defmodule Swarm.MediumGameTest do
     # Player 2 (at (31, 7)) is out; its ore lies around (31, 10).
     their_ore = for i <- 0..3, do: %{"id" => 300 + i, "x" => 29 + i, "y" => 10, "remaining" => 1000}
     home_ore = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 5000}]
-    built = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
+    built = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
     opts = [units: workers(20) ++ soldiers(16), buildings: built, deposits: home_ore ++ their_ore, ore: 500]
 
     {_, commands, _} = plan(opts, [2])

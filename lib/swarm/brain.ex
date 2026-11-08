@@ -291,6 +291,8 @@ defmodule Swarm.Brain do
   @avoid_lost_ticks 300
   # Workers mining one far field (no drop-off within reach) that get a depot by it right away.
   @remote_miners 3
+  # A field whose walk to a drop-off is longer than this gets a depot by it (see `remote_depot/3`).
+  @depot_walk 2
   # A depot is built by up to this many of the workers who will use it; the first Barracks by this
   # many (see `builders/4`).
   @depot_builders 5
@@ -1870,28 +1872,38 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Workers are already mining far from every drop-off: a depot by the field the most of them are
-  # at, if that is `@remote_miners` or more and no depot is going up by it. A depot is the price
-  # of one Soldier and saves every one of them the long walk, so it doesn't wait for anything else.
+  # Workers mining a field with a walk to a drop-off longer than `@depot_walk` (a depot finished or
+  # going up counts): a depot by the field the most of them are at, if that is `@remote_miners` or
+  # more. With a depot right by their ore they mine and bank without walking; 30 stacked workers
+  # each walking 9 tiles (still "in reach") spent most of a game walking. A depot is the price of
+  # one Soldier, so it doesn't wait for anything else.
   defp remote_depot(v, terrain, mem) do
-    near = View.near_deposits(v) ++ View.soon_near_deposits(v)
     avoid = avoid(v, mem)
+    # The home ore waits for the build order's own depot (after the first Barracks).
+    first_depot? = View.buildings_of(v, "ResourceDepot") == []
 
     far =
       for w <- View.units_of(v, "Worker"),
-          w["activity"] in ["Gathering", "Returning"],
+          w["activity"] in ["Gathering", "Returning", "Moving"],
           d = Enum.find(v.deposits, &(&1["id"] == w["targetId"])),
-          d != nil and d not in near,
+          d != nil and walk(v, d) > @depot_walk,
+          not (first_depot? and View.dist(View.pos(d), View.pos(v.cc)) <= View.drop_off_reach()),
           do: d
 
     with [_ | _] <- far,
          target = Enum.max_by(far, fn d -> {Enum.count(far, &(View.dist(View.pos(&1), View.pos(d)) <= 4)), -d["id"]} end),
          true <- Enum.count(far, &(View.dist(View.pos(&1), View.pos(target)) <= 4)) >= @remote_miners,
          false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)) do
-      by_field(terrain, v, target)
+      right_by(terrain, v, target)
     else
       _ -> nil
     end
+  end
+
+  # How far a deposit is from the closest drop-off, finished or a depot going up.
+  defp walk(v, deposit) do
+    sites = for b <- View.buildings_of(v, "ResourceDepot"), not b["completed"], do: View.pos(b)
+    (View.drop_offs(v) ++ sites) |> Enum.map(&View.dist(&1, View.pos(deposit))) |> Enum.min(fn -> 99 end)
   end
 
   # A medium game: a neighbor we eliminated left its ore by its start (no longer enemy ground, see
@@ -2338,6 +2350,16 @@ defmodule Swarm.Brain do
       |> Enum.min_by(&{View.trip(v, &1), View.dist(View.pos(&1), View.pos(cc)), &1["id"]}, fn -> nil end)
 
     if target, do: by_field(terrain, v, target)
+  end
+
+  # A depot site right by `target` (`@depot_walk`), placed like `by_field/3`; nil when there is no
+  # open tile that close. Never a site farther out: its miners would still walk, and the field
+  # would keep asking for another depot.
+  defp right_by(terrain, v, target) do
+    case by_field(terrain, v, target) do
+      {_, _} = tile -> if View.dist(tile, View.pos(target)) <= @depot_walk, do: tile
+      _ -> nil
+    end
   end
 
   # Ore worth a depot: on our side (closer to our Command Center than to any enemy's start, so
