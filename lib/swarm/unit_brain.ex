@@ -326,7 +326,7 @@ defmodule Swarm.UnitBrain do
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> {:attack_move, s.target}
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
-      raze = role in [:attacker, :guard] && Map.get(s, :raze) -> {:attack, raze}
+      raze = role == :attacker && Map.get(s, :raze) -> {:attack, raze}
       s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
       help = role == :attacker && closest_help(v, unit) -> go_help(unit, v, s, cover(v, s, help))
       role == :guard -> {:move, s.post}

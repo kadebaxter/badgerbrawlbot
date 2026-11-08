@@ -257,15 +257,16 @@ the Command Center, so a recalled wave walking back isn't sent straight into ano
 30 ticks) a wave may leave with every attacker within 10 tiles of the rally point: a
 counterattack. When no wave leaves, the leader's 10-tick log line says why (`waiting: …`).
 
-An enemy tower at our door (finished, within 12 of one of our bases): home fighters never walk
+An enemy tower at our door (finished, within 12 of the Command Center; never because it is by an
+outpost, usually the enemy's own base next door): home fighters never walk
 into its reach (its range + 1) one at a time, not even to meet enemy units standing by it
 (`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
 any wave, but never while home is being raided: the attackers at home at once (the guards stay, so
 the base is never empty), when that is at least 8 of them with
 the strength of the tower (4 soldiers) and every other enemy tower that covers it, plus 1.5× the strongest player's units by it. The strike is a wave whose target is
 the tower, and comes home once the tower is down (or too few are left, it is outmatched by the same
-measure, home can't hold a raid without it, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
-and not under a tower, is razed at once by home fighters (`strategy.raze`).
+measure, home can't hold a raid without it, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of the Command Center,
+and not under a tower, is razed by our attackers (`strategy.raze`, below).
 
 Siege at our door. The leader remembers our buildings' HP; one losing HP with nothing we can see
 able to reach it is being shelled from out of sight (a Trebuchet reaches 7, a tower 5, and a tower
@@ -277,9 +278,12 @@ usual rules answer it with real numbers; no new checkers go out for 60 ticks mea
 goes at them: everyone at home (guards and attackers) at once, at even strength with the enemy
 units there (not the 1.5 a wave wants: they are knocking our buildings down meanwhile), at least 4,
 Trebuchets first. It follows the siege and comes home once it is cleared (or too few are left, it
-is outmatched, or after 100 ticks). Enemy sites within 20 tiles of one of our bases, and finished
-buildings within 12 (a Barracks or a Command Center built at our door), are razed by home fighters
-once there are no enemy fighters to fight; leftover fighters split, half on workers and half on
+is outmatched, or after 100 ticks). Enemy sites within 12 tiles of the Command Center, and finished
+buildings within 10 (a Barracks or a Command Center built at our door; never because one is by an
+outpost, which is usually the enemy's own base next door), are razed by our attackers (the guards
+stay home) once there are no enemy fighters to fight, home isn't being raided, no enemy tower
+covers it, and home can take what is there. Home fighters never chase a building beyond the main
+base; leftover fighters split, half on workers and half on
 buildings, so building and producing both stop.
 
 The serum: a once-a-match superpower the game keeps out of its published docs (GET then POST
@@ -337,8 +341,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    Center (once we have 10 fighters) → Guard Towers 4–10 (20 workers and 15 fighters), all on a square 5–6 tiles around the base, spread at least 5
    apart (their reaches meet), the side facing our neighbors first; the first wave waits for the
    square of 10 (until tick 900 at most); a co-op away from home waits for 15 fighters, and its tower comes
-   before the rest of the build order. Barracks and the TechLab go behind the Command Center,
-   away from the neighbors, so the towers and the ore line stand between them and our production.
+   before the rest of the build order. Barracks and the TechLab go 3–6 tiles from the Command Center, never on
+   the ore side (between it and its ore, or within 3 of ore: that is the miners' path and where the
+   first depot goes, between the Command Center and the ore), then behind it, away from the neighbors.
    The ore for the next building is
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches

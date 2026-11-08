@@ -358,11 +358,14 @@ defmodule Swarm.UnitBrainTest do
   end
 
   describe "an enemy tower by our base" do
-    test "home fighters go kill a site going up by the base" do
+    test "attackers go kill a site going up by the base; the guards stay home" do
       raze = Map.put(@gather, :raze, 801)
       site = Map.put(building(801, "Barracks", 25, 25, 1), "completed", false)
-      v = View.new(state(units: [unit(2, "Soldier", 10, 10)], buildings: [site]))
+      # Eight at home: 2, the oldest, is an attacker; the other seven guard.
+      guards = for i <- 1..7, do: unit(60 + i, "Soldier", 9, 9)
+      v = View.new(state(units: [unit(2, "Soldier", 10, 10) | guards], buildings: [site]))
       assert {%{"type" => "Attack", "targetId" => 801}, _} = UnitBrain.decide(2, v, raze)
+      refute match?({%{"targetId" => 801}, _}, UnitBrain.decide(61, v, raze))
     end
 
     test "they don't walk into a tower's reach to meet enemies standing by it" do

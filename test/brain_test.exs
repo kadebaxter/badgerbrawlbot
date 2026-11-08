@@ -1047,15 +1047,54 @@ defmodule Swarm.BrainTest do
   end
 
   describe "the builder: buildings at our door" do
-    test "sites within 20 of a base are razed, and finished buildings within 12" do
-      site = Map.put(building(801, "Barracks", 25, 7, 1), "completed", false)
+    test "sites within 12 of the Command Center are razed, and finished buildings within 10" do
+      site = Map.put(building(801, "Barracks", 18, 7, 1), "completed", false)
       assert {%{raze: 801}, _, _} = plan(units: soldiers(5), buildings: [site])
 
       barracks = building(802, "Barracks", 17, 7, 1)
       assert {%{raze: 802}, _, _} = plan(units: soldiers(5), buildings: [barracks])
 
-      far = building(803, "Barracks", 25, 7, 1)
-      assert {%{raze: nil}, _, _} = plan(units: soldiers(5), buildings: [far])
+      far_site = Map.put(building(803, "Barracks", 25, 7, 1), "completed", false)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(5), buildings: [far_site])
+    end
+
+    test "never because it is by an outpost: that is their base next door" do
+      outpost = building(50, "ResourceDepot", 30, 30)
+      miners = for i <- 1..3, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering")
+      theirs = building(803, "Barracks", 36, 30, 1)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(10) ++ miners, buildings: [outpost, theirs])
+    end
+
+    test "not while home is being raided, nor where home can't take what is there" do
+      barracks = building(802, "Barracks", 17, 7, 1)
+      raider = unit(900, "Soldier", 9, 9, owner: 1)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(5) ++ [raider], buildings: [barracks])
+
+      archers = for i <- 1..8, do: unit(900 + i, "Archer", 18, 8, owner: 1)
+      assert {%{raze: nil}, _, _} = plan(units: soldiers(5) ++ archers, buildings: [barracks])
+    end
+  end
+
+  describe "the Barracks and the first depot, with the ore behind the base" do
+    # The real layout: our Command Center at (61, 44) on a 72-tile map, neighbors north at (58, 21)
+    # and south-west at (44, 61), so "behind" is east, where our ore runs down x = 65.
+    @ore_line for(y <- 42..50, do: %{"id" => 60 + y, "x" => 65, "y" => y, "remaining" => 1000})
+
+    defp at_61_44(buildings) do
+      cc = building(1, "CommandCenter", 61, 44)
+      starts = %{{58, 21} => 1, {44, 61} => 2, {21, 58} => 3}
+      v = View.new(state(units: workers(9), deposits: @ore_line))
+      %{v | cc: cc, my_buildings: [cc | buildings], map_width: 72, map_height: 72, enemy_starts: Map.keys(starts), start_owner: starts}
+    end
+
+    defp big_terrain, do: List.duplicate(String.duplicate(".", 72), 72)
+
+    test "the Barracks goes off the ore side, and the depot between the Command Center and the ore" do
+      {bx, by} = Brain.site(big_terrain(), at_61_44([]), :base)
+      assert bx <= 62, "Barracks at #{inspect({bx, by})}: on the ore side"
+
+      {dx, _dy} = Brain.site(big_terrain(), at_61_44([building(2, "Barracks", bx, by)]), :ore)
+      assert dx in 62..64, "depot at x = #{dx}: behind the ore, or not by it"
     end
   end
 

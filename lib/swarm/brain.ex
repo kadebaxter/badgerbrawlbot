@@ -82,7 +82,8 @@ defmodule Swarm.Brain do
   @sortie_min 4
   @sortie_ticks 100
   # Enemy sites this close to one of our bases are razed (finished buildings within 12).
-  @raze_reach 20
+  @raze_reach 12
+  @raze_built 10
   # The backup Command Center (see `site/4`, `:hideout`): a map corner is free with no base start
   # within `@corner_free` of it, and the backup goes within `@corner_zone` of one; at least
   # `@backup_near` from our base; along our edge (failing a free corner) no more than `@backup_to`
@@ -1167,16 +1168,32 @@ defmodule Swarm.Brain do
     |> strongest_player()
   end
 
-  # An enemy building at our door, for home fighters to kill now (its id), unless an enemy tower
-  # covers it: then it waits for a strike.
-  # Sites within `@raze_reach` of a base first, then finished buildings within 12 (a Barracks or a
-  # Command Center built at our door). Units only go for it with no enemy fighter to fight.
+  # An enemy building at our main base's door, for our attackers to kill now (its id): a site
+  # within `@raze_reach` of the Command Center first, then a finished building (not a tower: a
+  # strike deals with those) within `@raze_built`. Never because it is by an outpost: our outposts
+  # sit by enemy bases, and that emptied the base for their Barracks. Not while home or our workers
+  # are being raided, not under an enemy tower, and only where home can take what is there
+  # (`Roles.can_take?/3`). The guards stay home (`Swarm.UnitBrain`).
   defp raze(v) do
-    targets = Roles.sites_near_home(v, @raze_reach) ++ Roles.buildings_near_home(v)
+    home = View.pos(v.cc)
+    from_home = &View.dist(View.pos(&1), home)
 
-    case Enum.reject(targets, &Roles.covered?(v, View.pos(&1))) do
-      [site | _] -> site["id"]
-      [] -> nil
+    targets =
+      v.enemy_buildings
+      |> Enum.filter(fn b ->
+        if b["completed"] == false,
+          do: from_home.(b) <= @raze_reach,
+          else: b["type"] != "GuardTower" and from_home.(b) <= @raze_built
+      end)
+      |> Enum.sort_by(&{if(&1["completed"] == false, do: 0, else: 1), from_home.(&1), &1["id"]})
+
+    if Roles.raiders(v) == [] do
+      targets
+      |> Enum.find(&(not Roles.covered?(v, View.pos(&1)) and Roles.can_take?(v, nil, View.pos(&1))))
+      |> case do
+        nil -> nil
+        b -> b["id"]
+      end
     end
   end
 
@@ -1925,8 +1942,8 @@ defmodule Swarm.Brain do
   @doc """
   Where to put a building, or nil if there is no room:
 
-  - `:base`: 3–6 tiles from the Command Center, behind it (away from our neighbors), off the ore
-    so the miners aren't blocked
+  - `:base`: 3–6 tiles from the Command Center, never on the ore side (between it and its ore, or
+    within 3 of ore), then behind it (away from our neighbors)
   - `{:outpost, pos}`: 2–4 tiles from that outpost, toward the middle of the map
   - `:front`: a Guard Tower 3–4 tiles from the Command Center (so it covers the base), toward the
     nearest neighbor no tower faces yet: towers spread over the ways in
@@ -1945,13 +1962,19 @@ defmodule Swarm.Brain do
     threats = threat_points(v)
     from_threat = fn pos -> threats |> Enum.map(&dist2(&1, pos)) |> Enum.min() end
 
+    ore_from = fn pos -> v.deposits |> Enum.map(&View.dist(View.pos(&1), pos)) |> Enum.min(fn -> 99 end) end
+    home_ore = ore_from.(home)
+
     best_site(terrain, v, home, 3..6, fn tile, d ->
-      near_ore = v.deposits |> Enum.map(&View.dist(View.pos(&1), tile)) |> Enum.min(fn -> 99 end)
-      # Behind the Command Center first (farther from the nearest neighbor than it is), so the
-      # towers and the ore line stand between them and our production; then close in and off the
-      # ore; then as far from them as can be.
+      near_ore = ore_from.(tile)
+      # Never on the ore side: not between the Command Center and its ore (closer to the ore than
+      # the Command Center is) nor within 3 of it. That side is the miners' path, and where the
+      # depot goes, between the Command Center and the ore; a Barracks there pushed the depot
+      # behind the ore. Then behind the Command Center (farther from the nearest neighbor than it
+      # is); then close in; then as far from them as can be.
+      ore_side = if near_ore <= 3 or near_ore < home_ore, do: 1, else: 0
       behind = if from_threat.(tile) > from_threat.(home), do: 0, else: 1
-      {behind, d - min(near_ore, 4), -from_threat.(tile)}
+      {ore_side, behind, d, -from_threat.(tile)}
     end)
   end
 

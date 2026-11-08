@@ -20,6 +20,27 @@ defmodule Swarm.RolesTest do
     defp depot, do: building(50, "ResourceDepot", 30, 30)
     defp miners(n), do: for(i <- 1..n, do: unit(400 + i, "Worker", 31, 31, activity: "Gathering"))
 
+    test "a tower by an outpost is no tower at our door: no strike at it" do
+      tower = building(800, "GuardTower", 36, 30, 1)
+      v = View.new(state(units: miners(3), buildings: [depot(), tower]))
+      assert Roles.towers_near_home(v) == []
+
+      at_door = building(801, "GuardTower", 16, 12, 1)
+      v = View.new(state(units: miners(3), buildings: [depot(), tower, at_door]))
+      assert [%{"id" => 801}] = Roles.towers_near_home(v)
+    end
+
+    test "home fighters defend one from enemy units, but don't go after the enemy's buildings by it" do
+      ours = for i <- 1..3, do: unit(200 + i, "Soldier", 33, 30)
+      barracks = building(800, "Barracks", 36, 30, 1)
+      v = View.new(state(units: ours ++ miners(3), buildings: [depot(), barracks]))
+      assert Roles.target(v, nil, hd(ours)) == nil
+
+      raider = unit(900, "Soldier", 35, 31, owner: 1)
+      v = View.new(state(units: [raider | ours ++ miners(3)], buildings: [depot(), barracks]))
+      assert %{"id" => 900} = Roles.target(v, nil, hd(ours))
+    end
+
     test "an outpost with miners gets a group of three escorts, after the guards" do
       roles = Roles.home_roles(view(soldiers(12) ++ miners(6), [depot()]), nil)
       assert Enum.map(206..212, &roles[&1]) == List.duplicate(:guard, 7)

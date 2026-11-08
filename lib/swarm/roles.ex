@@ -560,11 +560,16 @@ defmodule Swarm.Roles do
 
     # Not into an enemy tower's reach, one by one: only the wave goes there (a strike at that
     # tower is a wave). Fighting back is still allowed (`fight_back?/2`).
+    # Buildings only by the main base: by an outpost, a building is the enemy's own base next door,
+    # and chasing into it drags home after it. Enemy units by an outpost or our workers are fair game.
+    building? = Map.has_key?(enemy, "completed")
+    places = if building?, do: [View.pos(v.cc)], else: bases(v)
+
     (in_wave? or not covered?(v, View.pos(enemy))) and
       (in_wave? or
-         Enum.any?(bases(v), &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
-      Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(enemy)) <= @worker_cover)) or
-      siege_on_us?(v, enemy))
+         Enum.any?(places, &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
+         (not building? and Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(enemy)) <= @worker_cover))) or
+         siege_on_us?(v, enemy))
   end
 
   @doc """
@@ -577,9 +582,19 @@ defmodule Swarm.Roles do
     end)
   end
 
-  @doc "Finished enemy Guard Towers within `@home_reach` of one of our bases: the closest first."
-  def towers_near_home(%View{} = v) do
-    near_home(v, &(&1["type"] == "GuardTower" and &1["completed"] != false))
+  @doc """
+  Finished enemy Guard Towers within `@home_reach` of our Command Center (not of an outpost: one
+  by an outpost is usually the enemy's own base next door, and a strike there drags the army out):
+  the closest first.
+  """
+  def towers_near_home(%View{cc: nil}), do: []
+
+  def towers_near_home(%View{cc: cc} = v) do
+    home = View.pos(cc)
+
+    v.enemy_buildings
+    |> Enum.filter(&(&1["type"] == "GuardTower" and &1["completed"] != false and View.dist(View.pos(&1), home) <= @home_reach))
+    |> Enum.sort_by(&{View.dist(View.pos(&1), home), &1["id"]})
   end
 
   @doc """
@@ -596,7 +611,7 @@ defmodule Swarm.Roles do
   def buildings_near_home(%View{} = v),
     do: near_home(v, &(&1["completed"] != false and &1["type"] != "GuardTower"), @home_reach)
 
-  defp near_home(v, pick?, reach \\ @home_reach) do
+  defp near_home(v, pick?, reach) do
     bases = bases(v)
     from_home = fn b -> bases |> Enum.map(&View.dist(&1, View.pos(b))) |> Enum.min(fn -> 99 end) end
 
