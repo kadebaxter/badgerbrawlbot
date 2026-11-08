@@ -731,8 +731,18 @@ defmodule Swarm.Roles do
   that reach it, against `danger_at/2`. Attackers only go to help once that holds, and go together.
   """
   def can_take?(%View{} = v, wave, pos) do
+    {ours, theirs} = help_odds(v, wave, pos)
+    ours >= theirs
+  end
+
+  @doc """
+  The one measure for helping at `pos`, `{ours, theirs}`: everything at home (not in `wave`) and
+  our towers that reach it, against what the enemy has there (`danger_at/2`). Committing to help
+  (`can_take?/3`) and calling it off both use it, so they never disagree about what counts.
+  """
+  def help_odds(%View{} = v, wave, pos) do
     towers = Enum.filter(our_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1)))
-    home_strength(v, wave) + strength(towers, v.me) >= danger_at(v, pos)
+    {home_strength(v, wave) + strength(towers, v.me), danger_at(v, pos)}
   end
 
   # Everything at home, not in `wave` (worked out once with the rest of `share/2`).

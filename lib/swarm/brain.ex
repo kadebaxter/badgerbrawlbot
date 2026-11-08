@@ -80,6 +80,9 @@ defmodule Swarm.Brain do
   @peek_ticks 40
   @check_ticks 60
   @sortie_min 4
+  # A sortie leaves at this many times what is there: it is recalled once outmatched, so leaving at
+  # even strength had it called back the moment one more enemy showed up, and out again, and back.
+  @sortie_margin 1.3
   @sortie_ticks 100
   # Enemy sites this close to one of our bases are razed (finished buildings within 12).
   @raze_reach 12
@@ -220,14 +223,16 @@ defmodule Swarm.Brain do
   # The second Command Center is the backup: built far from every base (`:hideout`), so that losing
   # the main one doesn't eliminate us (a player is out only with no Command Center at all), which
   # would also wipe our survival score. Rebuilt if lost.
+  # The backup Command Center comes last, once the rest is up and we have 10 fighters: early on
+  # it is 400 ore while the first raids come, and with few players nobody is about to wipe us out.
   @build_order [
     {"Barracks", 1, 7, :base},
     {"ResourceDepot", 1, 9, :ore},
     {"GuardTower", 1, 11, :front},
-    {"CommandCenter", 2, 12, :hideout},
     {"TechLab", 1, 13, :base},
     {"Barracks", 2, 15, :base},
-    {"GuardTower", 2, 17, :front}
+    {"GuardTower", 2, 17, :front},
+    {"CommandCenter", 2, 17, :hideout, 10}
   ]
 
   # In a big game: three Barracks early to mass-produce, a square of `@big_towers` towers around
@@ -486,8 +491,8 @@ defmodule Swarm.Brain do
         near = Enum.filter(spots, &(View.dist(&1, pos) <= @help_follow))
         pos = Enum.min_by(near, &{View.dist(&1, pos), &1}, fn -> pos end)
         clear_since = if near == [], do: help.clear_since || v.tick, else: nil
-        theirs = Roles.danger_at(v, pos)
-        ours = Roles.all_home_strength(v, s.wave, [])
+        # The same measure that committed to it (`Roles.help_odds/3`).
+        {ours, theirs} = Roles.help_odds(v, s.wave, pos)
 
         cond do
           clear_since && v.tick - clear_since >= @help_clear ->
@@ -965,8 +970,9 @@ defmodule Swarm.Brain do
   end
 
   # A sortie at siege by our base: everyone at home at once (no trickling into the guarding pack),
-  # at even strength with the enemy units there (not the 1.5 a wave wants: they are knocking our
-  # buildings down meanwhile), and at least `@sortie_min`. Trebuchets are first on its list: they
+  # at `@sortie_margin` times the enemy units there (less than the 1.5 a wave wants: they are
+  # knocking our buildings down meanwhile; more than even, or it is recalled the moment one more
+  # shows up), and at least `@sortie_min`. Trebuchets are first on its list: they
   # can't hit anything close, and each is 350.
   defp sortie(v, memory, spot) do
     roles = Roles.home_roles(v, nil)
@@ -975,7 +981,7 @@ defmodule Swarm.Brain do
     theirs = v.enemy_units |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), spot) <= @wave_sight)) |> Roles.strength()
     ours = Roles.strength(group)
 
-    if length(group) >= @sortie_min and ours >= theirs do
+    if length(group) >= @sortie_min and ours >= @sortie_margin * theirs do
       wave = %{
         id: 0,
         kind: :sortie,

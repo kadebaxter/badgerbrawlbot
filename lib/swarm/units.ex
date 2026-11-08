@@ -4,7 +4,7 @@ defmodule Swarm.Units do
 
   | Game says        | Processes say      | Action                                      |
   |------------------|--------------------|---------------------------------------------|
-  | we own unit 88   | no process for 88  | start one on the node with the fewest units |
+  | we own unit 88   | no process for 88  | start one on the node with the fewest units per core |
   | unit 31 is gone  | process 31 exists  | stop it                                     |
   | we own unit 32   | one process for 32 | nothing                                     |
 
@@ -71,9 +71,46 @@ defmodule Swarm.Units do
     {known, recent}
   end
 
+  # The node with the fewest units per core (`pick_node/3`).
   defp least_loaded(known) do
+    on = nodes()
     load = known |> Map.values() |> Enum.frequencies_by(&node/1)
-    Enum.min_by(nodes(), &{Map.get(load, &1, 0), &1}, fn -> node() end)
+    pick_node(on, load, Map.new(on, &{&1, cores(&1)})) || node()
+  end
+
+  @doc """
+  Where a new unit goes: the node with the fewest units per core (`cores`: node => cores), so a
+  4-core machine carries a quarter of what a 16-core one does, not the same third. Every late
+  answer in our big games came from the 4-core one while each node had a third of the units.
+  Ties go to the first node by name. Nil with no nodes.
+  """
+  def pick_node(nodes, load, cores) do
+    Enum.min_by(nodes, &{Map.get(load, &1, 0) / max(Map.get(cores, &1, 1), 1), &1}, fn -> nil end)
+  end
+
+  # How many cores a node has (its BEAM's schedulers), asked once and kept; 1 if it can't be asked.
+  defp cores(on_node) do
+    key = {__MODULE__, :cores, on_node}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        cores =
+          try do
+            :erpc.call(on_node, System, :schedulers_online, [], 1_000)
+          catch
+            _, _ -> nil
+          end
+
+        if is_integer(cores) and cores > 0 do
+          :persistent_term.put(key, cores)
+          cores
+        else
+          1
+        end
+
+      cores ->
+        cores
+    end
   end
 
   defp start(id, type, on_node) do

@@ -778,9 +778,30 @@ defmodule Swarm.BrainTest do
   end
 
   describe "a backup Command Center" do
-    test "goes up after the first tower, with two builders, in a free corner" do
+    # The rest of a small game's build order, up: the backup comes last.
+    defp small_order_built do
+      [
+        building(2, "Barracks", 11, 7),
+        building(3, "ResourceDepot", 4, 11),
+        building(4, "GuardTower", 12, 12),
+        building(5, "TechLab", 7, 12),
+        building(6, "Barracks", 12, 3),
+        building(7, "GuardTower", 14, 9)
+      ]
+    end
+
+    test "in a small game, not before the rest of the build order and ten fighters" do
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
-      {_, commands, _} = plan(units: workers(12) ++ soldiers(10), buildings: start, ore: 1000)
+      {_, commands, _} = plan(units: workers(17) ++ soldiers(10), buildings: start, ore: 1000)
+      refute Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
+
+      {_, commands, _} = plan(units: workers(17) ++ soldiers(9), buildings: small_order_built(), ore: 1000)
+      refute Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
+    end
+
+    test "goes up last, with two builders, in a free corner" do
+      start = small_order_built()
+      {_, commands, _} = plan(units: workers(17) ++ soldiers(10), buildings: start, ore: 1000)
       assert [%{"buildingType" => "CommandCenter", "unitIds" => [_, _], "x" => x, "y" => y}] =
                for(%{"type" => "Build"} = c <- commands, do: c)
 
@@ -845,7 +866,7 @@ defmodule Swarm.BrainTest do
     end
 
     test "is rebuilt if lost" do
-      start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11), building(4, "GuardTower", 12, 12)]
+      start = small_order_built()
       {_, commands, _} = plan(units: workers(20) ++ soldiers(10), buildings: start ++ [backup_cc()], ore: 1000)
       refute Enum.any?(commands, &(&1["buildingType"] == "CommandCenter"))
 
@@ -1031,21 +1052,21 @@ defmodule Swarm.BrainTest do
       assert {%{peek: nil}, _, _} = plan([units: there, buildings: [hit_tower()], tick: 110], memory)
     end
 
-    test "trebuchets in sight by our buildings: a sortie at even strength, trebuchets and all" do
+    test "trebuchets in sight by our buildings: a sortie at 1.3 times them, trebuchets and all" do
       trebs = for i <- 1..2, do: unit(900 + i, "Trebuchet", 20, 12, owner: 1)
       escort = for i <- 1..5, do: unit(910 + i, "Soldier", 21, 13, owner: 1)
 
-      # 2 x 3465 (a Trebuchet is 3.5 soldiers by cost) + 5 x 990 = 11880 there: eleven soldiers
-      # (10890) aren't enough, twelve (11880) are.
-      assert {%{wave: nil, hold: "sortie at the siege" <> _}, _, _} = plan(units: soldiers(11) ++ trebs ++ escort, buildings: [hit_tower()])
-      assert {%{wave: %{kind: :sortie, members: members}}, _, _} = plan(units: soldiers(12) ++ trebs ++ escort, buildings: [hit_tower()])
-      assert length(members) == 12
+      # 2 x 3465 (a Trebuchet is 3.5 soldiers by cost) + 5 x 990 = 11880 there, x 1.3 = 15444:
+      # fifteen soldiers (14850) aren't enough, sixteen (15840) are.
+      assert {%{wave: nil, hold: "sortie at the siege" <> _}, _, _} = plan(units: soldiers(15) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert {%{wave: %{kind: :sortie, members: members}}, _, _} = plan(units: soldiers(16) ++ trebs ++ escort, buildings: [hit_tower()])
+      assert length(members) == 16
     end
 
     test "the sortie comes home once the siege is gone and it has been there" do
       trebs = for i <- 1..2, do: unit(900 + i, "Trebuchet", 20, 12, owner: 1)
-      {_, _, memory} = plan(units: soldiers(7) ++ trebs, buildings: [hit_tower()])
-      there = for s <- soldiers(7), do: %{s | "x" => 20, "y" => 11}
+      {_, _, memory} = plan(units: soldiers(10) ++ trebs, buildings: [hit_tower()])
+      there = for s <- soldiers(10), do: %{s | "x" => 20, "y" => 11}
       assert {%{wave: nil, why: [{:wave_recalled, "sortie: the siege by (20,12) is cleared"} | _]}, _, _} =
                plan([units: there, buildings: [hit_tower()], tick: 120], memory)
     end

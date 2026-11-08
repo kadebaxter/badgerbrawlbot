@@ -179,7 +179,7 @@ Each tick the leader makes the unit processes match the game state:
 
 | Game says | Processes say | Action |
 |---|---|---|
-| we own unit 88 | no process for 88 | **spawn** `Swarm.Unit(88)` on the node with the fewest units (newly trained, or orphaned by a dead node) |
+| we own unit 88 | no process for 88 | **spawn** `Swarm.Unit(88)` on the node with the fewest units per core (newly trained, or orphaned by a dead node) |
 | unit 31 is gone | process 31 exists | **stop** process 31 (unit died in game) |
 | we own unit 32 | process 32 exists | nothing |
 
@@ -189,6 +189,11 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 ---
 
 ## Unit decisions
+
+New unit processes go to the node with the fewest units per core (each node's core count is asked
+once and kept), not an even third each: our machines have 16, 4 and 12 cores, and with an even
+split every late answer in our big games came from the 4-core one. With 180 units it now carries
+about 22, against 60 before. Units already running aren't moved; new ones shift the balance.
 
 The tick reaches the units through one relay per node (`Swarm.Relay`): the leader sends it once
 per node, not once per unit, so the view crosses the network once for each machine. The relay works
@@ -233,7 +238,9 @@ every tick (which turned the group around whenever an archer stepped out of sigh
 the place help is wanted (an outpost, our workers, a siege; not under an enemy tower) closest to
 the rally point that home can take, so the attackers go together from there. Committed, it follows
 the fight within 8 tiles, and holds until nothing has been wanted there for 15 ticks, or what is
-there is 1.3× what home can bring. A raid on the main base still comes first.
+there is 1.3× what home can bring. Committing and calling off use one measure
+(`Swarm.Roles.help_odds/3`: everything at home and our towers that reach the spot, against what is
+there), so they never disagree. A raid on the main base still comes first.
 
 **Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
 everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
@@ -301,8 +308,9 @@ tiles out, since shells can come from anywhere. A checker that dies ends the che
 after what we can't see (it was an archer pack as often as siege). The closest scout goes to look
 there instead (it sees 8 and steps back once anything can reach it), so we learn what it is and the
 usual rules answer it with real numbers; no new checkers go out for 60 ticks meanwhile. Once we can see enemy Trebuchets in reach of our buildings, a sortie
-goes at them: everyone at home (guards and attackers) at once, at even strength with the enemy
-units there (not the 1.5 a wave wants: they are knocking our buildings down meanwhile), at least 4,
+goes at them: everyone at home (guards and attackers) at once, at 1.3× the enemy
+units there (less than the 1.5 a wave wants: they are knocking our buildings down meanwhile; more
+than even, or it is recalled the moment one more shows up, and out again), at least 4,
 Trebuchets first. It follows the siege and comes home once it is cleared (or too few are left, it
 is outmatched, or after 100 ticks). Enemy sites within 12 tiles of the Command Center, and finished
 buildings within 10 (a Barracks or a Command Center built at our door; never because one is by an
@@ -353,8 +361,9 @@ remembers the order it is carrying out, so it sends nothing while that order sti
 Leader's team strategy (`Swarm.Brain`), built in stages:
 
 1. **Economy (done):** grow to ~20 workers (30 in a big game) while following a build order kept as data: Barracks
-   (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → backup Command Center (12)
-   → TechLab (13) → 2nd Barracks (15) → 2nd Guard Tower (17). The backup Command Center goes to a free
+   (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13) → 2nd Barracks
+   (15) → 2nd Guard Tower (17) → backup Command Center (17, once we have 10 fighters: in a small
+   game it is 400 ore while the first raids come, so it comes last). The backup Command Center goes to a free
    corner of the map (no base starts within 15 of it: on a ring map none do, and in a 2–4 player
    game the unused ones are free), the one nearest us, ours if there is one: the farthest a spot
    can be from the middle, which everyone crosses, and nobody's way anywhere. Failing that, along

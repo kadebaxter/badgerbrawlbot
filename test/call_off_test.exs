@@ -115,6 +115,18 @@ defmodule Swarm.CallOffTest do
       assert {%{help: {29, 7}}, _, _} = plan([units: field_miners() ++ field_raid(2, 29) ++ soldiers(10), tick: 101], memory)
     end
 
+    test "one measure for committing and calling off: towers that tip it in keep counting" do
+      # Our workers by our tower at (25, 9); six raiders there (5940) against home's four (3960):
+      # only the tower (2970) makes it takeable. It must not be called off the next tick (without
+      # the tower, 5940 is over 1.3 x 3960).
+      tower = building(40, "GuardTower", 25, 9)
+      units = field_miners() ++ field_raid(6) ++ for(i <- 1..4, do: unit(200 + i, "Soldier", 10, 10))
+      {s, _, memory} = plan(units: units, buildings: [tower])
+      assert s.help == {27, 7}
+      assert {%{help: {27, 7}, why: why}, _, _} = plan([units: units, buildings: [tower], tick: 101], memory)
+      refute Enum.any?(why, &match?({:help, _}, &1))
+    end
+
     test "is called off when what is there gets well beyond what home can bring" do
       {_, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
       {s, _, _} = plan([units: field_miners() ++ field_raid(16) ++ soldiers(10), tick: 101], memory)
