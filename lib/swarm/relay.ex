@@ -4,8 +4,10 @@ defmodule Swarm.Relay do
 
   The leader sends the tick here once, `{:tick, ref, leader_pid, view, strategy, unit_pids}`,
   instead of once to every unit: the view crosses the network once per node, not once per unit.
-  The relay works out the team-wide answers once for the node (`Swarm.Roles.share/2`: every
-  fighter's job, who fights whom), puts them in the view, and sends `{:tick, ref, leader_pid,
+  The relay works out the team-wide answers once for the node (`Swarm.UnitBrain.prepare/2`: every
+  fighter's job, who fights whom, our fighters and theirs, the towers, the raids and where help is
+  wanted, home's strength, the drop-offs and each deposit's walk, which ore is unsafe), puts them
+  in the view, and sends `{:tick, ref, leader_pid,
   view, strategy}` to each of its units. Each unit still decides for itself and answers the
   leader directly (`Swarm.Unit`).
 
@@ -31,7 +33,7 @@ defmodule Swarm.Relay do
 
   @impl true
   def handle_info({:tick, ref, leader, view, strategy, pids}, state) do
-    view = Swarm.Roles.share(view, strategy.wave)
+    view = Swarm.UnitBrain.prepare(view, strategy.wave)
     for pid <- pids, do: send(pid, {:tick, ref, leader, view, strategy})
     {:noreply, state}
   end

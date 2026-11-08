@@ -92,6 +92,8 @@ defmodule Swarm.UnitBrain do
 
   @spec decide(integer(), View.t(), Swarm.Brain.strategy(), map()) :: {map() | :no_change, map()}
   def decide(unit_id, %View{} = v, strategy, memory \\ new_memory()) do
+    # With the team's answers in hand (`prepare/2`), the lists they leave out, once for this decision.
+    v = Roles.localize(v)
     unit = View.my_unit(v, unit_id)
     step = unit && dodge(unit, v)
 
@@ -213,9 +215,24 @@ defmodule Swarm.UnitBrain do
       |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
   end
 
-  # Ore with an enemy fighter this close isn't worth walking into.
-  defp unsafe?(deposit, v) do
-    Enum.any?(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
+  # Ore with an enemy fighter this close isn't worth walking into (worked out once for everyone in
+  # `prepare/2`, when it has run).
+  defp unsafe?(deposit, %View{shared: %{unsafe_ore: unsafe}}), do: MapSet.member?(unsafe, deposit["id"])
+  defp unsafe?(deposit, v), do: near_enemy?(deposit, v)
+
+  defp near_enemy?(deposit, v),
+    do: Enum.any?(Roles.enemy_fighters(v), &(View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
+
+  @doc """
+  The view with everything every unit needs about the whole team worked out once
+  (`Swarm.Roles.share/2`, and which ore is unsafe), for this tick's `wave`. Each node's relay
+  (`Swarm.Relay`) does this once and hands the result to its units; the decisions are the same as
+  without it.
+  """
+  def prepare(%View{} = v, wave) do
+    v = Roles.share(v, wave)
+    unsafe = for d <- v.deposits, near_enemy?(d, v), into: MapSet.new(), do: d["id"]
+    %{v | shared: Map.put(v.shared, :unsafe_ore, unsafe)}
   end
 
   # An idle worker picks a deposit, ore by a drop-off at home (`View.home_deposits/1`) first, then

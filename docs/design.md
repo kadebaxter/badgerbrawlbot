@@ -192,10 +192,14 @@ This single rule covers new units, dead units and node failures. Spawning on ano
 
 The tick reaches the units through one relay per node (`Swarm.Relay`): the leader sends it once
 per node, not once per unit, so the view crosses the network once for each machine. The relay works
-out the answers every unit needs about the whole team once (`Swarm.Roles.share/2`: each fighter's
-job, who fights whom) and hands the tick, with them, to each of its units, which reads its own part.
-Before, every unit worked the whole team out again: for 100 units that was about 930 ms of work a
-tick, against about 22 ms now. A node without a relay (an older release during a rolling upgrade)
+out the answers every unit needs about the whole team once (`Swarm.UnitBrain.prepare/2`: each
+fighter's job, who fights whom, the raids and where help is wanted, home's strength, the bases, the
+drop-offs and each deposit's walk, which ore is by home or unsafe) and hands the tick, with them, to
+each of its units, which reads its own part and makes its own decision. The answers are kept small
+(deposits as ids; the lists of units and towers, which the view already carries, each unit lists
+again for itself on arrival), since the view is copied into every unit's message. Before any of
+this, every unit worked the whole team out again: for 145 units about 1,150 ms of work a tick;
+now about 9 ms in the relay and 4 ms across the units. A node without a relay (an older release during a rolling upgrade)
 gets the tick sent to each unit, as before.
 
 Each unit gets the state and the strategy and decides for itself only. Workers mine when idle.

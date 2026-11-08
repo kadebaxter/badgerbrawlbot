@@ -68,6 +68,9 @@ defmodule Swarm.Roles do
   @soldier 990
   @cost %{"Worker" => 50, "Soldier" => 100, "Archer" => 125, "Scout" => 75, "Trebuchet" => 350}
 
+  # The lists `share/2` works with but leaves out of what it hands on (`localize/1`).
+  @local_lists [:fighters, :enemy_fighters, :enemy_towers, :our_towers]
+
   # `all_in` is set on the end-of-match push that takes every fighter.
   # `owner` is the opponent (player slot) it is after. A wave with Trebuchets holds at `staging`
   # until `released` (set when they arrive); `at` is the tick it launched.
@@ -148,9 +151,36 @@ defmodule Swarm.Roles do
   answers are the same either way; this is only so they are computed once.
   """
   def share(%View{} = v, wave) do
-    v = %{v | shared: nil}
-    %{v | shared: %{wave: wave, home_roles: home_roles(v, wave), assignments: assignments(v, wave)}}
+    v = View.share_economy(%{v | shared: nil})
+    v = put_shared(v, %{fighters: fighters(v), enemy_fighters: enemy_fighters(v), enemy_towers: enemy_towers(v), our_towers: our_towers(v)})
+    v = put_shared(v, %{outposts: outposts(v)})
+    v = put_shared(v, %{bases: bases(v)})
+    v = put_shared(v, %{raiders: raiders(v), help_wanted: help_wanted(v)})
+    v = put_shared(v, %{wave: wave, home_roles: home_roles(v, wave)})
+    v = put_shared(v, %{assignments: assignments(v, wave), home_strength: strength(home(v, wave), v.me)})
+    # The lists of units and towers only helped work the rest out: the view already carries them,
+    # and it is copied to every unit. Each unit lists them again for itself (`localize/1`).
+    %{v | shared: Map.drop(v.shared, @local_lists)}
   end
+
+
+  @doc """
+  On a unit, once its tick arrives: the lists `share/2` leaves out (our fighters, theirs, the
+  towers both sides) worked out once for this unit's whole decision, without copying them to it.
+  """
+  def localize(%View{shared: nil} = v), do: v
+
+  def localize(%View{} = v) do
+    put_shared(v, %{fighters: fighters(v), enemy_fighters: enemy_fighters(v), enemy_towers: enemy_towers(v), our_towers: our_towers(v)})
+  end
+
+  defp put_shared(v, answers), do: %{v | shared: Map.merge(v.shared || %{}, answers)}
+
+  @doc "Enemy fighters we can see (not workers)."
+  def enemy_fighters(%View{} = v), do: View.cached(v, :enemy_fighters, fn -> Enum.reject(v.enemy_units, &(&1["type"] == "Worker")) end)
+
+  @doc "Our finished Guard Towers."
+  def our_towers(%View{} = v), do: View.cached(v, :our_towers, fn -> Enum.filter(View.buildings_of(v, "GuardTower"), & &1["completed"]) end)
 
   @doc "Ids of the guards."
   def guards(%View{} = v, wave) do
@@ -161,6 +191,10 @@ defmodule Swarm.Roles do
   def outposts(%View{cc: nil}), do: []
 
   def outposts(%View{cc: cc} = v) do
+    View.cached(v, :outposts, fn -> outposts(v, cc) end)
+  end
+
+  defp outposts(v, cc) do
     for d <- View.buildings_of(v, "ResourceDepot"),
         d["completed"],
         View.dist(View.pos(d), View.pos(cc)) > @outpost_distance,
@@ -182,7 +216,7 @@ defmodule Swarm.Roles do
 
   @doc "Every base: the Command Center and the outposts."
   def bases(%View{cc: nil} = v), do: outposts(v)
-  def bases(%View{cc: cc} = v), do: [View.pos(cc) | outposts(v)]
+  def bases(%View{cc: cc} = v), do: View.cached(v, :bases, fn -> [View.pos(cc) | outposts(v)] end)
 
   defp miners(v, outpost),
     do: Enum.count(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), outpost) <= @base_radius))
@@ -191,7 +225,8 @@ defmodule Swarm.Roles do
   def escort_post({x, y}, {tx, ty}), do: {x + 2 * sign(tx - x), y + 2 * sign(ty - y)}
 
   @doc "Our soldiers and archers: everything that fights in the line (not workers, scouts or siege)."
-  def fighters(%View{} = v), do: Enum.reject(View.military(v), &(&1["type"] in ["Scout", "Trebuchet"]))
+  def fighters(%View{} = v),
+    do: View.cached(v, :fighters, fn -> Enum.reject(View.military(v), &(&1["type"] in ["Scout", "Trebuchet"])) end)
 
   @doc "Fighters that aren't away with the wave."
   def home(%View{} = v, wave), do: Enum.reject(fighters(v), &(&1["id"] in members(wave)))
@@ -262,7 +297,9 @@ defmodule Swarm.Roles do
   Trebuchets shelling our buildings.
   """
   def help_wanted(%View{} = v) do
-    Enum.map(Map.values(outpost_threats(v)), & &1.pos) ++ worker_threats(v) ++ siege_threats(v)
+    View.cached(v, :help_wanted, fn ->
+      Enum.map(Map.values(outpost_threats(v)), & &1.pos) ++ worker_threats(v) ++ siege_threats(v)
+    end)
   end
 
   @doc "Enemies near the base at `base`, as `threat/1` describes them."
@@ -283,12 +320,13 @@ defmodule Swarm.Roles do
   Enemy fighters hitting anything of ours: inside a base (the Command Center's or an outpost's),
   by our workers, or Trebuchets shelling our buildings.
   """
-  def raiders(%View{} = v) do
+  def raiders(%View{} = v), do: View.cached(v, :raiders, fn -> find_raiders(v) end)
+
+  defp find_raiders(v) do
     bases = bases(v)
     workers = View.units_of(v, "Worker")
 
-    for e <- v.enemy_units,
-        e["type"] != "Worker",
+    for e <- enemy_fighters(v),
         Enum.any?(bases, &(View.dist(View.pos(e), &1) <= @base_radius)) or
           Enum.any?(workers, &(View.dist(View.pos(&1), View.pos(e)) <= @worker_cover)) or
           siege_on_us?(v, e),
@@ -406,8 +444,8 @@ defmodule Swarm.Roles do
   """
   def losing_at?(%View{} = v, pos, radius) do
     near? = &(View.dist(View.pos(&1), pos) <= radius)
-    theirs = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))
-    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    theirs = Enum.filter(enemy_fighters(v), near?)
+    towers = Enum.filter(our_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1)))
     theirs != [] and strength(theirs) > strength(Enum.filter(fighters(v), near?) ++ towers, v.me)
   end
 
@@ -453,7 +491,9 @@ defmodule Swarm.Roles do
   Finished enemy Guard Towers we know of: those in sight, and those the server remembers for us
   (`rememberedBuildings`: seen before, hidden by fog now, where we last saw them).
   """
-  def enemy_towers(%View{} = v) do
+  def enemy_towers(%View{} = v), do: View.cached(v, :enemy_towers, fn -> known_towers(v) end)
+
+  defp known_towers(v) do
     tower? = &(&1["type"] == "GuardTower" and &1["completed"] != false)
     seen = Enum.filter(v.enemy_buildings, tower?)
     ids = MapSet.new(seen, & &1["id"])
@@ -646,7 +686,7 @@ defmodule Swarm.Roles do
   (`enemy_towers/1`) that reach it (range plus one). A Trebuchet counts as one Soldier here.
   """
   def danger_at(%View{} = v, pos) do
-    fighters = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @engage_radius))
+    fighters = Enum.filter(enemy_fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius))
     towers = Enum.filter(enemy_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1) + 1))
     # A Trebuchet can't hit anything close: walking up to one is a Soldier's worth of danger, not
     # its cost.
@@ -657,7 +697,7 @@ defmodule Swarm.Roles do
   @doc "What we have at `pos`: our fighters within `@engage_radius`, and our finished towers that reach it."
   def support_at(%View{} = v, pos) do
     ours = Enum.filter(fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius))
-    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    towers = Enum.filter(our_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1)))
     strength(ours ++ towers, v.me)
   end
 
@@ -673,9 +713,13 @@ defmodule Swarm.Roles do
   that reach it, against `danger_at/2`. Attackers only go to help once that holds, and go together.
   """
   def can_take?(%View{} = v, wave, pos) do
-    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
-    strength(home(v, wave) ++ towers, v.me) >= danger_at(v, pos)
+    towers = Enum.filter(our_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1)))
+    home_strength(v, wave) + strength(towers, v.me) >= danger_at(v, pos)
   end
+
+  # Everything at home, not in `wave` (worked out once with the rest of `share/2`).
+  defp home_strength(%View{shared: %{wave: wave, home_strength: hs}}, wave), do: hs
+  defp home_strength(v, wave), do: strength(home(v, wave), v.me)
 
   @doc """
   Whether an outpost's escorts (all of them, wherever they stand), with our fighters and towers at
@@ -685,7 +729,7 @@ defmodule Swarm.Roles do
     roles = home_roles(v, wave)
     escorts = Enum.filter(fighters(v), &(roles[&1["id"]] == {:escort, outpost}))
     near = Enum.filter(fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius and &1 not in escorts))
-    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    towers = Enum.filter(our_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1)))
     strength(escorts ++ near ++ towers, v.me) >= danger_at(v, pos)
   end
 

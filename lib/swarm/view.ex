@@ -123,11 +123,20 @@ defmodule Swarm.View do
   @doc "Where ore can be dropped off: our finished Command Center and Resource Depots."
   # Our Command Center and our depots; not a backup Command Center (another one, far from home),
   # so workers never go mining by it and give it away. It becomes the Command Center if we lose ours.
-  def drop_offs(%__MODULE__{my_buildings: buildings, cc: cc}) do
-    for b <- buildings, b["completed"], b["type"] == "ResourceDepot" or b == cc, do: pos(b)
+  def drop_offs(%__MODULE__{my_buildings: buildings, cc: cc} = v) do
+    cached(v, :drop_offs, fn ->
+      for b <- buildings, b["completed"], b["type"] == "ResourceDepot" or b == cc, do: pos(b)
+    end)
   end
 
   @doc "How far a deposit is from the nearest drop-off: the walk a miner repeats. Nil with none."
+  def trip(%__MODULE__{shared: %{trips: trips}} = v, deposit) do
+    case Map.fetch(trips, deposit["id"]) do
+      {:ok, trip} -> trip
+      :error -> v |> drop_offs() |> Enum.map(&dist(&1, pos(deposit))) |> Enum.min(fn -> nil end)
+    end
+  end
+
   def trip(%__MODULE__{} = v, deposit) do
     v |> drop_offs() |> Enum.map(&dist(&1, pos(deposit))) |> Enum.min(fn -> nil end)
   end
@@ -136,9 +145,11 @@ defmodule Swarm.View do
   Deposits by a Resource Depot of ours that is still being built: worth mining once it is done,
   and the place to head for while it goes up.
   """
-  def soon_near_deposits(%__MODULE__{my_buildings: buildings, deposits: deposits}) do
-    sites = for b <- buildings, b["type"] == "ResourceDepot", not b["completed"], do: pos(b)
-    Enum.filter(deposits, fn d -> Enum.any?(sites, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+  def soon_near_deposits(%__MODULE__{my_buildings: buildings, deposits: deposits} = v) do
+    cached_ids(v, :soon_near_ids, fn ->
+      sites = for b <- buildings, b["type"] == "ResourceDepot", not b["completed"], do: pos(b)
+      Enum.filter(deposits, fn d -> Enum.any?(sites, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+    end)
   end
 
   @doc "Drop-offs at home: the Command Center and depots within #{@home_ore} of it."
@@ -147,8 +158,10 @@ defmodule Swarm.View do
 
   @doc "Deposits worth mining from a drop-off at home (`home_drop_offs/1`)."
   def home_deposits(%__MODULE__{} = v) do
-    home = home_drop_offs(v)
-    Enum.filter(v.deposits, fn d -> Enum.any?(home, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+    cached_ids(v, :home_ids, fn ->
+      home = home_drop_offs(v)
+      Enum.filter(v.deposits, fn d -> Enum.any?(home, &(dist(&1, pos(d)) <= @drop_off_reach)) end)
+    end)
   end
 
   @doc "How far ore can be from a drop-off and still be worth mining."
@@ -156,11 +169,57 @@ defmodule Swarm.View do
 
   @doc "Deposits worth mining: within #{@drop_off_reach} tiles of a drop-off."
   def near_deposits(%__MODULE__{} = v) do
-    Enum.filter(v.deposits, fn d ->
-      trip = trip(v, d)
-      trip != nil and trip <= @drop_off_reach
+    cached_ids(v, :near_ids, fn ->
+      Enum.filter(v.deposits, fn d ->
+        trip = trip(v, d)
+        trip != nil and trip <= @drop_off_reach
+      end)
     end)
   end
+
+  @doc """
+  The economy's answers worked out once for every worker (`Swarm.Roles.share/2` puts them in
+  `shared`): the drop-offs, each deposit's walk to the nearest one, and which deposits are by a
+  drop-off, by home, or by a depot going up.
+  """
+  def share_economy(%__MODULE__{shared: shared} = v) do
+    shared = shared || %{}
+    v = %{v | shared: Map.put(shared, :drop_offs, drop_offs(%{v | shared: nil}))}
+    v = %{v | shared: Map.put(v.shared, :trips, Map.new(v.deposits, &{&1["id"], trip(v, &1)}))}
+
+    # As ids: the view already carries the deposits, and it is copied to every unit.
+    ids = &MapSet.new(&1, fn d -> d["id"] end)
+
+    %{
+      v
+      | shared:
+          Map.merge(v.shared, %{
+            near_ids: ids.(near_deposits(v)),
+            soon_near_ids: ids.(soon_near_deposits(v)),
+            home_ids: ids.(home_deposits(v))
+          })
+    }
+  end
+
+  # The deposits whose ids `shared[key]` holds, in the view's order, when worked out; else `fun.()`.
+  defp cached_ids(%__MODULE__{shared: %{} = shared, deposits: deposits}, key, fun) do
+    case shared do
+      %{^key => ids} -> Enum.filter(deposits, &MapSet.member?(ids, &1["id"]))
+      _ -> fun.()
+    end
+  end
+
+  defp cached_ids(_v, _key, fun), do: fun.()
+
+  @doc "`shared[key]` when it has been worked out (`share_economy/1`, `Swarm.Roles.share/2`), else `fun.()`."
+  def cached(%__MODULE__{shared: %{} = shared}, key, fun) do
+    case shared do
+      %{^key => value} -> value
+      _ -> fun.()
+    end
+  end
+
+  def cached(_v, _key, fun), do: fun.()
 
   def completed?(%__MODULE__{status: status}), do: status == "Completed"
 

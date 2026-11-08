@@ -27,7 +27,7 @@ defmodule Swarm.Solo do
     else
       {strategy, commands, memory} = Brain.plan(view, memory, terrain)
       # The team-wide answers once for everyone, as each node's relay does in the swarm.
-      view = Swarm.Roles.share(view, strategy.wave)
+      view = UnitBrain.prepare(view, strategy.wave)
 
       # Each unit decides for itself, but here they simply take turns.
       decisions =
