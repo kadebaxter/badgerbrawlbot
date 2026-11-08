@@ -205,7 +205,7 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Losing where it stands, with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
-| Escort | Fight enemies at its outpost, else stand 2 tiles out from it toward the enemy |
+| Escort | Fight enemies at its outpost if the escorts (all of them) with our fighters and towers there can meet them; a stronger raid, back to the rally point. Else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat, together: from the rally point, once everything at home and our towers there are at least as strong as what is there (those already within 6 carry on); otherwise wait at the rally point. Falling back, if no tower of ours reaches it: to the tower closest to it |
 | Attacker, an outpost or workers in the field under attack | Go help the closest the same way, together from the rally point (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
 
@@ -243,7 +243,8 @@ the safe side both ways: ours as 3, so we never trust home's defense too much, t
 never go at one too light. Whose it is decides, not who asks: a strike's launch and its recall
 both see an enemy tower and agree.
 
-The leader recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
+Any wave, strike or sortie is called off once it has lost over a third of the most strength it has
+had (reinforcements count), not left to bleed until only a few remain. The leader also recalls the wave when home can't hold: the enemy fighters hitting any base, an outpost
 or our workers are stronger than what can meet them: our fighters not in the wave within 12 tiles
 of a raider, and the towers that can reach one. Defenders at another base don't count. A
 recalled wave is just fighters at home again, so they walk back, fighting only what attacks them
@@ -261,7 +262,7 @@ into its reach (its range + 1) one at a time, not even to meet enemy units stand
 (`Swarm.Roles.covered?/2`); fighting back is still allowed. Instead the leader strikes it, ahead of
 any wave, but never while home is being raided: the attackers at home at once (the guards stay, so
 the base is never empty), when that is at least 8 of them with
-the strength of the tower (4 soldiers) plus 1.5× the strongest player's units by it. The strike is a wave whose target is
+the strength of the tower (4 soldiers) and every other enemy tower that covers it, plus 1.5× the strongest player's units by it. The strike is a wave whose target is
 the tower, and comes home once the tower is down (or too few are left, it is outmatched by the same
 measure, home can't hold a raid without it, or after 120 ticks); after one comes back, no new strike for 20 ticks. An enemy building still going up within 12 of one of our bases,
 and not under a tower, is razed at once by home fighters (`strategy.raze`).
@@ -363,14 +364,16 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    **Ore for workers:** once a Barracks is up, 100 ore (two workers) is kept back from everything but
    workers, and with fewer than 5 workers left, workers are trained before anything else: losing
    every worker with nothing banked would end the economy for good. When home has been short of ore for 30 ticks in a row (under
-   1,500 left within reach of a drop-off; how many workers there are doesn't matter, they stack), a Resource
+   3,000 left within reach of a drop-off, so the next depot is up before it runs out; how many
+   workers there are doesn't matter, they stack), a Resource
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
    next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
    And whenever 3 or more workers are already mining one field out of reach, a depot goes by
    that field right away (a depot costs one Soldier and saves them all the walk). Depots only go by ore on our
    side (closer to our Command Center than to any enemy start, so never a contested deposit
    between players; an eliminated player's start doesn't count) and not within 4 tiles of where
-   we lost a building in the last 300 ticks. Guard Towers go 3–4 tiles from the Command Center,
+   we lost a building in the last 300 ticks while enemy fighters we know of are within 10 of it
+   (once they are gone, a lost depot is built again). Guard Towers go 3–4 tiles from the Command Center,
    so their 5-tile range covers the base, toward the nearest neighbor still in that no tower
    faces yet, so they spread over the ways in (the middle of the map with no neighbor left). Below an army floor (6 fighters,
    plus 1 per 100 ticks) the Barracks train before anything is built or researched.

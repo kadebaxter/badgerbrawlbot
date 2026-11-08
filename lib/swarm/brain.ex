@@ -102,6 +102,10 @@ defmodule Swarm.Brain do
   # Enemy fighters we remember this close to our Command Center are an army near home (see
   # `army_near_home/3`).
   @home_watch 20
+  # A wave, strike or sortie down this share of the most it has had is called off (`bleeding/2`).
+  @call_off 0.35
+  # A spot where we lost a building is avoided while enemy fighters are this close to it.
+  @lost_clear 10
   # Falling back holds this many ticks past the last reason to.
   @fall_back_hold 15
   # The main base is overrun by enemies this many times all of home; regrouping holds this long
@@ -235,10 +239,11 @@ defmodule Swarm.Brain do
 
   @needs_barracks ["GuardTower", "TechLab"]
 
-  # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore` (workers stack
+  # Home is short of ore when the ore left near our drop-offs is under `@low_home_ore`, early enough
+  # that the next depot is up before the ore runs out (workers stack
   # on a deposit, so how many there are says nothing about running out). Short for `@short_for_ticks` in a
   # row, a Resource Depot goes by the closest other ore, ahead of the build order.
-  @low_home_ore 1500
+  @low_home_ore 3000
   # A Guard Tower this close to an outpost counts as its tower.
   @outpost_tower_reach 6
   # Towers an outpost gets once we are rich.
@@ -744,7 +749,9 @@ defmodule Swarm.Brain do
         group = for u <- Roles.home(v, nil), roles[u["id"]] == :attacker, at_home?(v, u), do: u
         guards = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), pos) <= @wave_sight))
         {_, theirs} = strongest_player(guards) || {nil, 0}
-        need = Roles.strength([tower]) + @margin * theirs
+        # Every tower of theirs that reaches it (they cover each other), not just this one.
+        towers = Enum.filter(Roles.enemy_towers(v), &(View.dist(View.pos(&1), pos) <= Roles.range(&1) + 2))
+        need = Roles.strength(Enum.uniq_by([tower | towers], & &1["id"])) + @margin * theirs
         ours = Roles.strength(group)
         at = "player #{tower["owner"]}'s tower at #{fmt(pos)}"
 
@@ -935,6 +942,9 @@ defmodule Swarm.Brain do
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "sortie at #{at}: only #{length(alive)} left"}], nil}
 
+      losses = bleeding(wave, alive) ->
+        {nil, memory.next_wave, [{:wave_recalled, "sortie at #{at}: #{losses}"}], nil}
+
       Roles.siege_threats(v) == [] and there? ->
         {nil, memory.next_wave, [{:wave_recalled, "sortie: #{at} is cleared"}], nil}
 
@@ -947,7 +957,7 @@ defmodule Swarm.Brain do
         {nil, memory.next_wave, [{:wave_recalled, "sortie at #{at}: given up after #{@sortie_ticks} ticks"}], nil}
 
       true ->
-        {%{wave | members: Enum.map(alive, & &1["id"]), spot: spot}, memory.next_wave, [], nil}
+        {%{wave | members: Enum.map(alive, & &1["id"]), spot: spot} |> peaked(alive), memory.next_wave, [], nil}
     end
   end
 
@@ -968,6 +978,9 @@ defmodule Swarm.Brain do
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: only #{length(alive)} left"}], nil}
 
+      losses = bleeding(wave, alive) ->
+        {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: #{losses}"}], nil}
+
       raid = Roles.recall(v, wave) ->
         {theirs, ours} = raid
         why = "strike at #{at}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
@@ -982,9 +995,21 @@ defmodule Swarm.Brain do
         {nil, memory.next_wave, [{:wave_recalled, "strike at #{at}: given up after #{@strike_ticks} ticks"}], nil}
 
       true ->
-        {%{wave | members: Enum.map(alive, & &1["id"])}, memory.next_wave, [], nil}
+        {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
     end
   end
+
+  # Called off sooner: a wave, strike or sortie that has lost `@call_off` of the most it ever had
+  # (counting reinforcements) is losing, whatever is left. Waiting until only `@recall_below` are
+  # left fed it to them a few at a time. The reason, or nil.
+  defp bleeding(wave, alive) do
+    peak = Map.get(wave, :peak, 0)
+    now = Roles.strength(alive)
+    if peak > 0 and now < (1 - @call_off) * peak, do: "lost #{round(100 * (1 - now / peak))}% of its strength (#{round(now)} of #{round(peak)})"
+  end
+
+  # The wave with the most it has had so far.
+  defp peaked(wave, alive), do: Map.put(wave, :peak, max(Map.get(wave, :peak, 0), Roles.strength(alive)))
 
   # Near the end and behind on score: every fighter goes, including new ones.
   defp all_in?(v), do: v.tick >= v.max_ticks - @all_in_ticks and v.my_score < v.enemy_score
@@ -1028,13 +1053,16 @@ defmodule Swarm.Brain do
       length(alive) < @recall_below ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: only #{length(alive)} left"}], nil}
 
+      losses = bleeding(wave, alive) ->
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: #{losses}"}], nil}
+
       facing = outmatched(v, alive, target) ->
         {player, theirs} = facing
         why = "wave #{wave.id}: outmatched by player #{player}, strength #{round(Roles.strength(alive))} vs #{round(theirs)} nearby"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
       true ->
-        wave = %{wave | members: Enum.map(alive, & &1["id"])}
+        wave = %{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive)
         {wave, more, hold} = reinforce(v, wave, rally)
         {wave, next_wave, why} = release(v, wave, memory.next_wave)
         {wave, next_wave, more ++ why, hold}
@@ -1135,7 +1163,7 @@ defmodule Swarm.Brain do
     near? = &(View.dist(View.pos(&1), center) <= @wave_sight)
 
     (Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
-       Enum.filter(v.enemy_buildings, &(&1["type"] == "GuardTower" and &1["completed"] and near?.(&1))))
+       Enum.filter(Roles.enemy_towers(v), near?))
     |> strongest_player()
   end
 
@@ -1564,10 +1592,10 @@ defmodule Swarm.Brain do
         # In a big game a co-op's tower comes before the rest: outposts are where raiders go.
         if big?(v),
           do:
-            outpost_tower(v, terrain) || from_build_order(v, terrain, Map.keys(mem.lost)) ||
+            outpost_tower(v, terrain) || from_build_order(v, terrain, avoid(v, mem)) ||
               siege_workshop(v, terrain) || extra(v, terrain),
           else:
-            from_build_order(v, terrain, Map.keys(mem.lost)) || outpost_tower(v, terrain) ||
+            from_build_order(v, terrain, avoid(v, mem)) || outpost_tower(v, terrain) ||
               siege_workshop(v, terrain) || extra(v, terrain)
 
       site ->
@@ -1625,7 +1653,7 @@ defmodule Swarm.Brain do
   # of one Soldier and saves every one of them the long walk, so it doesn't wait for anything else.
   defp remote_depot(v, terrain, mem) do
     near = View.near_deposits(v) ++ View.soon_near_deposits(v)
-    avoid = Map.keys(mem.lost)
+    avoid = avoid(v, mem)
 
     far =
       for w <- View.units_of(v, "Worker"),
@@ -1649,7 +1677,17 @@ defmodule Swarm.Brain do
     building_one? = Enum.any?(View.buildings_of(v, "ResourceDepot"), &(not &1["completed"]))
     short_long_enough? = mem.ore_short_since != nil and v.tick - mem.ore_short_since >= @short_for_ticks
 
-    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion, Map.keys(mem.lost))
+    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion, avoid(v, mem))
+  end
+
+  # Where we lost a building lately (`mem.lost`) and enemy fighters we know of are still near (within
+  # `@lost_clear`): no new depot or building there yet. Once they are gone, we build again: a lost
+  # depot by the only ore left otherwise has every worker walking to the Command Center for good.
+  defp avoid(v, mem) do
+    enemies = for {_id, e} <- mem.enemies, e["type"] not in ["Worker", "Scout"], do: View.pos(e)
+    enemies = enemies ++ for(e <- v.enemy_units, e["type"] not in ["Worker", "Scout"], do: View.pos(e))
+
+    for spot <- Map.keys(mem.lost), Enum.any?(enemies, &(View.dist(&1, spot) <= @lost_clear)), do: spot
   end
 
   # A building of ours that was there last tick and isn't now was destroyed: remember the spot.

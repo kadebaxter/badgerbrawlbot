@@ -420,10 +420,15 @@ defmodule Swarm.UnitBrain do
     Roles.strength(theirs) > Roles.strength(ours)
   end
 
+  # Escorts hold their outpost against a raid they can meet (`Roles.escorts_hold?/4`); a stronger
+  # one, they don't die there a few at a time: back to the rally point, where help gathers.
   defp escort(v, s, outpost) do
     case Roles.threat_at(v, outpost) do
       nil -> {:move, Roles.escort_post(outpost, s.target)}
-      threat -> {:attack_move, cover(v, s, threat.pos)}
+      threat ->
+        if Roles.escorts_hold?(v, s.wave, outpost, threat.pos),
+          do: {:attack_move, cover(v, s, threat.pos)},
+          else: {:move, s.rally}
     end
   end
 

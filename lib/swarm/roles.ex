@@ -647,6 +647,18 @@ defmodule Swarm.Roles do
     strength(home(v, wave) ++ towers, v.me) >= danger_at(v, pos)
   end
 
+  @doc """
+  Whether an outpost's escorts (all of them, wherever they stand), with our fighters and towers at
+  `pos`, are at least as strong as what the enemy has there (`danger_at/2`).
+  """
+  def escorts_hold?(%View{} = v, wave, outpost, pos) do
+    roles = home_roles(v, wave)
+    escorts = Enum.filter(fighters(v), &(roles[&1["id"]] == {:escort, outpost}))
+    near = Enum.filter(fighters(v), &(View.dist(View.pos(&1), pos) <= @engage_radius and &1 not in escorts))
+    towers = Enum.filter(View.buildings_of(v, "GuardTower"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= range(&1)))
+    strength(escorts ++ near ++ towers, v.me) >= danger_at(v, pos)
+  end
+
   defp fight_back?(enemy, ours) do
     d = View.dist(View.pos(enemy), View.pos(ours))
     d in Map.get(stats(enemy), :min_range, 0)..stats(enemy).range//1 or d <= stats(ours).range
