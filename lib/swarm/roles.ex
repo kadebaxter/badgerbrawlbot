@@ -46,6 +46,8 @@ defmodule Swarm.Roles do
   # How far a fighter looks for something to fight; farther for a Trebuchet, which shells us from
   # 7 tiles away.
   @engage_radius 6
+  # Pull back only when they are this many times us (see `losing?/1`); go in at even.
+  @hold_margin 1.3
   # A Command Center our fighters by it can bring down in this many ticks is finished first.
   @finish_ticks 5
   @siege_engage_radius 10
@@ -553,17 +555,14 @@ defmodule Swarm.Roles do
   def assignments(%View{} = v, wave) do
     held_back = if fall_back?(v, wave), do: MapSet.new(exposed_raiders(v), & &1["id"]), else: MapSet.new()
     enemies = Enum.reject(v.enemy_units, &(&1["type"] == "Worker"))
-    # Where we may go after an enemy: where our side (with the one going) is at least as strong as
-    # theirs (`safe_at?/2`).
+    # Where we may go after an enemy: `engage?/1` on `odds_for/3`, the one measure, with what it is
+    # made of worked out once for every pair.
     odds = Map.new(enemies, &{&1["id"], {support_at(v, View.pos(&1)), danger_at(v, View.pos(&1))}})
-    # The group around each of ours: they go in together, so they count, not only those already by
-    # the enemy (counting only those, a group standing a few tiles back never went in at all).
     groups = Map.new(fighters(v), &{&1["id"], group_strength(v, &1)})
 
     safe? = fn o, e ->
-      {ours, theirs} = odds[e["id"]]
-      going = if View.dist(View.pos(o), View.pos(e)) > @engage_radius, do: strength([o], v.me), else: 0
-      max(ours + going, groups[o["id"]]) >= theirs
+      {support, theirs} = odds[e["id"]]
+      engage?({ours_for(v, o, View.pos(e), support, groups[o["id"]]), theirs})
     end
     extra_armor = if enemy_tech_lab?(v), do: 1, else: 0
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
@@ -731,12 +730,6 @@ defmodule Swarm.Roles do
     strength(ours ++ towers, v.me)
   end
 
-  @doc """
-  Whether we may go fight at `pos`: what we have there is at least what they have (`support_at/2`
-  against `danger_at/2`). Nobody chases an enemy into more danger: an archer backing off under
-  its towers, or into its friends, is left alone until we are there in strength.
-  """
-  def safe_at?(%View{} = v, pos), do: support_at(v, pos) >= danger_at(v, pos)
 
   @doc """
   Our fighters within `@engage_radius` of `unit`, itself included: the group that goes in with it.
@@ -747,11 +740,36 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Whether `unit` may go fight at `pos`: what we have there (`support_at/2`), or the group around
-  it that goes in with it (`group_strength/2`), whichever is more, is at least what they have
-  (`danger_at/2`). A lone fighter still holds back from a pack; a group goes in together.
+  How we stand at `pos`, for `unit` going there, `{ours, theirs}`: the one measure for both
+  going in (`engage?/1`) and pulling back (`losing?/1`), so they never disagree. Ours is what we
+  have there (`support_at/2`, with the unit itself if it is still coming), or the group around the
+  unit that goes in with it (`group_strength/2`), whichever is more; theirs is `danger_at/2`.
   """
-  def safe_for?(%View{} = v, unit, pos), do: max(support_at(v, pos), group_strength(v, unit)) >= danger_at(v, pos)
+  def odds_for(%View{} = v, unit, pos), do: {ours_for(v, unit, pos, support_at(v, pos), group_strength(v, unit)), danger_at(v, pos)}
+
+  defp ours_for(v, unit, pos, support, group) do
+    coming = if View.dist(View.pos(unit), pos) > @engage_radius, do: strength([unit], v.me), else: 0
+    max(support + coming, group)
+  end
+
+  @doc """
+  Go in: we are at least even. A lone fighter still holds back from a pack; a group goes in
+  together.
+  """
+  def engage?({ours, theirs}), do: ours >= theirs
+
+  @doc """
+  Pull back: they are clearly stronger, `@hold_margin` times us. Between even and that, a unit
+  carries on with what it is doing: with no gap, a step forward to attack made it "losing" on its
+  new tile and a step back made it even again, and it flipped every tick.
+  """
+  def losing?({ours, theirs}), do: theirs > @hold_margin * ours
+
+  @doc "`engage?/1` for `unit` at `pos`."
+  def safe_for?(%View{} = v, unit, pos), do: engage?(odds_for(v, unit, pos))
+
+  @doc "`losing?/1` for `unit` at `pos`."
+  def losing_for?(%View{} = v, unit, pos), do: losing?(odds_for(v, unit, pos))
 
   @doc """
   Whether home can take on what is at `pos`: everything at home (not in `wave`), and our towers

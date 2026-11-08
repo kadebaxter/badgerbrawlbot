@@ -220,7 +220,7 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 | Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
 | An enemy fighter to fight within 6 tiles, where we are at least as strong as they are (see below) | Attack it |
 | In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog), with us at least as strong as it there | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
-| Losing where it stands, with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
+| Losing where it stands (they are 1.3× us by the same measure that sends it in), with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost if the escorts (all of them) with our fighters and towers there can meet them; a stronger raid, back to the rally point. Else stand 2 tiles out from it toward the enemy |
@@ -241,7 +241,9 @@ the fight within 8 tiles, but only to where home can still take what is there (f
 middle of a pack had it called off the next tick and committed again at its edge), and holds until nothing has been wanted there for 15 ticks, or what is
 there is 1.3× what home can bring. Committing and calling off use one measure
 (`Swarm.Roles.help_odds/3`: everything at home and our towers that reach the spot, against what is
-there), so they never disagree. After it is called off, no new help for 20 ticks. A raid on the
+there), so they never disagree. After it is called off, no new help for 20 ticks, and for 120 ticks
+help near where it was called off commits only at 1.3× what is there (the margin it was called off
+at), so it doesn't walk out to the same pack every 20 ticks. A raid on the
 main base still comes first.
 
 **Finishing a Command Center:** an enemy Command Center that our fighters by it can bring down in 5
@@ -276,7 +278,8 @@ the safe side both ways: ours as 3, so we never trust home's defense too much, t
 never go at one too light. Whose it is decides, not who asks: a strike's launch and its recall
 both see an enemy tower and agree.
 
-Any wave, strike or sortie is called off once it has lost over a third of the most strength it has
+A wave whose player is eliminated comes home, not on into the next player: the next wave waits
+20 ticks for it to get back, and for a scout's look at its new target. Any wave, strike or sortie is called off once it has lost over a third of the most strength it has
 had (reinforcements count), not left to bleed until only a few remain. A wave takes at most 20
 fighters, or two thirds of all our fighters once that is more: up to 27 fighters it may take
 everyone but the seven guards, and past that a third of the army stays home (the end-of-match
@@ -351,7 +354,11 @@ is removed with no destruction score for anyone). Nobody chases an enemy into mo
 where our fighters and towers there, with it, or the group around it (our fighters within 6 of
 it, who go in with it), whichever is more, are at least as strong as theirs there (their
 fighters, and their towers we know of that reach the spot; a Trebuchet counts as one Soldier, as
-it can't hit anything close), and otherwise only hits what it can reach without moving. Fighters at home only go after
+it can't hit anything close), and otherwise only hits what it can reach without moving. Going in
+and pulling back use that one measure (`Swarm.Roles.odds_for/3`) with a gap between them: a
+fighter goes in at even, and pulls back only when they are 1.3× us; in between it carries on.
+Two separate measures had soldiers step in, find themselves "losing" on the new tile, step back,
+be "even" again, and flip every tick. Fighters at home only go after
 enemies inside a base (within 10 of the Command Center or an outpost) or within 5 of one of our
 workers, and fight back against any enemy fighter in range either way (never a building, so a
 recalled wave walks home); the
@@ -399,11 +406,13 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    set aside first (including while the builder walks there, since it is paid on arrival), and a
    failed Build is retried as soon as its `CommandFailed` event arrives. The TechLab researches
    Harvesting1, Weapons1, Armor1, then tier 2. Barracks train Soldiers and Archers with the rest.
-   Miners run for cover: from an enemy fighter about to hit them, and, out of our towers' reach,
+   Workers run for cover, whatever they are doing (mining, carrying, walking to their ore, or
+   building: a site under fire waits): from an enemy fighter about to hit them, and, out of our towers' reach,
    from one within 6 tiles when the enemies there are stronger than our fighters and towers there
    or home is falling back (below). Cover is next to the closest of our Guard Towers on their side
    of the enemy (else the closest of our fighters or drop-offs on their side of it). They don't
-   mine ore with an enemy fighter within 5 tiles. Workers only mine ore within 10 tiles of a drop-off, by a drop-off at home first (the Command
+   mine ore with an enemy fighter within 8 tiles (archers shoot from 4: the walk there is covered
+   too). Workers only mine ore within 10 tiles of a drop-off, by a drop-off at home first (the Command
    Center and depots within 6 of it, as everywhere a depot farther out is an outpost), then by an
    outpost, once home's ore is gone or unsafe: the shortest trip, stacked as deep as it
    takes (the game has no limit on miners per deposit, and each mines at full speed), so with a

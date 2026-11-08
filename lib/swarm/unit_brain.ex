@@ -69,8 +69,9 @@ defmodule Swarm.UnitBrain do
   @gathered 5
   # A miner moves to other ore once its walk to a drop-off is this much longer than the best's.
   @better_trip 2
-  # Ore with an enemy fighter this close is unsafe to mine.
-  @unsafe_ore 5
+  # Ore with an enemy fighter this close is unsafe to mine: archers shoot from 4, so a pack a few
+  # tiles off the deposit kills miners on the way there, not only at it.
+  @unsafe_ore 8
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
@@ -184,8 +185,11 @@ defmodule Swarm.UnitBrain do
   # A miner in danger runs to cover: to the closest of our Guard Towers on our side of the enemy
   # (else help or a drop-off). Once it is safe and idle it goes back to mining, but not to ore
   # with enemies by it. Builders keep building.
+  # Every worker, whatever it is doing: one walking to its ore (it used to skip this, and 56 of 59
+  # workers we lost in one game walked straight into the archers that killed them) or building
+  # (a site under fire waits; the builder doesn't stand there and die) runs just like a miner.
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
-       when activity in ["Idle", "Gathering", "Returning"] and rally != nil do
+       when activity in ["Idle", "Gathering", "Returning", "Moving", "Building"] and rally != nil do
     case worker_danger(unit, v, s) do
       nil ->
         worker(unit, v)
@@ -193,14 +197,21 @@ defmodule Swarm.UnitBrain do
       enemy ->
         {x, y} = spot = refuge(unit, v, enemy) || rally
 
-        # Already there: it may mine ore safe from here (`unsafe?/2`), or stays.
-        if View.dist(View.pos(unit), spot) <= 1,
-          do: worker(unit, v),
-          else: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+        cond do
+          # Already there: it may mine ore safe from here (`unsafe?/2`), or stays.
+          View.dist(View.pos(unit), spot) <= 1 -> worker(unit, v)
+          # Already on its way there.
+          heading?(unit, spot) -> :no_change
+          true -> %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+        end
     end
   end
 
   defp worker(unit, v, _strategy), do: worker(unit, v)
+
+  # Moving to (within a tile of) `spot` already.
+  defp heading?(%{"activity" => "Moving", "destination" => %{"x" => x, "y" => y}}, spot), do: View.dist({x, y}, spot) <= 1
+  defp heading?(_unit, _spot), do: false
 
   # The closest enemy fighter this worker should run from, or nil: one about to hit it, or, out of
   # our towers' reach, one coming at it (within `@worker_alarm`) while home is falling back or the
@@ -373,20 +384,21 @@ defmodule Swarm.UnitBrain do
   end
 
   # The tower shooting at this wave member, if we are strong enough where it stands
-  # (`Roles.safe_at?/2`); otherwise nobody walks in alone (`regroup_or_retreat/4`).
+  # (`Roles.safe_for?/3`); otherwise nobody walks in alone (`regroup_or_retreat/4`).
   defp safe_tower(v, wave, unit) do
     tower = Roles.tower_hitting(v, wave, unit)
     if tower && Roles.safe_for?(v, unit, View.pos(tower)), do: tower
   end
 
-  # Losing where it stands, with nothing it may fight (it is never sent to chase into more
+  # Losing where it stands (`Roles.losing_for?/3`: the same measure that sends it in, clearly
+  # against it), with nothing it may fight (it is never sent to chase into more
   # danger): a wave member falls back on the wave (its middle, `@group_up` tiles off or more), or,
   # there already, toward home; anyone else goes back to the rally point. Nil when it holds.
   defp regroup_or_retreat(unit, v, s, role) do
     here = View.pos(unit)
 
     cond do
-      Roles.safe_at?(v, here) -> nil
+      not Roles.losing_for?(v, unit, here) -> nil
       s.rally == nil -> nil
       role == :wave -> group_up(v, s, here)
       View.dist(here, s.rally) > 2 -> s.rally

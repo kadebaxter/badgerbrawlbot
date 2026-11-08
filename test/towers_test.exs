@@ -79,6 +79,23 @@ defmodule Swarm.TowersTest do
     assert Roles.target(view(archers ++ front), nil, hd(front)) == nil
   end
 
+  test "no flip-flop: going in and pulling back use one measure, with a gap between them" do
+    # Six of ours in a wave (5940) four tiles from five archers (6187): not enough to go in, but not
+    # "losing" either (that takes 1.3 x 5940). Before, it pulled back here, and one tile back was
+    # "even" again and went in: it flipped every tick.
+    ours = soldiers_at(6, 40, 39)
+    archers = for i <- 1..5, do: unit(900 + i, "Archer", 36, 41, owner: 1)
+    v = view(ours ++ archers)
+    odds = Roles.odds_for(v, hd(ours), {40, 39})
+    refute Roles.engage?(odds)
+    refute Roles.losing?(odds)
+    refute match?({%{"type" => "Move", "x" => 10, "y" => 10}, _}, UnitBrain.decide(201, v, attacking(6)))
+
+    # Clearly outmatched (ten archers, 12375): it pulls back.
+    pack = for i <- 1..10, do: unit(900 + i, "Archer", 36, 41, owner: 1)
+    assert Roles.losing_for?(view(ours ++ pack), hd(ours), {40, 39})
+  end
+
   test "at home: not this rule" do
     v = view(soldiers_at(3, 26, 10), buildings: [@tower])
     assert Roles.tower_hitting(v, nil, hd(soldiers_at(1, 26, 10))) == nil

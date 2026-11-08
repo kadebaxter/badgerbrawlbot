@@ -121,6 +121,8 @@ defmodule Swarm.Brain do
   @help_give_up 1.3
   # After help is called off, no new help for this long.
   @help_rest 20
+  # Where help was called off is remembered this long (see `may_help?/4`).
+  @help_memory 120
   # The main base is overrun by enemies this many times all of home; regrouping holds this long
   # after the last tick it was (see `regroup/2`). The base's reach is `Swarm.Roles`'.
   @overrun_margin 1.5
@@ -385,10 +387,15 @@ defmodule Swarm.Brain do
       check_rest: nil,
       # The last tick a wave was called home for an enemy army near home (`army_near_home/3`).
       army_recalled_at: nil,
+      # After a wave took its player out: when it was called home, and whether the next wave waits
+      # for a fresh look at its target (see `launch/6`).
+      came_home_at: nil,
+      check_next: false,
       # Where home's attackers are helping, %{pos, clear_since}, or nil, and the tick help was
       # last called off (see `help/3`).
       help: nil,
-      help_off_at: nil
+      help_off_at: nil,
+      help_off_pos: nil
     }
   end
 
@@ -514,7 +521,7 @@ defmodule Swarm.Brain do
         {nil, memory, []}
 
       nil ->
-        case spots |> Enum.filter(&Roles.can_take?(v, s.wave, &1)) |> Enum.min_by(&{View.dist(&1, s.rally || &1), &1}, fn -> nil end) do
+        case spots |> Enum.filter(&may_help?(v, memory, s, &1)) |> Enum.min_by(&{View.dist(&1, s.rally || &1), &1}, fn -> nil end) do
           nil -> {nil, memory, []}
           spot -> {spot, %{memory | help: %{pos: spot, clear_since: nil}}, [{:help, "home goes to help at #{fmt(spot)}"}]}
         end
@@ -535,12 +542,25 @@ defmodule Swarm.Brain do
 
           theirs > @help_give_up * ours ->
             why = "help at #{fmt(pos)} called off: #{round(theirs)} there against #{round(ours)} home can bring"
-            {nil, %{memory | help: nil, help_off_at: v.tick}, [{:help, why}]}
+            {nil, %{memory | help: nil, help_off_at: v.tick, help_off_pos: pos}, [{:help, why}]}
 
           true ->
             {pos, %{memory | help: %{pos: pos, clear_since: clear_since}}, []}
         end
     end
+  end
+
+  # Whether home may commit to help at `spot`: it can take what is there (`Roles.can_take?/3`);
+  # near where help was last called off (within `@help_follow`, for `@help_memory` ticks), only
+  # clearly, at `@help_give_up` times what is there, the margin it was called off at: committing at
+  # even next to the same pack had it walk out, see the pack, call off, and again every 20 ticks.
+  defp may_help?(v, memory, s, spot) do
+    near_last? =
+      memory.help_off_pos != nil and memory.help_off_at != nil and v.tick - memory.help_off_at < @help_memory and
+        View.dist(spot, memory.help_off_pos) <= @help_follow
+
+    {ours, theirs} = Roles.help_odds(v, s.wave, spot)
+    if near_last?, do: ours >= @help_give_up * theirs, else: ours >= theirs
   end
 
   # Our finished Command Center that isn't the main one, or nil.
@@ -694,6 +714,12 @@ defmodule Swarm.Brain do
       regroup: nil,
       help: nil
     }
+
+    # A wave called home because its player is out: the next one waits for it to be home
+    # (`@calm_ticks`) and for a fresh look at its target.
+    took_out = memory_wave != nil and wave == nil and wave_owner_out?(v, memory_wave)
+    memory = if took_out, do: %{memory | came_home_at: v.tick, check_next: true}, else: memory
+    memory = if wave != nil and memory_wave == nil, do: %{memory | check_next: false}, else: memory
 
     {strategy,
      %{
@@ -1114,6 +1140,10 @@ defmodule Swarm.Brain do
     end
   end
 
+  # The player the wave went after has been eliminated.
+  defp wave_owner_out?(v, %{owner: owner}) when owner != nil, do: not Map.has_key?(v.enemy_survival, owner)
+  defp wave_owner_out?(_v, _wave), do: false
+
   # Some of `alive` are by a nearly dead enemy Command Center (`Roles.finishable_ccs/1`): the wave
   # stays out until it falls, whatever else would call it off. Two more ticks there eliminate a
   # player; walking away left one at 195 HP.
@@ -1164,6 +1194,11 @@ defmodule Swarm.Brain do
     cond do
       finishing?(v, alive) ->
         {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
+
+      # Its player is out: it comes home, not on into the next one (it walked into the middle and
+      # bled last time). The next wave waits for it, and for a look at its target (`launch/6`).
+      wave_owner_out?(v, wave) ->
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: player #{wave.owner} is out, coming home"}], nil}
 
       home = Roles.recall(v, wave) ->
         {theirs, ours} = home
@@ -1431,6 +1466,12 @@ defmodule Swarm.Brain do
 
         memory.raid && Roles.raiders(v) == [] && v.tick - memory.raid.at < @raid_gone ->
           "a raid only just out of sight, #{@raid_gone - (v.tick - memory.raid.at)} more ticks"
+
+        memory.came_home_at && v.tick - memory.came_home_at < @calm_ticks ->
+          "the last wave took its player out and is coming home, #{@calm_ticks - (v.tick - memory.came_home_at)} more ticks"
+
+        memory.check_next and not fresh?(memory.look, owner, v) ->
+          "#{at_rally}, a look at player #{owner} first: the next one after taking one out"
 
         memory.army_recalled_at && v.tick - memory.army_recalled_at < @calm_ticks ->
           "back from a recall for an army near home, #{@calm_ticks - (v.tick - memory.army_recalled_at)} more ticks"

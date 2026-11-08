@@ -166,6 +166,19 @@ defmodule Swarm.CallOffTest do
     end
   end
 
+  test "near where help was called off, it commits again only when clearly stronger" do
+    miners = for i <- 1..4, do: unit(100 + i, "Worker", 25, 7, activity: "Gathering")
+    raid = fn n -> for i <- 1..n, do: unit(900 + i, "Soldier", 27, 7, owner: 1) end
+    home = fn n -> for i <- 1..n, do: unit(200 + i, "Soldier", 10, 10) end
+    {_, _, memory} = plan(units: miners ++ raid.(2) ++ home.(10))
+    {%{help: nil}, _, memory} = plan([units: miners ++ raid.(16) ++ home.(10), tick: 101], memory)
+
+    # 25 ticks on, past the rest: nine raiders there against home's ten (even, not 1.3x): not yet.
+    assert {%{help: nil}, _, _} = plan([units: miners ++ raid.(9) ++ home.(10), tick: 126], memory)
+    # Seven (10 is over 1.3 x 7): it goes.
+    assert {%{help: {27, 7}}, _, _} = plan([units: miners ++ raid.(7) ++ home.(10), tick: 126], memory)
+  end
+
   describe "the worker reserve" do
     test "isn't spent on workers at a main base under attack: they only die there" do
       raiders = for i <- 1..3, do: unit(900 + i, "Soldier", 9, 9, owner: 1)

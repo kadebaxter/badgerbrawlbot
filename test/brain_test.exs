@@ -350,17 +350,36 @@ defmodule Swarm.BrainTest do
       assert {%{wave: %{id: 1}}, _, _} = fresh([units: near], memory)
     end
 
-    test "with a wave out on a new player, no look: a scout is in front of the wave already" do
+    test "once the wave's player is out, it comes home; the next waits, then looks at its target first" do
       # The wave went after player 1 (eliminated now); player 2 at (7, 56) is next.
       wave = %{id: 1, members: Enum.to_list(201..215), owner: 1, released: true}
       memory = %{looked(nil) | wave: wave, next_wave: 2}
 
-      two =
-        Map.update!(state(units: soldiers(22)), "players", fn [me, them] ->
+      # A scout on its way across the map, far from where it will look.
+      scout = unit(300, "Scout", 60, 10)
+
+      two = fn tick ->
+        Map.update!(state(units: [scout | soldiers(22)], tick: tick), "players", fn [me, them] ->
           [me, Map.put(them, "eliminated", true), %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}]
         end)
+      end
 
-      assert {%{wave: %{id: 1}, target: {7, 56}, look: nil, why: []}, _, _} = Brain.plan(View.new(two), memory, terrain())
+      assert {%{wave: nil, why: why}, _, memory} = Brain.plan(View.new(two.(100)), memory, terrain())
+      assert Enum.any?(why, &match?({:wave_recalled, "wave 1: player 1 is out, coming home"}, &1))
+
+      # No new wave while it gets back; meanwhile a scout goes to look at player 2.
+      assert {%{wave: nil, hold: "the last wave took its player out" <> _, why: why}, _, memory} =
+               Brain.plan(View.new(two.(105)), memory, terrain())
+
+      assert Enum.any?(why, &match?({:scout_sent, "scout looking at player 2" <> _}, &1))
+
+      # Home, but the scout isn't there yet: still no wave.
+      assert {%{wave: nil, hold: hold}, _, memory} = Brain.plan(View.new(two.(125)), memory, terrain())
+      assert hold =~ "scout looking at player 2" or hold =~ "a look at player 2 first"
+
+      # It has looked: the next wave may go.
+      there = Map.update!(two.(130), "units", fn us -> Enum.map(us, &if(&1["id"] == 300, do: %{&1 | "x" => 7, "y" => 49}, else: &1)) end)
+      assert {%{wave: %{id: 2}}, _, _} = Brain.plan(View.new(there), memory, terrain())
     end
   end
 

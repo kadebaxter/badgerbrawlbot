@@ -68,13 +68,15 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Gather", "targetId" => 4} = pick(far_miner, [@home, @far], [])
     end
 
+    # An enemy soldier within 8 of (2, 7) makes it unsafe (archers shoot from 4: the walk there is
+    # covered too); (1, 10) is 10 from it.
     test "never to ore with an enemy fighter by it" do
-      enemy = unit(900, "Soldier", 2, 3, owner: 1)
+      enemy = unit(900, "Soldier", 2, 0, owner: 1)
       assert %{"targetId" => 6} = pick(unit(1, "Worker", 8, 8), [@home, @home2], [enemy])
     end
 
     test "a miner whose ore turns unsafe moves to safe ore" do
-      enemy = unit(900, "Soldier", 2, 3, owner: 1)
+      enemy = unit(900, "Soldier", 2, 0, owner: 1)
       miner = unit(1, "Worker", 8, 8, activity: "Gathering", target_id: 4)
       assert %{"type" => "Gather", "targetId" => 6} = pick(miner, [@home, @home2], [enemy])
     end
@@ -218,9 +220,29 @@ defmodule Swarm.UnitBrainTest do
       assert {%{"type" => "Move", "x" => 7, "y" => 7}, _} = UnitBrain.decide(101, v, @gather)
     end
 
-    test "a builder keeps building" do
-      v = View.new(state(units: [unit(101, "Worker", 40, 40, activity: "Building"), unit(900, "Soldier", 41, 40, owner: 1)]))
+    test "a builder under attack it can't meet runs: the site waits" do
+      builder = unit(101, "Worker", 40, 40, activity: "Building")
+      v = View.new(state(units: [builder, unit(900, "Soldier", 41, 40, owner: 1)]))
+      assert {%{"type" => "Move"}, _} = UnitBrain.decide(101, v, @gather)
+    end
+
+    test "a builder with an enemy near but our fighters there to hold it keeps building" do
+      builder = unit(101, "Worker", 40, 40, activity: "Building")
+      ours = for i <- 1..3, do: unit(200 + i, "Soldier", 42, 40)
+      v = View.new(state(units: [builder, unit(900, "Soldier", 44, 40, owner: 1) | ours]))
       assert {:no_change, _} = UnitBrain.decide(101, v, @gather)
+    end
+
+    test "a worker walking to its ore runs from a raid coming at it, like a miner" do
+      walker = unit(101, "Worker", 40, 40, activity: "Moving")
+      raid = for i <- 1..4, do: unit(900 + i, "Archer", 44, 40, owner: 1)
+      v = View.new(state(units: [walker | raid]))
+      assert {%{"type" => "Move", "x" => x, "y" => y}, _} = UnitBrain.decide(101, v, @gather)
+      assert x < 40
+
+      # Already on its way there: nothing new.
+      on_way = Map.put(walker, "destination", %{"x" => x, "y" => y})
+      assert {:no_change, _} = UnitBrain.decide(101, View.new(state(units: [on_way | raid])), @gather)
     end
   end
 
