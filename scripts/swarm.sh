@@ -10,7 +10,7 @@
 #   scripts/swarm.sh leave                  # no more league rounds after this one, or stop looking for the match
 #   scripts/swarm.sh host 6 [--name kaden-brawl] [house bots...]   # host a match others join
 #   scripts/swarm.sh unhost                 # give up our seat before it starts (joined or hosted)
-#   scripts/swarm.sh serum practice|on|off  # when to take the serum: practice games only, always, never
+#   scripts/swarm.sh serum on|practice|off  # when to take the serum: always (default), practice games only, never
 #   scripts/swarm.sh shell                  # an iex on a swarm node (leave with Ctrl+C, a)
 #   scripts/swarm.sh logs                   # follow the leader's log
 #

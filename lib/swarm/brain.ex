@@ -167,6 +167,10 @@ defmodule Swarm.Brain do
   # After a defend, attackers this close together out at an outpost or by our workers may leave
   # with a wave from there, without walking home first (see `launch_group/4`).
   @field_radius 6
+  # Where the army waits by the last Command Center we leave standing (`spare/3`): out of an
+  # Archer's reach (4) of it, so standing there idle nobody shoots it; Trebuchets (reach 7) farther.
+  @camp_distance 6
+  @siege_camp_distance 9
   # An ordered building that hasn't appeared by then is ordered again.
   @build_timeout_ticks 60
   # A worker sent to finish an abandoned site gets this long to show up before we send another.
@@ -337,11 +341,17 @@ defmodule Swarm.Brain do
           raze: integer() | nil,
           check: %{integer() => pos()},
           fall_back: boolean(),
+          spare: spare() | nil,
           survey: pos() | nil,
           regroup: pos() | nil,
           peek: pos() | nil,
           help: pos() | nil
         }
+
+  # The last opponent's last Command Center, left standing (`spare/3`): its id and where it is;
+  # `goal`, where the wave goes (their nearest other building, else `camp`); `camp`, where the
+  # army waits by it, out of its own reach; `siege_camp`, the same for Trebuchets.
+  @type spare :: %{id: integer(), pos: pos(), goal: pos(), camp: pos(), siege_camp: pos()}
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
   # `enemies` is enemy fighter id => how it looked when last seen (with "seen", the tick).
@@ -405,7 +415,11 @@ defmodule Swarm.Brain do
       # last called off (see `help/3`).
       help: nil,
       help_off_at: nil,
-      help_off_pos: nil
+      help_off_pos: nil,
+      # The last opponent's last Command Center we leave standing (its id, for logging it once),
+      # and whether that was given up for this match (their army came back; see `spare/3`).
+      spared: nil,
+      spare_lifted: false
     }
   end
 
@@ -671,7 +685,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
+       fall_back: false, spare: nil, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -709,6 +723,12 @@ defmodule Swarm.Brain do
 
     check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
 
+    # The last opponent's last Command Center stays up (`spare/3`); the wave goes for the rest.
+    # The wave out at the start of the tick counts too: one called back this tick for their army.
+    {spare, spare_why, memory} = spare(v, memory, wave || memory_wave)
+    target = if spare, do: spare.goal, else: target
+    why = why ++ spare_why
+
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
 
@@ -741,6 +761,7 @@ defmodule Swarm.Brain do
       raze: raze(v),
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
+      spare: spare,
       survey: nil,
       regroup: nil,
       help: nil
@@ -1674,6 +1695,75 @@ defmodule Swarm.Brain do
       [] -> start || center(v)
       _ -> theirs |> Enum.map(&View.pos/1) |> Enum.min_by(&View.dist(&1, from))
     end
+  end
+
+  # The last opponent's last Command Center is left standing: killing it ends the match, and with
+  # it our score (economy is all the ore we ever mined, survival all we have alive). So the wave
+  # takes everything else of theirs, then camps by it (`camp`, `@camp_distance` out: farther than an
+  # Archer reaches, so nobody standing there hits it on their own) and kills whatever it makes.
+  # Lifted for good (`memory.spare_lifted`) once a wave out is no longer `@margin` times what we
+  # know of their army, the same test a wave leaves on: then it comes down after all.
+  # Returns {the spare or nil, what to log, memory}.
+  defp spare(v, memory, wave) do
+    case last_cc(v) do
+      nil ->
+        {nil, [], memory}
+
+      _ when memory.spare_lifted ->
+        {nil, [], memory}
+
+      {owner, cc} ->
+        alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
+        {ours, theirs} = {Roles.strength(alive), enemy_strength(v, memory, owner)}
+
+        if wave != nil and ours < @margin * theirs do
+          why = "player #{owner}'s army is back (#{round(theirs)} vs our #{round(ours)} out): their last Command Center comes down"
+          {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
+        else
+          spare = spare_spots(v, owner, cc)
+
+          why =
+            if memory.spared == cc["id"],
+              do: [],
+              else: [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
+
+          {spare, why, %{memory | spared: cc["id"]}}
+        end
+    end
+  end
+
+  # The only opponent left and their only Command Center, {owner, it}, when nothing they have
+  # alive can be another one: their survival score (the ore value of everything they have alive)
+  # less the Command Center, the units of theirs we see and their other buildings we know of
+  # leaves less than a Command Center's worth unaccounted for.
+  defp last_cc(%View{cc: cc, enemy_survival: survival} = v) when cc != nil and map_size(survival) == 1 do
+    [{owner, worth}] = Map.to_list(survival)
+    known = (v.enemy_buildings ++ v.remembered) |> Enum.filter(&(&1["owner"] == owner)) |> Enum.uniq_by(& &1["id"])
+    value = &Enum.sum_by(&1, fn e -> Map.get(@costs, e["type"], 0) end)
+
+    case Enum.filter(known, &(&1["type"] == "CommandCenter")) do
+      [their_cc] ->
+        units = value.(Enum.filter(v.enemy_units, &(&1["owner"] == owner)))
+        others = value.(Enum.filter(known, &(&1["id"] != their_cc["id"] and &1["completed"] != false)))
+        if worth - @costs["CommandCenter"] - units - others < @costs["CommandCenter"], do: {owner, their_cc}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp last_cc(_v), do: nil
+
+  defp spare_spots(v, owner, cc) do
+    pos = View.pos(cc)
+    home = View.pos(v.cc)
+
+    others =
+      for b <- v.enemy_buildings ++ v.remembered, b["owner"] == owner, b["id"] != cc["id"], do: View.pos(b)
+
+    camp = toward(pos, home, @camp_distance)
+    goal = if others == [], do: camp, else: Enum.min_by(others, &{View.dist(&1, home), &1})
+    %{id: cc["id"], pos: pos, goal: goal, camp: camp, siege_camp: toward(pos, home, @siege_camp_distance)}
   end
 
   # `@staging_distance` short of the target, on our side of it, kept on the map.

@@ -564,14 +564,14 @@ defmodule Swarm.GameLoop do
   end
 
   # A new game's brain memory: the serum is off for it unless `Swarm.serum/1` allows it here
-  # (:practice, the default, leaves it out of league heats).
+  # (:on, the default, allows it everywhere; :practice leaves it out of league heats).
   defp new_memory do
     memory = Brain.new_memory()
 
     allowed? =
       case Ra.state() do
         {:ok, shared, _} ->
-          case Map.get(shared, :serum_mode, :practice) do
+          case Map.get(shared, :serum_mode, :on) do
             :on -> true
             :off -> false
             :practice -> Map.get(shared, :league) == nil

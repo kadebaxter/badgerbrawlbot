@@ -32,8 +32,9 @@ defmodule Swarm.Machine do
       # recorded. Claiming before creating is what keeps two leaders in a handover from both
       # creating one: only one claim is applied, and a new leader finds the match by its name.
       creating: nil,
-      # When to take the serum (`Swarm.serum/1`): :on, :off, or :practice (not in league heats).
-      serum_mode: :practice
+      # When to take the serum (`Swarm.serum/1`): :on (the default: every game, league heats
+      # included), :off, or :practice (not in league heats).
+      serum_mode: :on
     }
   end
 

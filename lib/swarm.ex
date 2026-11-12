@@ -12,7 +12,7 @@ defmodule Swarm do
       Swarm.host(6, name: "kaden-brawl", bots: ["rusher"])   # host a match others join
       Swarm.leave_match()          # give up our seat in a match that hasn't started
       Swarm.leave()    # stop after the current league round, or stop looking for a match to join
-      Swarm.serum(:practice)   # take the serum in practice games only (default); :on everywhere, :off never
+      Swarm.serum(:on)         # take the serum in every game, league heats too (default); :practice not in league, :off never
       Swarm.client()   # a NetRts client for the configured server and key
       Swarm.enemies()  # the enemy fighters the leader remembers, per opponent
   """
@@ -39,7 +39,7 @@ defmodule Swarm do
     IO.puts("""
     leader:  #{leader}
     league:  #{shared[:league] || "none"}#{pending(shared)}
-    serum:   #{Map.get(shared, :serum_mode, :practice)}
+    serum:   #{Map.get(shared, :serum_mode, :on)}
     match:   #{shared[:match_id] || "none"}  (played #{shared[:matches_played]} of #{shared[:matches_wanted]})
     nodes:
     #{Enum.map_join(Units.nodes(), "\n", &"  #{&1}#{if &1 == leader, do: " ★", else: ""}  #{Map.get(per_node, &1, 0)} units")}

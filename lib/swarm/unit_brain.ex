@@ -56,6 +56,8 @@ defmodule Swarm.UnitBrain do
   @melee ["Soldier", "Scout"]
   # A Trebuchet can't hit anything this close: it steps back instead.
   @siege_blind_spot 3
+  # No attack-move this close to a Command Center we spare: an Archer sees 6.
+  @spare_sight 8
 
   # Where a unit steps to get off a tile: sideways first, then diagonally.
   @steps [{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}]
@@ -365,15 +367,15 @@ defmodule Swarm.UnitBrain do
 
     cond do
       # A nearly dead enemy Command Center next to us: finish it, before anything else.
-      cc = Roles.finish_target(v, unit) -> {:attack, cc["id"]}
+      cc = finish_target(v, s, unit) -> {:attack, cc["id"]}
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
       back = regroup_or_retreat(unit, v, s, role) -> {:move, back}
-      enemy = Roles.leftover_target(v, s.wave, unit) -> {:attack, enemy["id"]}
+      enemy = leftover_target(v, s, unit) -> {:attack, enemy["id"]}
       spot = s |> Map.get(:check, %{}) |> Map.get(unit["id"]) -> {:attack_move, spot}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
-      role == :wave -> {:attack_move, s.target}
+      role == :wave -> onward(unit, s, :camp)
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       raze = role == :attacker && Map.get(s, :raze) -> {:attack, raze}
       s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
@@ -504,7 +506,7 @@ defmodule Swarm.UnitBrain do
         role == :siege_out -> {:move, s.rally}
         back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
         holding?(s) -> {:move, s.wave.staging}
-        true -> {:attack_move, s.target}
+        true -> onward(unit, s, :siege_camp)
       end
 
     if carrying_out?(unit, intent, memory.intent),
@@ -513,6 +515,39 @@ defmodule Swarm.UnitBrain do
   end
 
   # The wave waits at its staging point for its Trebuchets.
+  # On with the wave: attack-move to the target. With the last Command Center spared
+  # (`strategy.spare`, see `Swarm.Brain`), no attack-move near it: the game turns one on anything
+  # in sight, that included. So within `@spare_sight` of it a plain move to the goal (what is in
+  # reach on the way is attacked by name, before this), and Trebuchets, whose shots reach it from
+  # most anywhere near, go to their camp out of its reach (`camp` is `:camp` or `:siege_camp`).
+  defp onward(unit, s, camp) do
+    case Map.get(s, :spare) do
+      nil ->
+        {:attack_move, s.target}
+
+      %{} = spare when camp == :siege_camp ->
+        {:attack_move, spare.siege_camp}
+
+      %{} = spare ->
+        if View.dist(View.pos(unit), spare.pos) <= @spare_sight,
+          do: {:move, spare.goal},
+          else: {:attack_move, spare.goal}
+    end
+  end
+
+  # Neither the nearly dead Command Center to finish nor the leftover to hit is the one we spare.
+  defp finish_target(v, s, unit), do: unless_spared(s, Roles.finish_target(v, unit))
+  defp leftover_target(v, s, unit), do: unless_spared(s, Roles.leftover_target(v, s.wave, unit))
+
+  defp unless_spared(_s, nil), do: nil
+
+  defp unless_spared(s, %{"id" => id} = target) do
+    case Map.get(s, :spare) do
+      %{id: ^id} -> nil
+      _ -> target
+    end
+  end
+
   defp holding?(%{wave: %{released: false, staging: {_, _}}}), do: true
   defp holding?(_strategy), do: false
 
