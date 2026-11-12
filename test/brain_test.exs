@@ -268,6 +268,35 @@ defmodule Swarm.BrainTest do
     assert {%{wave: nil}, _, _} = plan(units: away)
   end
 
+  describe "after a defend, the army out at an outpost" do
+    # An outpost depot at (30, 30); the 15 attackers (201..215) stand by it after a defend, the
+    # 7 guards (216..222) are home at the rally point.
+    defp out_at_outpost(extra \\ []) do
+      {attackers, guards} = Enum.split(soldiers(22), 15)
+      [units: Enum.map(attackers, &%{&1 | "x" => 31, "y" => 31}) ++ guards ++ extra,
+       buildings: [building(2, "ResourceDepot", 30, 30)]]
+    end
+
+    test "leaves from where it stands, without walking home first" do
+      assert {%{mode: :attack, wave: %{id: 1, members: members}, why: [{:wave_launched, why}]}, _, _} =
+               plan(out_at_outpost())
+
+      assert members == Enum.to_list(201..215)
+      assert why =~ "wave 1 at player 1: 15 attackers"
+    end
+
+    test "not while the outpost is still under attack" do
+      raider = unit(900, "Soldier", 34, 34, owner: 1)
+      assert {%{mode: :defend, wave: nil}, _, _} = plan(out_at_outpost([raider]))
+    end
+
+    test "too few out there wait, and say where" do
+      {attackers, guards} = Enum.split(soldiers(17), 10)
+      opts = [units: Enum.map(attackers, &%{&1 | "x" => 31, "y" => 31}) ++ guards, buildings: [building(2, "ResourceDepot", 30, 30)]]
+      assert {%{wave: nil, hold: "10 attackers at (31,31) (10 in all), want 15" <> _}, _, _} = plan(opts)
+    end
+  end
+
   test "units trained after the launch follow the wave once five are at the rally point" do
     # Wave 1 is 201..215; seven guards stay home.
     {_, _, memory} = plan(units: soldiers(22))

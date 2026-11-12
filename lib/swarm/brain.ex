@@ -164,6 +164,9 @@ defmodule Swarm.Brain do
   @wave_sight 8
   # How close to the rally point an attacker must be to leave with a wave.
   @staged_radius 3
+  # After a defend, attackers this close together out at an outpost or by our workers may leave
+  # with a wave from there, without walking home first (see `launch_group/4`).
+  @field_radius 6
   # An ordered building that hasn't appeared by then is ordered again.
   @build_timeout_ticks 60
   # A worker sent to finish an abandoned site gets this long to show up before we send another.
@@ -809,7 +812,7 @@ defmodule Swarm.Brain do
         looking?(look, owner) or fresh?(look, owner, v) -> false
         # With a wave out, a scout works in front of it instead (see `Swarm.UnitBrain`).
         memory.wave != nil -> false
-        true -> length(staged(v, nil, rally, @staged_radius)) >= @look_at
+        true -> length(elem(launch_group(v, memory, rally, false), 1)) >= @look_at
       end
 
     if want? do
@@ -1329,6 +1332,57 @@ defmodule Swarm.Brain do
         do: u
   end
 
+  # Who a new wave would take and where it leaves from, as {launch point, attackers}: no more than
+  # the wave may take (`wave_cap/1`), the closest to the launch point first. Normally the
+  # attackers at the rally point (within `@counter_radius` of it for a counterattack). But after a
+  # defend the army is often still out where it fought, at an outpost or by our workers, and
+  # walking it all home first held a 4-to-1 army back for 270 ticks while raiders kept poking at
+  # the outpost. So with nothing attacking us now and too few at the rally point for a wave, the
+  # biggest group out there (`field_group/2`) is the one weighed instead, from where it stands, on
+  # the same launch test.
+  defp launch_group(v, memory, rally, counter?) do
+    at_rally = staged(v, nil, rally, if(counter?, do: @counter_radius, else: @staged_radius))
+    calm_now? = Roles.threat(v) == nil and Roles.help_wanted(v) == []
+
+    field = if calm_now? and length(at_rally) < wave_min(v, memory), do: field_group(v, rally)
+
+    {from, group} =
+      case field do
+        {center, group} when length(group) > length(at_rally) -> {center, group}
+        _ -> {rally, at_rally}
+      end
+
+    {from, group |> Enum.sort_by(&{View.dist(View.pos(&1), from), &1["id"]}) |> Enum.take(wave_cap(v))}
+  end
+
+  # The biggest group of attackers out in the field after a defend: those at one of our bases or
+  # by our workers (`Swarm.Roles.at_home?/2`: where a defend sends them; a recalled wave walking
+  # home in the open doesn't count) and more than `@counter_radius` from the rally point (closer
+  # than that they are on their way in). The group is everyone within `@field_radius` of the
+  # attacker with the most others that close. {its center, the group}, or nil with none out.
+  defp field_group(v, rally) do
+    roles = Roles.home_roles(v, nil)
+
+    out =
+      for u <- Roles.home(v, nil),
+          roles[u["id"]] == :attacker,
+          pos = View.pos(u),
+          View.dist(pos, rally) > @counter_radius,
+          Roles.at_home?(v, pos),
+          do: u
+
+    near = fn center -> Enum.filter(out, &(View.dist(View.pos(&1), center) <= @field_radius)) end
+
+    case out do
+      [] ->
+        nil
+
+      _ ->
+        center = out |> Enum.max_by(&{length(near.(View.pos(&1))), -&1["id"]}) |> View.pos()
+        {center, near.(center)}
+    end
+  end
+
   # A wave holding at its staging point goes in once its Trebuchets are there (or gone), or after
   # `@siege_wait` ticks in case they are stuck.
   defp release(v, %{released: false} = wave, next_wave) do
@@ -1455,11 +1509,8 @@ defmodule Swarm.Brain do
   # fourth element says why we wait.
   defp launch(v, memory, rally, calm?, owner, target) do
     counter? = counter?(memory, v)
-    # No more than the wave may take (`wave_cap/1`), the closest to the rally point first.
-    staged =
-      staged(v, nil, rally, if(counter?, do: @counter_radius, else: @staged_radius))
-      |> Enum.sort_by(&{View.dist(View.pos(&1), rally), &1["id"]})
-      |> Enum.take(wave_cap(v))
+    # Where the wave leaves from: the rally point, or where the army stands after a defend.
+    {from, staged} = launch_group(v, memory, rally, counter?)
     attackers = for {_id, :attacker} <- Roles.home_roles(v, nil), do: 1
 
     # Trebuchets waiting at the rally point go too, if there are enough of them.
@@ -1485,7 +1536,8 @@ defmodule Swarm.Brain do
 
     leaving = %{members: Enum.map(staged ++ siege, & &1["id"])}
     home = Roles.recall(v, leaving)
-    at_rally = "#{length(staged)} attackers at the rally point (#{length(attackers)} in all)"
+    place = if from == rally, do: "the rally point", else: fmt(from)
+    at_rally = "#{length(staged)} attackers at #{place} (#{length(attackers)} in all)"
 
     hold =
       cond do
@@ -1519,7 +1571,7 @@ defmodule Swarm.Brain do
         not ready? ->
           "#{at_rally}, strength #{round(ours)} vs #{@margin} x #{round(theirs)} = #{round(@margin * theirs)} known of player #{owner}"
 
-        (way = target && in_the_way(v, rally, target)) && elem(way, 1) > ours ->
+        (way = target && in_the_way(v, from, target)) && elem(way, 1) > ours ->
           {player, strength} = way
           "#{at_rally}, player #{player}'s army is in the way (#{round(strength)} vs our #{round(ours)})"
 
@@ -1556,7 +1608,7 @@ defmodule Swarm.Brain do
         members: (staged ++ siege) |> Enum.map(& &1["id"]) |> Enum.sort(),
         owner: owner,
         # With siege, everyone holds short of the target until it arrives.
-        staging: if(siege != [], do: staging(v, target, rally)),
+        staging: if(siege != [], do: staging(v, target, from)),
         released: siege == [],
         at: v.tick
       }
