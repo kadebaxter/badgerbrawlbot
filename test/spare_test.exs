@@ -59,6 +59,42 @@ defmodule Swarm.SpareTest do
       assert {%{spare: nil}, _, _} = plan(v)
     end
 
+    test "it comes down in the last 30 ticks" do
+      v = view([units: soldiers(5), buildings: [@their_cc], tick: 1769], 400)
+      assert {%{spare: %{id: 900}}, _, _} = plan(v)
+
+      v = view([units: soldiers(5), buildings: [@their_cc], tick: 1775], 400)
+      assert {%{spare: nil, target: {56, 56}, why: why}, _, %{spare_lifted: true}} = plan(v)
+      assert {:spare_lifted, "25 ticks left: player 1's last Command Center comes down"} in why
+    end
+
+    test "their side of the map is ours to mine: a depot by their ore once home runs short" do
+      # Home ore nearly gone; known ore at (44, 44), on their side (12 from their start, 37 from ours).
+      deposits = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 100}, %{"id" => 60, "x" => 44, "y" => 44, "remaining" => 900}]
+      opts = [units: workers(10), buildings: [@their_cc], deposits: deposits, ore: 200, tick: 100]
+      memory = %{Brain.new_memory() | ore_short_since: 50}
+      depot? = fn {_, commands, _} -> Enum.find(commands, &match?(%{"type" => "Build", "buildingType" => "ResourceDepot"}, &1)) end
+
+      assert %{"x" => x, "y" => y} = depot?.(plan(view(opts, 400), memory))
+      assert View.dist({x, y}, {44, 44}) <= 3
+
+      # Not spared (they could have more): their side stays theirs.
+      refute depot?.(plan(view(opts, 900), memory))
+    end
+
+    test "short of ore at home, the scout looks over the rest of the map, eliminated players' starts first" do
+      fallen = %{"slot" => 2, "eliminated" => true, "startPosition" => %{"x" => 40, "y" => 7}, "score" => %{"survival" => 0}}
+      scout = unit(300, "Scout", 7, 7)
+      v = view([units: [scout | workers(5)], tick: 200], 900, [fallen])
+
+      assert {%{survey: spot}, _, _} = plan(v, %{Brain.new_memory() | ore_short_since: 100})
+      assert View.dist(spot, {40, 7}) <= 3
+
+      # With ore at home, only the rings around our base.
+      assert {%{survey: spot}, _, _} = plan(v)
+      assert View.dist(spot, {7, 7}) <= 20
+    end
+
     test "their army back, stronger than the wave can take on: it comes down after all, for good" do
       wave = for i <- 1..10, do: unit(200 + i, "Soldier", 50, 50)
       army = Map.new(1..12, &{960 + &1, %{"id" => 960 + &1, "type" => "Soldier", "owner" => 1, "hp" => 110, "x" => 56, "y" => 58, "seen" => 100}})

@@ -171,6 +171,9 @@ defmodule Swarm.Brain do
   # Archer's reach (4) of it, so standing there idle nobody shoots it; Trebuchets (reach 7) farther.
   @camp_distance 6
   @siege_camp_distance 9
+  # It comes down this many ticks before the end, for its 400 and the win by elimination: the
+  # army at the camp walks the 6 tiles and knocks its 1500 HP down in about ten.
+  @spare_until 30
   # An ordered building that hasn't appeared by then is ordered again.
   @build_timeout_ticks 60
   # A worker sent to finish an abandoned site gets this long to show up before we send another.
@@ -314,6 +317,9 @@ defmodule Swarm.Brain do
   # scout tries for one spot.
   @survey_rings [10, 20]
   @survey_timeout 40
+  # Once home runs short of ore, the survey goes on over the whole map, on a grid this many tiles
+  # apart (a scout sees 8, so it sees the ore between two spots), and at eliminated players' starts.
+  @far_grid 12
   # Ore kept back for workers (two of them), and how few workers make training them come first.
   @worker_reserve 100
   # The opening: with no Barracks up yet, before this tick, no ore is kept back.
@@ -472,7 +478,11 @@ defmodule Swarm.Brain do
   defp survey(%View{cc: nil}, memory, _terrain), do: {nil, memory, []}
 
   defp survey(%View{} = v, memory, terrain) do
-    spots = survey_spots(v, terrain)
+    # Short of ore at home: the rest of the map too (`far_spots/2`), the eliminated players'
+    # starts first: their ore is untouched, and nothing else looks there.
+    far = if memory.ore_short_since != nil, do: far_spots(v, terrain), else: []
+    first = for p <- far, Enum.any?(v.fallen_starts, &(View.dist(&1, p) <= 3)), do: p
+    spots = Enum.uniq(survey_spots(v, terrain) ++ far)
     seen = for p <- spots, p not in memory.surveyed, View.in_sight?(v, p), do: p
     surveyed = memory.surveyed ++ seen
 
@@ -496,7 +506,7 @@ defmodule Swarm.Brain do
           {nil, done}
 
         true ->
-          next = Enum.min_by(left, &{View.dist(&1, View.pos(scout)), &1})
+          next = Enum.min_by(left, &{&1 not in first, View.dist(&1, View.pos(scout)), &1})
           {%{pos: next, at: v.tick}, [{:survey, "scout #{scout["id"]} looking for ore at #{fmt(next)}, #{length(left)} spots left"}]}
       end
 
@@ -642,12 +652,37 @@ defmodule Swarm.Brain do
         do: spot
   end
 
+  # Spots to look at for ore once home runs short, anywhere on our side of the map (all of it with
+  # the last opponent spared, see `plan/3`): every eliminated player's start, and a grid
+  # `@far_grid` tiles apart, on open ground (the nearest open tile within 3).
+  defp far_spots(%View{} = v, terrain) do
+    rows = List.to_tuple(terrain)
+
+    open? = fn {x, y} ->
+      y in 0..(tuple_size(rows) - 1)//1 and x in 0..(byte_size(elem(rows, y)) - 1)//1 and :binary.at(elem(rows, y), x) == ?.
+    end
+
+    half = div(@far_grid, 2)
+    grid = for x <- half..(v.map_width - 1)//@far_grid, y <- half..(v.map_height - 1)//@far_grid, do: {x, y}
+
+    for {x, y} <- v.fallen_starts ++ grid,
+        View.ours?(v, {x, y}),
+        spot = Enum.find(for(d <- 0..3, dx <- -d..d, dy <- -d..d, do: {x + dx, y + dy}), open?),
+        spot != nil,
+        uniq: true,
+        do: spot
+  end
+
   @spec plan(View.t(), map(), [String.t()]) :: {strategy(), [map()], map()}
   def plan(%View{} = v, memory, terrain) do
     # Memory from an older version may have other keys: keep only the ones we know.
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     {strategy, memory} = strategy(v, memory)
+    # With the last opponent down to the Command Center we spare, their side of the map is ours
+    # too: its ore is looked for and taken like ours. Their start counted as enemy ground left 30
+    # workers idle for the last 600 ticks of a game, with 20,000 ore on the map.
+    v = if Map.get(strategy, :spare), do: %{v | enemy_starts: []}, else: v
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
@@ -1702,7 +1737,8 @@ defmodule Swarm.Brain do
   # takes everything else of theirs, then camps by it (`camp`, `@camp_distance` out: farther than an
   # Archer reaches, so nobody standing there hits it on their own) and kills whatever it makes.
   # Lifted for good (`memory.spare_lifted`) once a wave out is no longer `@margin` times what we
-  # know of their army, the same test a wave leaves on: then it comes down after all.
+  # know of their army, the same test a wave leaves on: then it comes down after all. And in the
+  # last `@spare_until` ticks it comes down anyway.
   # Returns {the spare or nil, what to log, memory}.
   defp spare(v, memory, wave) do
     case last_cc(v) do
@@ -1711,6 +1747,10 @@ defmodule Swarm.Brain do
 
       _ when memory.spare_lifted ->
         {nil, [], memory}
+
+      {owner, _cc} when v.tick >= v.max_ticks - @spare_until ->
+        why = "#{v.max_ticks - v.tick} ticks left: player #{owner}'s last Command Center comes down"
+        {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
 
       {owner, cc} ->
         alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
