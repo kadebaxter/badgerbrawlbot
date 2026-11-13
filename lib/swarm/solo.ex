@@ -6,7 +6,7 @@ defmodule Swarm.Solo do
   """
 
   require Logger
-  alias Swarm.{Brain, Match, NetRts, UnitBrain, View}
+  alias Swarm.{Brain, Match, NetRts, Orders, UnitBrain, View}
 
   def run do
     client = NetRts.new(Match.config(:server), Match.api_key!())
@@ -14,12 +14,13 @@ defmodule Swarm.Solo do
     state = Match.wait_for_start!(client, match_id)
     terrain = Match.terrain!(client, match_id)
 
-    loop(client, match_id, terrain, state, Brain.new_memory(), %{})
+    loop(client, match_id, terrain, state, Brain.new_memory(), %{}, %{})
     Match.report(client, match_id)
   end
 
-  # `minds` is unit id => that unit's own memory.
-  defp loop(client, match_id, terrain, state, memory, minds) do
+  # `minds` is unit id => that unit's own memory; `waited`, unit id => ticks its command has waited
+  # (see `Swarm.Orders`).
+  defp loop(client, match_id, terrain, state, memory, minds, waited) do
     view = View.new(state)
 
     if View.completed?(view) do
@@ -36,11 +37,17 @@ defmodule Swarm.Solo do
           {id, UnitBrain.decide(id, view, strategy, Map.get(minds, id, UnitBrain.new_memory()))}
         end
 
-      unit_commands = for {_id, {cmd, _mind}} <- decisions, cmd != :no_change, do: cmd
-      minds = Map.new(decisions, fn {id, {_cmd, mind}} -> {id, mind} end)
+      unit_commands = for {id, {cmd, _mind}} <- decisions, cmd != :no_change, do: {id, cmd}
 
-      # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
-      Match.submit(client, match_id, view.tick, unit_commands ++ commands)
+      # At most 100, the most urgent, team commands last. A unit cut keeps the memory it had, so
+      # it decides (and sends) it again next tick.
+      {sent, cut} = Orders.pick(unit_commands, commands, view, waited)
+      Match.submit(client, match_id, view.tick, sent)
+
+      minds =
+        Map.new(decisions, fn {id, {_cmd, mind}} ->
+          if MapSet.member?(cut, id), do: {id, Map.get(minds, id, UnitBrain.new_memory())}, else: {id, mind}
+        end)
 
       if rem(view.tick, 20) == 0 do
         Logger.info(
@@ -49,7 +56,7 @@ defmodule Swarm.Solo do
       end
 
       {:ok, next} = NetRts.state(client, match_id, view.tick + 1, view.tick)
-      loop(client, match_id, terrain, next, memory, minds)
+      loop(client, match_id, terrain, next, memory, minds, Orders.waited(waited, cut))
     end
   end
 end

@@ -9,7 +9,8 @@ defmodule Swarm.GameLoop do
     3. decide the team strategy and the building orders (`Swarm.Brain`)
     4. send every unit the state and strategy, and collect their commands until a deadline
     5. commit `{:tick_submitted, tick}` through ra: if that fails we are no longer leader, stop
-    6. post the commands to NetRTS
+    6. post at most 100 commands to NetRTS, the most urgent (`Swarm.Orders`); the units cut, and
+       those too late to answer, are told the next tick (`strategy.resend`) and send theirs again
 
   It keeps nothing that isn't also in the replicated state, so a new leader on another node
   picks up the same match where this one stopped.
@@ -24,7 +25,7 @@ defmodule Swarm.GameLoop do
   # While waiting for a league round, how often to check that we are still in that league.
   @league_check_ms 1_000
   require Logger
-  alias Swarm.{Brain, Decisions, Match, Metrics, NetRts, Ra, Units, View}
+  alias Swarm.{Brain, Decisions, Match, Metrics, NetRts, Orders, Ra, Units, View}
 
   def start_link(_), do: GenServer.start_link(__MODULE__, nil)
 
@@ -39,6 +40,10 @@ defmodule Swarm.GameLoop do
        state: nil,
        memory: nil,
        recent: %{},
+       # Units whose last command didn't go out (cut, or too late to answer), told the next tick
+       # so they send it again, and how many ticks each has waited (see `Swarm.Orders`).
+       resend: MapSet.new(),
+       waited: %{},
        idle: false,
        waiting: false,
        mode: nil,
@@ -493,6 +498,7 @@ defmodule Swarm.GameLoop do
     # The ore we remember goes into the view first: the brain and every unit plan with it.
     {view, memory} = Brain.see(view, st.memory)
     {strategy, commands, memory} = Brain.plan(view, memory, st.terrain)
+    strategy = Map.put(strategy, :resend, st.resend)
 
     if memory != st.memory, do: Ra.command({:brain, memory})
     planned = System.monotonic_time(:millisecond)
@@ -512,7 +518,7 @@ defmodule Swarm.GameLoop do
     deadline_ms = max(100, div((st.state["tickIntervalMs"] || 1000) * 2, 5))
     replies = collect(ref, map_size(units), System.monotonic_time(:millisecond) + deadline_ms, [])
     answered = System.monotonic_time(:millisecond)
-    unit_commands = for {_id, cmd} <- replies, cmd != :no_change, do: cmd
+    unit_commands = for {id, cmd} <- replies, cmd != :no_change, do: {id, cmd}
 
     me = Ra.server_id()
 
@@ -521,8 +527,11 @@ defmodule Swarm.GameLoop do
         {memory, st} = serum(view, strategy, memory, st)
         {key, st} = serum_on(view, memory, st)
 
-        # Team commands last: the latest order for a unit wins, so a builder keeps its Build.
-        {_, gone} = Match.submit(st.client, st.match_id, view.tick, unit_commands ++ commands, key)
+        # At most 100, the most urgent, with team commands last (see `Swarm.Orders`).
+        {sent, cut} = Orders.pick(unit_commands, commands, view, st.waited)
+        {_, gone} = Match.submit(st.client, st.match_id, view.tick, sent, key)
+        answered_ids = MapSet.new(replies, &elem(&1, 0))
+        late = for {id, _pid} <- units, not MapSet.member?(answered_ids, id), into: MapSet.new(), do: id
         # Ore the server says is gone (mined out in the fog): forgotten, so workers move on.
         memory = Brain.forget_ore(memory, gone)
         if gone != [], do: Ra.command({:brain, memory})
@@ -536,6 +545,7 @@ defmodule Swarm.GameLoop do
               "#{strategy.mode}#{wave_info(strategy.wave)} | #{map_size(memory.enemies)} enemy fighters known | " <>
               "#{economy_info(view)} | " <>
               "#{length(replies)}/#{map_size(units)} answered#{hold_info(strategy)}" <>
+              orders_info(length(unit_commands), sent, cut) <>
               timing_info(view, st, done - started, planned - started, answered - planned, deadline_ms, units, replies) <>
               scout_info(view, strategy)
           )
@@ -555,7 +565,8 @@ defmodule Swarm.GameLoop do
           seconds: (System.monotonic_time(:millisecond) - started) / 1000
         })
 
-        {:noreply, %{st | memory: memory, recent: recent, mode: strategy.mode, announce: nil}}
+        {:noreply,
+         %{st | memory: memory, recent: recent, mode: strategy.mode, announce: nil, resend: MapSet.union(cut, late), waited: Orders.waited(st.waited, cut)}}
 
       other ->
         Logger.warning("Lost leadership before tick #{view.tick} (#{inspect(other)}); not sending orders")
@@ -672,6 +683,13 @@ defmodule Swarm.GameLoop do
     " | took #{total}ms of #{tick_ms} (brain #{brain}, units #{waited} of #{deadline_ms}) | on time: #{by_node}" <> late
   end
 
+  # What went out: " | orders 100 (140 from units, 12 waiting)": commands sent, the units'
+  # commands they came from (several units' same command go as one), units cut to the next tick.
+  defp orders_info(from_units, sent, cut) do
+    waiting = if MapSet.size(cut) > 0, do: ", #{MapSet.size(cut)} waiting", else: ""
+    " | orders #{length(sent)} (#{from_units} from units#{waiting})"
+  end
+
   # How the economy is doing: "workers 22 (3 idle) | ore known 20 (14 in sight, 6 in reach)". Known
   # counts the deposits we remember out of sight; in reach is within reach of a finished drop-off.
   defp economy_info(view) do
@@ -688,7 +706,7 @@ defmodule Swarm.GameLoop do
     Match.report(st.client, st.match_id)
     Metrics.clear_game()
     send(self(), :start)
-    {:noreply, %{st | match_id: nil, state: nil, recent: %{}, mode: nil}}
+    {:noreply, %{st | match_id: nil, state: nil, recent: %{}, mode: nil, resend: MapSet.new(), waited: %{}}}
   end
 
   # What each scout is doing and where, e.g. "scouts: 288 wave (51,16), 311 post (40,30) home":

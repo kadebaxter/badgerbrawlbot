@@ -38,13 +38,10 @@ defmodule Swarm.MatchTest do
 
     defp moves(n), do: for(i <- 1..n, do: %{"type" => "Move", "unitIds" => [i], "x" => 1, "y" => 1})
 
-    test "more than 100 commands go in requests of at most 100, in order" do
-      commands = moves(130)
-      assert {:ok, []} = Match.submit(client(), "m", 1, commands)
-      assert_received {:request, first}
-      assert_received {:request, second}
-      assert length(first) == 100 and length(second) == 30
-      assert first ++ second == commands
+    test "one request a tick, never more than 100: the server runs no more than that a tick" do
+      assert {:ok, []} = Match.submit(client(), "m", 1, moves(130))
+      assert_received {:request, sent}
+      assert sent == moves(100)
       refute_received {:request, _}
     end
 

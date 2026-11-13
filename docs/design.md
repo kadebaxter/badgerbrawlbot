@@ -157,16 +157,22 @@ loop:
   send {:tick, tick, state, strategy} once to each node's relay, which works out the team-wide
     answers once (roles, who fights whom) and hands the tick to its units
   collect {:command, tick, unit_id, cmd} until a deadline (~40% of the tick interval)
-  commands = unit commands ++ economy commands (Produce, Research, Rally from buildings)
+  commands = Orders.pick(unit commands, economy commands)
+                                         the same command for many units goes as one; at most 100
+                                         a tick (the server runs no more), economy commands always
+                                         and last, then units in a fight, attacks, moves, gathers
   commit {:tick_submitted, tick}         fails if we are no longer leader → stop
-  POST /matches/{id}/commands           at most 100 a request (the server rejects a whole request
-                                         past that), in order; rejections logged as a warning
+  POST /matches/{id}/commands           one request; rejections logged as a warning
+  next tick's strategy.resend            units cut or too late: they decide again from before that
+                                         decision, so they send it again
 ```
 
 - **Buildings are not units.** Production, research and rally points are part of the leader's
   strategy. Units only command themselves (Move / Attack / Gather / Build / Stop).
-- **Orders persist in the game.** A unit already doing the right thing answers `:no_change`, and
-  late answers are dropped (the unit keeps its previous order). Missing a deadline is never fatal.
+- **Orders persist in the game.** A unit already doing the right thing answers `:no_change`. A
+  late answer, or a command cut to stay within 100, is not sent; the unit keeps its previous order
+  in the game and is told next tick (`strategy.resend`), so it sends the new one again. Missing a
+  deadline is never fatal, and never leaves a unit thinking an order went out that didn't.
 - **A new leader resumes from replicated state.** It already knows the match and strategy, so it
   long-polls the current state and carries on. Cost: a tick or two without new orders.
 - The API key (`nrts_…`) is registered once by hand and stored in a k8s Secret, so any node can

@@ -165,31 +165,28 @@ defmodule Swarm.Match do
     terrain
   end
 
-  # The server takes at most this many commands in one request, and rejects all of them past it.
-  @max_commands 100
-
   @doc """
-  Posts commands, at most #{@max_commands} to a request (the server rejects a whole request past
-  that: with 148 units, every order of a tick was thrown away and nobody moved). The requests go
-  one after another, in order: the latest order for a unit wins. Logs any the server rejected.
+  Posts this tick's commands in one request: at most `Swarm.Orders.limit/0` (the server runs no
+  more than that a tick, and turns a bigger request away whole; `Swarm.Orders.pick/5` picks
+  them). Past that, the rest are dropped here, with a warning. Logs any the server rejected.
   With `serum_key`, they carry the serum.
 
-  Returns `{:ok, gone}` (or `{:error, gone}` if a request didn't get through): the deposits a
+  Returns `{:ok, gone}` (or `{:error, []}` if the request didn't get through): the deposits a
   Gather named that the server says are gone, mined out in the fog, for the brain to forget.
   """
   def submit(client, match_id, tick, commands, serum_key \\ nil)
   def submit(_client, _match_id, _tick, [], _serum_key), do: {:ok, []}
 
   def submit(client, match_id, tick, commands, serum_key) do
-    commands
-    |> Enum.chunk_every(@max_commands)
-    |> Enum.reduce({:ok, []}, fn batch, {status, gone} ->
-      case post(client, match_id, tick, batch, serum_key) do
-        {:ok, more} -> {status, gone ++ more}
-        :error -> {:error, gone}
-      end
-    end)
-    |> then(fn {status, gone} -> {status, Enum.uniq(gone)} end)
+    limit = Swarm.Orders.limit()
+
+    if length(commands) > limit,
+      do: Logger.warning("tick #{tick}: #{length(commands)} commands, only #{limit} go out")
+
+    case post(client, match_id, tick, Enum.take(commands, limit), serum_key) do
+      {:ok, gone} -> {:ok, Enum.uniq(gone)}
+      :error -> {:error, []}
+    end
   end
 
   defp post(client, match_id, tick, commands, serum_key) do

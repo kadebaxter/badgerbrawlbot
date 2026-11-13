@@ -9,6 +9,10 @@ defmodule Swarm.Unit do
   or another.
 
   Between ticks it keeps its own memory (the order it is carrying out, see `Swarm.UnitBrain`).
+  It also keeps the memory it had before its last decision: when the leader didn't send that
+  command (it was cut, see `Swarm.Orders`, or came too late), the next tick says so
+  (`strategy.resend`) and the unit decides again from there. Otherwise it would think the order
+  went out and keep quiet, carrying on with the old one.
   """
 
   use GenServer, restart: :transient
@@ -22,13 +26,23 @@ defmodule Swarm.Unit do
     :ok = :pg.join(:swarm, :units, self())
     :ok = :pg.join(:swarm, {:unit, id}, self())
     Logger.info("#{type} #{id} now controlled from #{node()}")
-    {:ok, %{id: id, type: type, memory: Swarm.UnitBrain.new_memory()}}
+    memory = Swarm.UnitBrain.new_memory()
+    {:ok, %{id: id, type: type, memory: memory, before: memory}}
   end
 
   @impl true
   def handle_info({:tick, ref, leader, view, strategy}, state) do
-    {cmd, memory} = Swarm.UnitBrain.decide(state.id, view, strategy, state.memory)
+    memory = if resend?(strategy, state.id), do: Map.get(state, :before, state.memory), else: state.memory
+    {cmd, next} = Swarm.UnitBrain.decide(state.id, view, strategy, memory)
     send(leader, {:command, ref, state.id, cmd})
-    {:noreply, %{state | memory: memory}}
+    {:noreply, %{state | memory: next, before: memory}}
+  end
+
+  @doc "Whether the leader didn't send this unit's last command (`strategy.resend`)."
+  def resend?(strategy, id) do
+    case Map.get(strategy, :resend) do
+      %MapSet{} = ids -> MapSet.member?(ids, id)
+      _ -> false
+    end
   end
 end
