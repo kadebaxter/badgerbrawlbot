@@ -354,10 +354,12 @@ defmodule Swarm.Brain do
           help: pos() | nil
         }
 
-  # The last opponent's last Command Center, left standing (`spare/3`): its id and where it is;
+  # The last opponent's Command Center, left standing (`spare/3`): its id and where it is;
   # `goal`, where the wave goes (their nearest other building, else `camp`); `camp`, where the
-  # army waits by it, out of its own reach; `siege_camp`, the same for Trebuchets.
-  @type spare :: %{id: integer(), pos: pos(), goal: pos(), camp: pos(), siege_camp: pos()}
+  # army waits by it, out of its own reach; `siege_camp`, the same for Trebuchets; `farm`, whether
+  # they are down to it (nothing else of theirs could be another one), so their side of the map
+  # is ours to mine.
+  @type spare :: %{id: integer(), pos: pos(), goal: pos(), camp: pos(), siege_camp: pos(), farm: boolean()}
 
   # `wave` is the wave that is out: %{id, members}. `next_wave` is the next one's id.
   # `enemies` is enemy fighter id => how it looked when last seen (with "seen", the tick).
@@ -422,7 +424,7 @@ defmodule Swarm.Brain do
       help: nil,
       help_off_at: nil,
       help_off_pos: nil,
-      # The last opponent's last Command Center we leave standing (its id, for logging it once),
+      # The last opponent's Command Center we leave standing ({its id, farm}, for logging each once),
       # and whether that was given up for this match (their army came back; see `spare/3`).
       spared: nil,
       spare_lifted: false
@@ -681,8 +683,9 @@ defmodule Swarm.Brain do
     {strategy, memory} = strategy(v, memory)
     # With the last opponent down to the Command Center we spare, their side of the map is ours
     # too: its ore is looked for and taken like ours. Their start counted as enemy ground left 30
-    # workers idle for the last 600 ticks of a game, with 20,000 ore on the map.
-    v = if Map.get(strategy, :spare), do: %{v | enemy_starts: []}, else: v
+    # workers idle for the last 600 ticks of a game, with 20,000 ore on the map. Not while the rest
+    # of their base still stands: no depots by their towers.
+    v = if match?(%{farm: true}, Map.get(strategy, :spare)), do: %{v | enemy_starts: []}, else: v
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
@@ -758,7 +761,7 @@ defmodule Swarm.Brain do
 
     check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
 
-    # The last opponent's last Command Center stays up (`spare/3`); the wave goes for the rest.
+    # The last opponent's Command Center stays up (`spare/3`); the wave goes for the rest.
     # The wave out at the start of the tick counts too: one called back this tick for their army.
     {spare, spare_why, memory} = spare(v, memory, wave || memory_wave)
     target = if spare, do: spare.goal, else: target
@@ -1732,9 +1735,12 @@ defmodule Swarm.Brain do
     end
   end
 
-  # The last opponent's last Command Center is left standing: killing it ends the match, and with
-  # it our score (economy is all the ore we ever mined, survival all we have alive). So the wave
-  # takes everything else of theirs, then camps by it (`camp`, `@camp_distance` out: farther than an
+  # The last opponent's Command Center is left standing from the moment they are the last one,
+  # whatever else they still have: killing it ends the match, and with it our score (economy is
+  # all the ore we ever mined, survival all we have alive). Nothing hits it, not even the finish of
+  # a nearly dead one (`Roles.finish_target/2`): a wave of 68 took one from full to dead in six ticks
+  # with seven of their buildings still up, 1100 ticks early. So the wave takes everything else of
+  # theirs, then camps by it (`camp`, `@camp_distance` out: farther than an
   # Archer reaches, so nobody standing there hits it on their own) and kills whatever it makes.
   # Lifted for good (`memory.spare_lifted`) once a wave out is no longer `@margin` times what we
   # know of their army, the same test a wave leaves on: then it comes down after all. And in the
@@ -1748,11 +1754,11 @@ defmodule Swarm.Brain do
       _ when memory.spare_lifted ->
         {nil, [], memory}
 
-      {owner, _cc} when v.tick >= v.max_ticks - @spare_until ->
+      {owner, _cc, _farm} when v.tick >= v.max_ticks - @spare_until ->
         why = "#{v.max_ticks - v.tick} ticks left: player #{owner}'s last Command Center comes down"
         {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
 
-      {owner, cc} ->
+      {owner, cc, farm} ->
         alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
         {ours, theirs} = {Roles.strength(alive), enemy_strength(v, memory, owner)}
 
@@ -1760,22 +1766,26 @@ defmodule Swarm.Brain do
           why = "player #{owner}'s army is back (#{round(theirs)} vs our #{round(ours)} out): their last Command Center comes down"
           {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
         else
-          spare = spare_spots(v, owner, cc)
+          spare = Map.put(spare_spots(v, owner, cc), :farm, farm)
 
           why =
-            if memory.spared == cc["id"],
-              do: [],
-              else: [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
+            cond do
+              memory.spared == {cc["id"], farm} -> []
+              farm -> [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
+              true -> [{:spare, "player #{owner} is the last one: their Command Center at #{fmt(spare.pos)} stays up, the rest comes down"}]
+            end
 
-          {spare, why, %{memory | spared: cc["id"]}}
+          {spare, why, %{memory | spared: {cc["id"], farm}}}
         end
     end
   end
 
-  # The only opponent left and their only Command Center, {owner, it}, when nothing they have
-  # alive can be another one: their survival score (the ore value of everything they have alive)
-  # less the Command Center, the units of theirs we see and their other buildings we know of
-  # leaves less than a Command Center's worth unaccounted for.
+  # The only opponent left and the one Command Center of theirs we know of: {owner, it, farm}.
+  # `farm` when nothing they have alive can be another one, or anything much at all: their
+  # survival score (the ore value of everything they have alive) less the Command Center, the
+  # units of theirs we see and their other buildings we know of leaves less than a Command
+  # Center's worth unaccounted for. Two known Command Centers: neither is spared (one can go and
+  # the match goes on).
   defp last_cc(%View{cc: cc, enemy_survival: survival} = v) when cc != nil and map_size(survival) == 1 do
     [{owner, worth}] = Map.to_list(survival)
     known = (v.enemy_buildings ++ v.remembered) |> Enum.filter(&(&1["owner"] == owner)) |> Enum.uniq_by(& &1["id"])
@@ -1785,7 +1795,7 @@ defmodule Swarm.Brain do
       [their_cc] ->
         units = value.(Enum.filter(v.enemy_units, &(&1["owner"] == owner)))
         others = value.(Enum.filter(known, &(&1["id"] != their_cc["id"] and &1["completed"] != false)))
-        if worth - @costs["CommandCenter"] - units - others < @costs["CommandCenter"], do: {owner, their_cc}
+        {owner, their_cc, worth - @costs["CommandCenter"] - units - others < @costs["CommandCenter"]}
 
       _ ->
         nil

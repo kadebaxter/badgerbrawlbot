@@ -34,7 +34,7 @@ defmodule Swarm.SpareTest do
       v = view([units: soldiers(5) ++ workers, buildings: [@their_cc]], 500)
 
       assert {%{spare: spare, target: @camp, why: why}, _, memory} = plan(v)
-      assert %{id: 900, pos: {56, 56}, goal: @camp, camp: @camp, siege_camp: @siege_camp} = spare
+      assert %{id: 900, pos: {56, 56}, goal: @camp, camp: @camp, siege_camp: @siege_camp, farm: true} = spare
       assert {:spare, "player 1's last Command Center at (56,56) stays up: we farm until the end"} in why
 
       # Logged once.
@@ -48,8 +48,24 @@ defmodule Swarm.SpareTest do
       assert {%{spare: %{goal: {54, 54}, camp: @camp}, target: {54, 54}}, _, _} = plan(v)
     end
 
-    test "not when what they have alive could be another Command Center" do
-      v = view([units: soldiers(5), buildings: [@their_cc]], 800)
+    test "spared from the moment they are the last one, their base still up; farming only once it is down" do
+      # Survival 2500: a lot alive we don't see. The Command Center stays up all the same, but
+      # their side of the map isn't ours yet.
+      barracks = building(901, "Barracks", 54, 54, 1)
+      v = view([units: soldiers(5), buildings: [@their_cc, barracks]], 2500)
+
+      assert {%{spare: %{id: 900, goal: {54, 54}, farm: false}, why: why}, _, memory} = plan(v)
+      assert {:spare, "player 1 is the last one: their Command Center at (56,56) stays up, the rest comes down"} in why
+
+      # Down to the Command Center: farming, logged once more.
+      v = view([units: soldiers(5), buildings: [@their_cc]], 400)
+      assert {%{spare: %{farm: true}, why: why}, _, _} = plan(v, memory)
+      assert {:spare, "player 1's last Command Center at (56,56) stays up: we farm until the end"} in why
+    end
+
+    test "not when they have two Command Centers we know of" do
+      second = building(902, "CommandCenter", 40, 56, 1)
+      v = view([units: soldiers(5), buildings: [@their_cc, second]], 800)
       assert {%{spare: nil}, _, _} = plan(v)
     end
 
@@ -78,7 +94,7 @@ defmodule Swarm.SpareTest do
       assert %{"x" => x, "y" => y} = depot?.(plan(view(opts, 400), memory))
       assert View.dist({x, y}, {44, 44}) <= 3
 
-      # Not spared (they could have more): their side stays theirs.
+      # They could have more than the Command Center: spared, but their side stays theirs.
       refute depot?.(plan(view(opts, 900), memory))
     end
 
@@ -111,7 +127,7 @@ defmodule Swarm.SpareTest do
   end
 
   describe "the units" do
-    @spare %{id: 900, pos: {56, 56}, goal: @camp, camp: @camp, siege_camp: @siege_camp}
+    @spare %{id: 900, pos: {56, 56}, goal: @camp, camp: @camp, siege_camp: @siege_camp, farm: true}
     @strategy %{mode: :attack, target: @camp, rally: {10, 10}, post: {9, 9}, threat: nil, wave: %{id: 1, members: [2]}, spare: @spare}
 
     defp decide(unit, strategy, others \\ []) do
@@ -132,6 +148,17 @@ defmodule Swarm.SpareTest do
     test "it kills what comes out of it" do
       worker = unit(950, "Worker", 57, 56, owner: 1)
       assert %{"type" => "Attack", "targetId" => 950} = decide(unit(2, "Soldier", 52, 52), @strategy, [worker])
+    end
+
+    test "the last opponent's Command Center, nearly dead in our reach with their base still up: not finished off" do
+      # Match 1bb2d8d3: 68 attackers took it from 1445 to dead in six ticks, seven buildings still up.
+      soldiers = for i <- 2..21, do: unit(i, "Soldier", 55, 55)
+      barracks = building(901, "Barracks", 53, 53, 1)
+      v = View.new(state(units: soldiers, buildings: [Map.put(@their_cc, "hp", 200), barracks]))
+      strategy = %{@strategy | spare: %{@spare | goal: {53, 53}, farm: false}}
+
+      assert %{"type" => "Attack", "targetId" => 900} = elem(UnitBrain.decide(2, v, %{strategy | spare: nil}), 0)
+      refute match?(%{"targetId" => 900}, elem(UnitBrain.decide(2, v, strategy), 0))
     end
 
     test "a Trebuchet waits farther out, beyond its own reach of it" do
