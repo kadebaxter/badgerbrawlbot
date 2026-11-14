@@ -60,15 +60,27 @@ defmodule Swarm.Roles do
   # Tiles next to a unit: at most this many melee attackers fit around one target.
   @melee_slots 8
 
+  # Fights by group (`groups/2`). Enemy fighters this close to each other are one group.
+  @group_link 3
+  # Our fighters this close to a group are in its fight. A home attacker is in the nearest raid's
+  # from anywhere, when it is worth at least this many Soldiers (a smaller one is for those by it).
+  @involved 10
+  @raid_worth 2
+  # Ready to go in: no farther than this past the group's reach (the gather spot is 2 past it).
+  @ready_margin 3
+  # Go in when we come out at least even (`Swarm.Fight.advantage/2` at 0 or better), as before;
+  # once in, stay until it drops below minus this. The same measure both ways, with room between.
+  @edge 0.15
+
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
   # Trebuchet can't hit anything closer than `min_range`.
   @stats %{
-    "Trebuchet" => %{hp: 150, damage: 40, armor: 0, range: 7, min_range: 3, cooldown: 8},
-    "Worker" => %{hp: 40, damage: 4, armor: 0, range: 1, cooldown: 1},
-    "Soldier" => %{hp: 110, damage: 9, armor: 1, range: 1, cooldown: 1},
-    "Archer" => %{hp: 60, damage: 12, armor: 0, range: 4, cooldown: 2},
-    "Scout" => %{hp: 55, damage: 5, armor: 0, range: 1, cooldown: 1},
-    "GuardTower" => %{hp: 500, damage: 10, armor: 2, range: 5, cooldown: 1}
+    "Trebuchet" => %{hp: 150, damage: 40, armor: 0, range: 7, min_range: 3, cooldown: 8, speed: 0.5},
+    "Worker" => %{hp: 40, damage: 4, armor: 0, range: 1, cooldown: 1, speed: 1.0},
+    "Soldier" => %{hp: 110, damage: 9, armor: 1, range: 1, cooldown: 1, speed: 1.0},
+    "Archer" => %{hp: 60, damage: 12, armor: 0, range: 4, cooldown: 2, speed: 0.9},
+    "Scout" => %{hp: 55, damage: 5, armor: 0, range: 1, cooldown: 1, speed: 2.0},
+    "GuardTower" => %{hp: 500, damage: 10, armor: 2, range: 5, cooldown: 1, speed: 0.0}
   }
 
   # A full-HP Soldier's strength (its HP x damage per tick, the old measure, so numbers stay where
@@ -165,6 +177,7 @@ defmodule Swarm.Roles do
     v = put_shared(v, %{bases: bases(v)})
     v = put_shared(v, %{raiders: raiders(v), help_wanted: help_wanted(v), finishable_ccs: finishable_ccs(v)})
     v = put_shared(v, %{wave: wave, home_roles: home_roles(v, wave)})
+    v = put_shared(v, %{groups: groups(v, wave)})
     v = put_shared(v, %{assignments: assignments(v, wave), home_strength: strength(home(v, wave), v.me)})
     # The lists of units and towers only helped work the rest out: the view already carries them,
     # and it is copied to every unit. Each unit lists them again for itself (`localize/1`).
@@ -415,16 +428,27 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Should home fall back to the towers? When the raiders out of our towers' reach are stronger than
-  everything at home (`all_home_strength/3`). Then fighters at home don't go out to them: they
-  go to the towers by the workers and cover them (`shelter/2`), and fight what follows them there.
+  Should home fall back to the towers? When a raid (a group, `groups/2`, worth `@raid_worth`
+  Soldiers or more) with raiders out of our towers' reach would beat everything we have for it,
+  gathered or not (`away?/1`). Then fighters at home don't go out to it: they go to the towers by
+  the workers and cover them (`shelter/2`), and fight what follows them there. One we would beat
+  is no reason to wait at the towers: they gather and go (a pack parked just out of the towers'
+  reach shot our workers for a hundred ticks while home waited for it to come in).
   """
   def fall_back?(%View{cc: nil}, _wave), do: false
 
   def fall_back?(%View{} = v, wave) do
     case exposed_raiders(v) do
-      [] -> false
-      exposed -> strength(exposed) > all_home_strength(v, wave, exposed)
+      [] ->
+        false
+
+      exposed ->
+        exposed = MapSet.new(exposed, & &1["id"])
+        %{groups: groups} = groups(v, wave)
+
+        Enum.any?(Map.values(groups), fn g ->
+          g.raid and g.worth >= @raid_worth * @soldier and away?(g) and Enum.any?(g.ids, &MapSet.member?(exposed, &1))
+        end)
     end
   end
 
@@ -570,35 +594,38 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Our fighter id => the enemy fighter id it goes after. Falling back (`fall_back?/2`), home
-  fighters don't go after raiders out of our towers' reach: only fight back.
+  Our fighter id => the enemy fighter id it goes after. Anyone may hit what it can hit from where
+  it stands. Going after one is up to the fight its group is in (`groups/2`): only when that says
+  go (`verdict/2`), and only an enemy of that group. So everyone in a fight goes in, or holds off,
+  together, by the same estimate, instead of each by the few around it.
   """
   def assignments(%View{shared: %{wave: wave, assignments: assigned}}, wave), do: assigned
 
   def assignments(%View{} = v, wave) do
-    held_back = if fall_back?(v, wave), do: MapSet.new(exposed_raiders(v), & &1["id"]), else: MapSet.new()
     enemies = Enum.reject(v.enemy_units, &(&1["type"] == "Worker"))
-    # Where we may go after an enemy: `engage?/1` on `odds_for/3`, the one measure, with what it is
-    # made of worked out once for every pair.
-    odds = Map.new(enemies, &{&1["id"], {support_at(v, View.pos(&1)), danger_at(v, View.pos(&1))}})
-    groups = Map.new(fighters(v), &{&1["id"], group_strength(v, &1)})
+    %{groups: groups, of: of} = groups(v, wave)
 
     safe? = fn o, e ->
-      {support, theirs} = odds[e["id"]]
-      engage?({ours_for(v, o, View.pos(e), support, groups[o["id"]]), theirs})
+      case Map.get(of, o["id"]) do
+        nil -> false
+        gid -> MapSet.member?(groups[gid].ids, e["id"]) and verdict(groups[gid], o) == :go
+      end
     end
+
     extra_armor = if enemy_tech_lab?(v), do: 1, else: 0
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
+
+    # The leash (`may_chase?/4`) once per enemy: the wave chases anything, the rest by this.
+    in_wave = MapSet.new(members(wave))
+    home_may = Map.new(enemies, &{&1["id"], may_chase?(v, nil, %{"id" => nil}, &1)})
+    chase? = fn o, e -> MapSet.member?(in_wave, o["id"]) or home_may[e["id"]] end
 
     pairs =
       for o <- fighters(v),
           e <- enemies,
           d = View.dist(View.pos(o), View.pos(e)),
           d <= if(e["type"] == "Trebuchet", do: @siege_engage_radius, else: @engage_radius) + if(o["targetId"] == e["id"], do: @keep_radius, else: 0),
-          hits_now?(e, o) or
-            (safe?.(o, e) and
-               ((may_chase?(v, wave, o, e) and (o["id"] in members(wave) or not MapSet.member?(held_back, e["id"]))) or
-                  fight_back?(e, o))) do
+          hits_now?(e, o) or (safe?.(o, e) and (chase?.(o, e) or fight_back?(e, o))) do
         can_hit_us = if d in Map.get(stats(e), :min_range, 0)..stats(e).range//1, do: 0, else: 1
         siege = if e["type"] == "Trebuchet", do: 0, else: 1
         already_on_it = if o["targetId"] == e["id"], do: 0, else: 1
@@ -835,6 +862,265 @@ defmodule Swarm.Roles do
     d = View.dist(View.pos(enemy), View.pos(ours))
     d in Map.get(stats(enemy), :min_range, 0)..stats(enemy).range//1 or d <= stats(ours).range
   end
+
+  @doc """
+  The fights going on or about to, one per group of enemy fighters, worked out once a tick for
+  everyone (`share/2`), so every one of our fighters in a fight sees the same one and decides the
+  same way, each for itself (`verdict/2`, `Swarm.UnitBrain`).
+
+  A group is enemy fighters in sight (or just out of it, `View`'s `recent_enemies`) within
+  `@group_link` of each other. Our fighters in its fight: those within `@involved` of it, each in
+  the nearest group's; and home attackers, wherever they are, in the nearest raid's (a group in a
+  base or by our workers, `at_home?/2`) worth `@raid_worth` Soldiers or more.
+
+  Each group has:
+
+  - `all`: how the fight goes with all of ours in it, gathered just out of its reach first, and
+    our towers that reach it, against it and its towers (`Swarm.Fight.advantage/2`)
+  - `ready`: the same with only those ready to go in (within `@ready_margin` past its reach)
+  - `gather`: where ours gather, 2 tiles past its reach (and out of its towers'), on the side
+    ours come from
+  - `fallback`: by our tower nearest the gather spot on our side, out of its reach, or nil: where
+    ours stay out of it when it would beat us
+  - `raid`: whether it is in a base or by our workers
+
+  Returns `%{groups: id => group, of: our fighter id => its group's id, by_enemy: enemy id => its group's id}`.
+  """
+  def groups(%View{shared: %{wave: wave, groups: groups}}, wave), do: groups
+  def groups(%View{} = v, wave), do: find_groups(v, wave)
+
+  @doc """
+  What `unit` does about the fight of group `g`, from the group's estimate (`groups/2`):
+
+  - `:go`: those ready come out at least even (`ready` 0 or more); or it is already in (attacking
+    one of them) and it hasn't turned against us (`ready` not below `-@edge`)
+  - `:gather`: all of ours would, gathered first (`all` 0 or more; not below `-@edge` for one
+    already at, or on its way to, the gather spot)
+  - `:away`: it would beat us: stay out of its reach
+
+  The same rule on the same numbers: every unit in the fight gets the same answer, and the margin
+  keeps it from flipping each tick.
+  """
+  def verdict(g, unit) do
+    cond do
+      g.ready >= 0 -> :go
+      committed?(g, unit) and g.ready >= -@edge -> :go
+      g.all >= 0 -> :gather
+      gathering?(g, unit) and g.all >= -@edge -> :gather
+      true -> :away
+    end
+  end
+
+  @doc """
+  Group `g`'s fight as a whole, for the decision log: `:go` (those ready go in), `:gather` (all of
+  ours would win it, gathered) or `:away`. Each unit's own call (`verdict/2`) also keeps those
+  already in, or on their way to the gather spot, where they are within the margin.
+  """
+  def call(g) do
+    cond do
+      g.ready >= 0 -> :go
+      g.all >= 0 -> :gather
+      true -> :away
+    end
+  end
+
+  @doc "Whether group `g` is worth a line in the decision log: some of ours are in it, and it is a real force."
+  def notable?(g), do: g.size > 0 and g.worth >= @raid_worth * @soldier
+
+  @doc "Whether those ready for group `g`'s fight win it: they go in (`verdict/2`)."
+  def going_in?(g), do: g.ready >= 0
+
+  @doc "Whether group `g` would beat us, gathered or not: nobody is going in."
+  def away?(g), do: g.all < 0 and g.ready < 0
+
+  @doc "The group whose fight `unit` (ours) is in (`groups/2`), or nil."
+  def group_for(%View{} = v, wave, unit) do
+    %{groups: groups, of: of} = groups(v, wave)
+
+    case Map.get(of, unit["id"]) do
+      nil -> nil
+      gid -> groups[gid]
+    end
+  end
+
+  @doc "The group enemy fighter `id` is in (`groups/2`), or nil."
+  def group_of_enemy(%View{} = v, wave, id) do
+    %{groups: groups, by_enemy: by_enemy} = groups(v, wave)
+
+    case Map.get(by_enemy, id) do
+      nil -> nil
+      gid -> groups[gid]
+    end
+  end
+
+  @doc "How far `pos` is from group `g`: from its nearest member."
+  def dist_to(g, pos), do: g.spots |> Enum.map(&View.dist(&1, pos)) |> Enum.min()
+
+  @doc "The member of group `g` nearest `pos`, where it stands."
+  def nearest_in(g, pos), do: Enum.min_by(g.spots, &{View.dist(&1, pos), &1})
+
+  defp committed?(g, unit), do: unit["targetId"] != nil and MapSet.member?(g.ids, unit["targetId"])
+
+  defp gathering?(g, unit) do
+    View.dist(View.pos(unit), g.gather) <= 2 or
+      match?(%{"activity" => "Moving", "destination" => %{"x" => _, "y" => _}}, unit) and
+        View.dist({unit["destination"]["x"], unit["destination"]["y"]}, g.gather) <= 3
+  end
+
+  defp find_groups(v, wave) do
+    enemies = Enum.sort_by(enemy_fighters(v) ++ v.recent_enemies, & &1["id"])
+    groups = enemies |> cluster() |> Enum.map(&new_group(v, &1))
+    ours = fighters(v)
+    roles = home_roles(v, wave)
+    in_wave = MapSet.new(members(wave))
+    raids = Enum.filter(groups, &(&1.raid and &1.worth >= @raid_worth * @soldier))
+
+    # Each of our fighters: {it, its group, how far it is from it}.
+    attacker? = fn o -> not MapSet.member?(in_wave, o["id"]) and Map.get(roles, o["id"], :attacker) == :attacker end
+
+    placed =
+      for o <- ours,
+          {g, d} = pick_group(Enum.map(groups, &{&1, dist_to(&1, View.pos(o))}), attacker?.(o), raids),
+          g != nil,
+          do: {o, g.id, d}
+
+    by_group = Enum.group_by(placed, &elem(&1, 1), &{elem(&1, 0), elem(&1, 2)})
+    groups = Enum.map(groups, &estimate(v, &1, Map.get(by_group, &1.id, [])))
+
+    %{
+      groups: Map.new(groups, &{&1.id, &1}),
+      of: Map.new(placed, fn {o, gid, _} -> {o["id"], gid} end),
+      by_enemy: for(g <- groups, id <- g.ids, into: %{}, do: {id, g.id})
+    }
+  end
+
+  # The nearest group within `@involved`; else, for a home attacker, the nearest raid. {nil, nil} for none.
+  defp pick_group(away, attacker?, raids) do
+    near = Enum.filter(away, fn {_g, d} -> d <= @involved end)
+    raid_ids = MapSet.new(raids, & &1.id)
+
+    cond do
+      near != [] -> Enum.min_by(near, fn {g, d} -> {d, g.id} end)
+      attacker? and raids != [] -> away |> Enum.filter(fn {g, _} -> MapSet.member?(raid_ids, g.id) end) |> Enum.min_by(fn {g, d} -> {d, g.id} end)
+      true -> {nil, nil}
+    end
+  end
+
+  # Enemy fighters within `@group_link` of each other, one group (a chain counts).
+  defp cluster(enemies) do
+    enemies
+    |> Enum.reduce([], fn e, clusters ->
+      {touching, rest} = Enum.split_with(clusters, fn c -> Enum.any?(c, &(View.dist(View.pos(&1), View.pos(e)) <= @group_link)) end)
+      [[e | Enum.concat(touching)] | rest]
+    end)
+    |> Enum.map(&Enum.sort_by(&1, fn e -> e["id"] end))
+    |> Enum.sort_by(&hd(&1)["id"])
+  end
+
+  defp new_group(v, members) do
+    %{
+      id: hd(members)["id"],
+      members: members,
+      ids: MapSet.new(members, & &1["id"]),
+      spots: Enum.map(members, &View.pos/1),
+      reach: members |> Enum.map(&range/1) |> Enum.max(),
+      raid: Enum.any?(members, &(at_home?(v, View.pos(&1)) or siege_on_us?(v, &1))),
+      worth: strength(members)
+    }
+  end
+
+  # The group's estimates, and where ours gather and fall back. `ours` is [{fighter, distance}].
+  defp estimate(v, g, ours) do
+    anchor =
+      cond do
+        ours != [] -> center(Enum.map(ours, &View.pos(elem(&1, 0))))
+        v.cc -> View.pos(v.cc)
+        true -> center(g.spots)
+      end
+
+    ours_towers = Enum.filter(our_towers(v), fn t -> Enum.any?(g.spots, &(View.dist(&1, View.pos(t)) <= range(t))) end)
+    their_towers = Enum.filter(enemy_towers(v), fn t -> Enum.any?(g.spots, &(View.dist(&1, View.pos(t)) <= range(t) + 1)) end)
+
+    # Out of their towers' reach too, as far as 8 tiles farther out.
+    edge = nearest_in(g, anchor)
+    covered? = fn pos -> Enum.any?(their_towers, &(View.dist(View.pos(&1), pos) <= range(&1) + 1)) end
+    spots = for n <- (g.reach + 2)..(g.reach + 10), do: clamp_pos(v, beyond(edge, anchor, n))
+    gather = Enum.find(spots, hd(spots), &(not covered?.(&1)))
+    ready = Enum.filter(ours, fn {_o, d} -> d <= g.reach + @ready_margin end)
+
+    all = advantage(v, g, ours, ours_towers, their_towers)
+    ready_adv = if length(ready) == length(ours), do: all, else: advantage(v, g, ready, ours_towers, their_towers)
+
+    # The members themselves stay out: this goes to every unit, and the view carries them already.
+    g
+    |> Map.delete(:members)
+    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge)})
+  end
+
+  # By our tower nearest the gather spot on our side, if it is out of the group's reach; else nil.
+  defp fallback(v, g, gather, edge) do
+    tower = if v.cc && Enum.any?(our_towers(v)), do: shelter(v, gather, edge)
+    if tower && clear_of?(g, tower), do: tower
+  end
+
+  @doc "Whether `pos` is out of group `g`'s reach, with 2 tiles to spare."
+  def clear_of?(g, pos), do: dist_to(g, pos) > g.reach + 2
+
+  # `Swarm.Fight.advantage/2` for `ours` ([{fighter, distance}]) and our towers against the
+  # group and its towers. Ours start where they are, or at the gather spot if farther (the
+  # estimate is for going in together); theirs stand, and shoot once ours come into their reach.
+  defp advantage(v, g, ours, ours_towers, their_towers) do
+    weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
+    armor = Enum.count(v.upgrades, &(&1 in ["Armor1", "Armor2", "Armor3"]))
+    their_armor = if enemy_tech_lab?(v), do: 1, else: 0
+
+    starts = Enum.map(ours, fn {o, d} -> {o, min(d, g.reach + 2)} end)
+    sep = starts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> g.reach + 2 end)
+
+    # Their melee come to meet ours.
+    meet = if Enum.any?(g.members, &(range(&1) == 1)), do: 1, else: 0
+
+    our_side =
+      Enum.map(starts, fn {o, d} -> fighter(o, ceil(max(0, d - range(o)) / (stats(o).speed + meet)), weapons, armor, v.me) end) ++
+        Enum.map(ours_towers, &fighter(&1, 0, weapons, 0, v.me))
+
+    # Ours walk in at a tile a tick; their melee come to meet them.
+    their_side =
+      Enum.map(g.members, fn e ->
+        closing = if range(e) == 1, do: 2, else: 1
+        fighter(e, ceil(max(0, sep - range(e)) / closing), 0, their_armor, nil)
+      end) ++ Enum.map(their_towers, &fighter(&1, max(0, sep - range(&1)), 0, 0, nil))
+
+    Swarm.Fight.advantage(our_side, their_side)
+  end
+
+  defp fighter(u, delay, weapons, armor, me) do
+    s = stats(u)
+
+    order =
+      case u["type"] do
+        "GuardTower" -> 3
+        "Trebuchet" -> 2
+        _ -> if s.range == 1, do: 0, else: 1
+      end
+
+    %{hp: hp(u), armor: s.armor + armor, damage: s.damage + weapons, cooldown: s.cooldown, delay: delay, order: order, value: strength_of(u, me) / max(1, hp(u))}
+  end
+
+  defp center(spots) do
+    n = length(spots)
+    {div(Enum.sum_by(spots, &elem(&1, 0)), n), div(Enum.sum_by(spots, &elem(&1, 1)), n)}
+  end
+
+  # `n` tiles from `from` toward `to`, going past `to` if it is closer.
+  defp beyond({fx, fy} = from, {tx, ty} = to, n) do
+    case View.dist(from, to) do
+      0 -> to
+      d -> {fx + div((tx - fx) * n, d), fy + div((ty - fy) * n, d)}
+    end
+  end
+
+  defp clamp_pos(v, {x, y}), do: {x |> max(0) |> min(v.map_width - 1), y |> max(0) |> min(v.map_height - 1)}
 
   # The enemy's research is hidden, but without a TechLab they can't have Armor upgrades.
   defp enemy_tech_lab?(v), do: Enum.any?(v.enemy_buildings ++ v.remembered, &(&1["type"] == "TechLab"))

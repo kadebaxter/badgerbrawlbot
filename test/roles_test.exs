@@ -306,8 +306,9 @@ defmodule Swarm.RolesTest do
       archer = unit(900, "Archer", 24, 24, owner: 1)
       assert %{"id" => 900} = Roles.target(View.new(state(units: [ours, friend, archer])), nil, ours)
 
-      # Alone against it (an archer is 1.25 soldiers): not chased into more danger.
-      assert Roles.target(View.new(state(units: [ours, archer])), nil, ours) == nil
+      # Alone against two: not chased into more danger.
+      second = unit(901, "Archer", 24, 23, owner: 1)
+      assert Roles.target(View.new(state(units: [ours, archer, second])), nil, ours) == nil
     end
 
     test "out of the base, a building next to a unit going home doesn't keep it there" do

@@ -437,7 +437,7 @@ defmodule Swarm.BrainTest do
     test "one player stronger than the whole wave: it comes back, saying who" do
       wave = for s <- Enum.take(soldiers(10), 10), do: %{s | "x" => 45, "y" => 45}
       memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2}
-      assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched by player 3, strength 9900 vs 11880 nearby"}]}, _, _} =
+      assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched by player 3, strength 9900 vs 11880 nearby"} | _]}, _, _} =
                plan([units: wave ++ army(3, 12, 47, 47, 900)], memory)
     end
 
@@ -496,7 +496,7 @@ defmodule Swarm.BrainTest do
 
     # Without them, it comes back.
     memory = %{memory | wave: %{memory.wave | members: Enum.to_list(201..205)}}
-    assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched" <> _}]}, _, _} = plan([units: front ++ enemies], memory)
+    assert {%{wave: nil, why: [{:wave_recalled, "wave 1: outmatched" <> _} | _]}, _, _} = plan([units: front ++ enemies], memory)
   end
 
   test "recalls the wave when fewer than five of it are left" do

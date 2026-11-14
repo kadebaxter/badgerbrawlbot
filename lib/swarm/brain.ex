@@ -413,6 +413,8 @@ defmodule Swarm.Brain do
       # tick it had reason to (it holds `@fall_back_hold` ticks past that).
       fall_back: false,
       fall_back_at: nil,
+      # Each fight's call last tick (`Roles.call/1`), by group id, for the decision log.
+      fights: %{},
       # Regrouping at the backup Command Center while the main base is overrun: %{pos, at: the last
       # tick it was}, or nil (see `regroup/2`).
       regroup: nil,
@@ -819,6 +821,8 @@ defmodule Swarm.Brain do
     fall_back_at = if Roles.fall_back?(v, wave), do: v.tick, else: memory.fall_back_at
     fall_back = fall_back_at != nil and v.tick - fall_back_at < @fall_back_hold
     why = why ++ fall_back_note(v, wave, fall_back, memory.fall_back)
+    {fights, fight_why} = fight_notes(v, wave, Map.get(memory, :fights, %{}))
+    why = why ++ fight_why
 
     mode =
       cond do
@@ -866,17 +870,48 @@ defmodule Swarm.Brain do
          check: check,
          strike_back_at: strike_back_at,
          fall_back: fall_back,
-         fall_back_at: fall_back_at
+         fall_back_at: fall_back_at,
+         fights: fights
      }}
   end
 
+  # A line for the decision log each time a fight's call changes (`Roles.call/1`): where, against
+  # what, how many of ours, and the estimates behind it.
+  defp fight_notes(v, wave, before) do
+    %{groups: groups} = Roles.groups(v, wave)
+    now = for {id, g} <- groups, Roles.notable?(g), into: %{}, do: {id, Roles.call(g)}
+
+    notes =
+      for {id, call} <- Enum.sort(now), Map.get(before, id) != call do
+        g = groups[id]
+        kinds = (v.enemy_units ++ v.recent_enemies) |> Enum.filter(&MapSet.member?(g.ids, &1["id"])) |> Enum.frequencies_by(& &1["type"])
+        what = kinds |> Enum.sort() |> Enum.map_join(", ", fn {type, n} -> "#{n} #{type}" end)
+        where = if g.raid, do: "raid", else: "fight"
+
+        then =
+          case call do
+            :go -> "go in"
+            :gather -> "gather at #{fmt(g.gather)}"
+            :away -> "stay out of it" <> if(g.fallback, do: " (by our tower at #{fmt(g.fallback)})", else: "")
+          end
+
+        {:fight,
+         "#{where} at #{fmt(Roles.nearest_in(g, g.gather))}: #{what} against #{g.size} of ours, " <>
+           "estimate #{signed(g.all)} all, #{signed(g.ready)} ready: #{then}"}
+      end
+
+    {now, notes}
+  end
+
+  defp signed(x) when x >= 0, do: "+#{Float.round(x * 1.0, 2)}"
+  defp signed(x), do: "#{Float.round(x * 1.0, 2)}"
+
   # A line for the decision log when home starts or stops falling back.
-  defp fall_back_note(v, wave, true, false) do
+  defp fall_back_note(v, _wave, true, false) do
     exposed = Roles.exposed_raiders(v)
-    {theirs, ours} = {Roles.strength(exposed), Roles.all_home_strength(v, wave, exposed)}
 
     [{:fall_back,
-      "#{length(exposed)} raiders out of our towers' reach, strength #{round(theirs)} vs #{round(ours)} at home: " <>
+      "#{length(exposed)} raiders out of our towers' reach that home would lose to, gathered or not: " <>
         "workers and defenders fall back to the towers"}]
   end
 

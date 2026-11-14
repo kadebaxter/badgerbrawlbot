@@ -9,10 +9,13 @@ defmodule Swarm.UnitBrain do
   enemy is about to hit them, or is coming at them out of our towers' reach while we are losing
   there or home is falling back; with nothing safe to mine they wait by a tower. A fighter first works out its role (`Swarm.Roles`), then, in order:
 
-  0. an archer losing the fight around it (the enemy fighters near it are stronger than ours) with
-     an enemy soldier or scout about to reach it: step back toward home, then shoot again from
-     range (kiting). Winning, it stands and shoots: archers are slower than soldiers, so backing
-     off from one they could kill only stops them shooting.
+  0. an archer losing the fight around it (its fight, `Swarm.Roles.verdict/2`, isn't a go; with
+     none, the enemy fighters near it are stronger than ours) with an enemy soldier or scout about
+     to reach it: step back toward home, then shoot again from range (kiting). Winning, it stands
+     and shoots: archers are slower than soldiers, so backing off from one they could kill only
+     stops them shooting.
+  0. in a fight (`Swarm.Roles.groups/2`): what the fight's estimate says, the same for everyone in
+     it: go in, gather just out of its reach, or stay out of it (`in_fight/5`)
   1. something to fight nearby (`Swarm.Roles.target/3`: enemy fighters first, shared out so
      none is overkilled; fighters at home don't chase out of the base): attack it
   2. in the wave: attack-move to the target, or to the threat if the wave turns back
@@ -21,7 +24,8 @@ defmodule Swarm.UnitBrain do
   4. guards and attackers, with an enemy building going up by one of our bases: kill the site
   5. guards and attackers, with enemies at the main base: attack-move to the threat, unless it
      is under an enemy tower (a strike deals with that, not one unit at a time)
-  6. an attacker, with the leader helping somewhere (`strategy.help`): go there
+  6. an attacker, with the leader helping somewhere (`strategy.help`): go there (a plain move until
+     near, then an attack-move)
   7. otherwise go to its spot: guards to the post, attackers to the rally point
 
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
@@ -69,6 +73,8 @@ defmodule Swarm.UnitBrain do
   # attacker this close to the rally point is gathered, and may go help with the rest.
   @group_up 3
   @gathered 5
+  # Helping, a plain move until this close, then an attack-move.
+  @help_near 10
   # A miner moves to other ore once its walk to a drop-off is this much longer than the best's.
   @better_trip 2
   # Ore with an enemy fighter this close is unsafe to mine: archers shoot from 4, so a pack a few
@@ -77,6 +83,8 @@ defmodule Swarm.UnitBrain do
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
+  # An enemy fighter that could hit a worker with this many steps sends it to cover, whatever else.
+  @worker_margin 2
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
   # scout is twice as fast as anything else, so that is enough to get away.
   @scout_margin 2
@@ -215,9 +223,10 @@ defmodule Swarm.UnitBrain do
   defp heading?(%{"activity" => "Moving", "destination" => %{"x" => x, "y" => y}}, spot), do: View.dist({x, y}, spot) <= 1
   defp heading?(_unit, _spot), do: false
 
-  # The closest enemy fighter this worker should run from, or nil: one about to hit it, or, out of
-  # our towers' reach, one coming at it (within `@worker_alarm`) while home is falling back or the
-  # enemies around it are stronger than our fighters there. A miner doesn't wait to be hit.
+  # The closest enemy fighter this worker should run from, or nil: one that could hit it with a
+  # step or two (`@worker_margin`), or, out of our towers' reach, one coming at it (within
+  # `@worker_alarm`) while home is falling back or the fight with its group isn't ours to win
+  # (`Roles.verdict/2` short of go). A miner doesn't wait to be hit.
   defp worker_danger(unit, v, s) do
     here = View.pos(unit)
     enemies = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= @worker_alarm))
@@ -225,10 +234,18 @@ defmodule Swarm.UnitBrain do
 
     cond do
       closest == nil -> nil
-      View.dist(View.pos(closest), here) <= Roles.range(closest) + 1 -> closest
+      View.dist(View.pos(closest), here) <= Roles.range(closest) + @worker_margin -> closest
       Roles.sheltered?(v, here) -> nil
-      Map.get(s, :fall_back, false) or Roles.losing_at?(v, here, @worker_alarm) -> closest
+      Map.get(s, :fall_back, false) or not winning?(v, s, closest) -> closest
       true -> nil
+    end
+  end
+
+  # Whether the fight with `enemy`'s group is ours: all of ours there would win it (`Roles.away?/1`).
+  defp winning?(v, s, enemy) do
+    case Roles.group_of_enemy(v, s.wave, enemy["id"]) do
+      nil -> not Roles.losing_at?(v, View.pos(enemy), @worker_alarm)
+      g -> not Roles.away?(g)
     end
   end
 
@@ -241,21 +258,39 @@ defmodule Swarm.UnitBrain do
 
     tower = if v.cc && Enum.any?(View.buildings_of(v, "GuardTower"), & &1["completed"]), do: Roles.shelter(v, here, there)
 
-    tower ||
+    if tower && not in_danger?(v, tower) do
+      tower
+    else
       (Enum.map(Roles.fighters(v), &View.pos/1) ++ View.drop_offs(v))
-      |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there)))
-      |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
+      |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there) and not in_danger?(v, &1)))
+      |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> tower end)
+    end
+  end
+
+  # Within an enemy fighter's reach plus `@worker_margin` (in sight, or just out of it), or in an
+  # enemy tower's: no place for a worker to mine, drop off or wait.
+  defp in_danger?(v, pos) do
+    Enum.any?(Roles.enemy_fighters(v) ++ v.recent_enemies, &(View.dist(View.pos(&1), pos) <= Roles.range(&1) + @worker_margin)) or
+      Roles.under_tower?(v, pos)
   end
 
   # Ore with an enemy fighter this close, or in reach of an enemy Guard Tower, isn't worth walking
-  # into (worked out once for everyone in `prepare/2`, when it has run).
+  # into; nor is ore whose nearest drop-off (where its miners carry it) is in an enemy's reach
+  # (`in_danger?/2`): 23 workers died walking ore into a depot a pack of archers stood by. Worked
+  # out once for everyone in `prepare/2`, when it has run.
   defp unsafe?(deposit, %View{shared: %{unsafe_ore: unsafe}}), do: MapSet.member?(unsafe, deposit["id"])
   defp unsafe?(deposit, v), do: near_enemy?(deposit, v)
 
-  defp near_enemy?(deposit, v),
-    do:
-      Enum.any?(Roles.enemy_fighters(v), &(View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore)) or
-        Roles.under_tower?(v, View.pos(deposit))
+  defp near_enemy?(deposit, v) do
+    pos = View.pos(deposit)
+
+    Enum.any?(Roles.enemy_fighters(v), &(View.dist(View.pos(&1), pos) <= @unsafe_ore)) or
+      Roles.under_tower?(v, pos) or
+      case View.drop_offs(v) do
+        [] -> false
+        drops -> in_danger?(v, Enum.min_by(drops, &{View.dist(&1, pos), &1}))
+      end
+  end
 
   @doc """
   The view with everything every unit needs about the whole team worked out once
@@ -334,11 +369,14 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # An idle worker with nothing safe to do stands by the tower closest to it, not out in the open.
+  # An idle worker with nothing safe to do stands by the tower closest to it, not out in the open;
+  # if an enemy reaches that, by the closest drop-off none does.
   defp take_cover(%{"activity" => "Idle"} = unit, v) do
     here = View.pos(unit)
+    tower = Roles.shelter(v, here)
+    drops = Enum.sort_by(View.drop_offs(v), &{View.dist(&1, here), &1})
 
-    case Roles.shelter(v, here) do
+    case Enum.find([tower | drops], &(&1 != nil and not in_danger?(v, &1))) || tower do
       {x, y} = spot -> if View.dist(here, spot) > 2, do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}, else: :no_change
       nil -> :no_change
     end
@@ -366,16 +404,19 @@ defmodule Swarm.UnitBrain do
 
   defp intent(unit, v, s) do
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
+    group = Roles.group_for(v, s.wave, unit)
 
     cond do
       # A nearly dead enemy Command Center next to us: finish it, before anything else.
       cc = finish_target(v, s, unit) -> {:attack, cc["id"]}
       # Safe mode: the wave goes for the last opponent's Command Center, and nothing else.
       kill = role == :wave && Map.get(s, :kill) -> go_kill(v, kill)
-      back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
+      back = unit["type"] == "Archer" && outnumbered?(v, unit, group) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
+      # In a fight: what its group's estimate says (`Roles.verdict/2`).
+      fight = group && in_fight(unit, v, s, role, group) -> fight
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
-      back = regroup_or_retreat(unit, v, s, role) -> {:move, back}
+      back = group == nil && regroup_or_retreat(unit, v, s, role) -> {:move, back}
       enemy = leftover_target(v, s, unit) -> {:attack, enemy["id"]}
       spot = s |> Map.get(:check, %{}) |> Map.get(unit["id"]) -> {:attack_move, spot}
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
@@ -383,10 +424,71 @@ defmodule Swarm.UnitBrain do
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
       raze = role == :attacker && Map.get(s, :raze) -> {:attack, raze}
       s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
-      help = role == :attacker && Map.get(s, :help) -> {:attack_move, cover(v, s, help)}
+      help = role == :attacker && Map.get(s, :help) -> to_help(unit, cover(v, s, help))
       role == :guard -> {:move, s.post}
       true -> {:move, s.rally}
     end
+  end
+
+  # A fighter in the fight of `group` (`Roles.groups/2`), by its verdict (`Roles.verdict/2`). Nil
+  # leaves it to the rest of `intent/3`.
+  #
+  # - go: attack its enemy (`Roles.assignments/2` only hands out a group's enemies once it says
+  #   go); at home, with a raid and none handed to it yet, attack-move at the raid. Away from home
+  #   the leash and the wave's own orders carry on.
+  # - gather: to the gather spot, just out of the group's reach, hitting only what it can hit from
+  #   where it stands; at home only for a raid (anything else is not ours to fight).
+  # - away: in the wave, hold at the gather spot (the leader calls the wave off); at home, out of
+  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach.
+  #
+  # The end-of-match push (`all_in`) fights on regardless.
+  defp in_fight(_unit, _v, %{wave: %{all_in: true}}, :wave, _group), do: nil
+
+  defp in_fight(unit, v, s, role, group) do
+    here = View.pos(unit)
+    home? = role != :wave
+    enemy = Roles.fighter_target(v, s.wave, unit)
+
+    case Roles.verdict(group, unit) do
+      :go ->
+        cond do
+          enemy -> {:attack, enemy["id"]}
+          home? and group.raid -> {:attack_move, Roles.nearest_in(group, here)}
+          true -> nil
+        end
+
+      :gather ->
+        cond do
+          enemy && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
+          home? and not group.raid -> nil
+          true -> {:move, group.gather}
+        end
+
+      :away ->
+        back = home? && fallback(v, s, group)
+
+        cond do
+          not home? -> {:move, group.gather}
+          # Already there: it fights what reaches it.
+          enemy && View.dist(here, back) <= 2 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
+          group.raid or Roles.dist_to(group, here) <= group.reach + 2 -> {:move, back}
+          true -> nil
+        end
+    end
+  end
+
+  # Out of the way of a group that would beat us: by our tower on our side (`group.fallback`), else
+  # the rally point, else the Command Center, whichever is first out of its reach.
+  defp fallback(v, s, group) do
+    cc = v.cc && View.pos(v.cc)
+    Enum.find([group.fallback, s.rally, cc], &(&1 != nil and Roles.clear_of?(group, &1))) || s.rally || cc || group.gather
+  end
+
+  # To help at `spot`: an attack-move once near (`@help_near`), a plain move until then. An
+  # attack-move stops for everything on the way: a recalled wave told to help walked through an
+  # enemy base and fought there for a hundred ticks.
+  defp to_help(unit, spot) do
+    if View.dist(View.pos(unit), spot) <= @help_near, do: {:attack_move, spot}, else: {:move, spot}
   end
 
   # The tower shooting at this wave member, if we are strong enough where it stands
@@ -468,7 +570,11 @@ defmodule Swarm.UnitBrain do
     end
   end
 
-  # The enemy fighters within 6 tiles are stronger than ours there.
+  # In a fight, unless its group goes in (`Roles.verdict/2`); else the enemy fighters within 6
+  # tiles are stronger than ours there.
+  defp outnumbered?(_v, unit, %{} = group), do: Roles.verdict(group, unit) != :go
+  defp outnumbered?(v, unit, nil), do: outnumbered?(v, View.pos(unit))
+
   defp outnumbered?(v, here) do
     near? = &(View.dist(View.pos(&1), here) <= 6)
     theirs = Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1)))

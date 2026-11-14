@@ -155,10 +155,27 @@ defmodule Swarm.EconomyTest do
       strategy = @gather |> Map.put(:fall_back, true) |> Map.put(:help, {27, 7})
       v = View.new(state(units: units, buildings: [@tower]))
       {x, y} = @by_tower
-      assert {%{"type" => "Attack", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, strategy)
+      assert {%{"type" => "Move", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, strategy)
 
-      # Holding, it goes to help where the leader says.
-      assert {%{"type" => "Attack", "x" => 27, "y" => 7}, _} = UnitBrain.decide(201, v, Map.put(@gather, :help, {27, 7}))
+      # Even told to help: alone against eight, it stays by the tower.
+      assert {%{"type" => "Move", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, Map.put(@gather, :help, {27, 7}))
+    end
+
+    test "a raid parked out of the towers' reach that home would beat: no falling back, attackers gather and go" do
+      # Twelve at home: 201..205 attackers, the newest seven guards. Three raiders by the workers.
+      units = miners() ++ raid(3) ++ home(12, 10, 10)
+      v = View.new(state(units: units, buildings: [@tower]))
+      refute Roles.fall_back?(v, nil)
+
+      g = Roles.group_for(v, nil, hd(home(1)))
+      assert g.raid and g.all >= 0
+      assert {%{"type" => "Move", "x" => x, "y" => y}, _} = UnitBrain.decide(201, v, @gather)
+      assert {x, y} == g.gather
+
+      # Gathered: they go in.
+      units = miners() ++ raid(3) ++ (home(5, 24, 8) ++ Enum.drop(home(12, 10, 10), 5))
+      v = View.new(state(units: units, buildings: [@tower]))
+      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @gather)
     end
 
     test "a defender out there doesn't take on the raid, only fights back" do

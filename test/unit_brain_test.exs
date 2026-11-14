@@ -129,12 +129,16 @@ defmodule Swarm.UnitBrainTest do
     # Raiders on our workers out in the field; unit 50 is the oldest of eight, an attacker.
     miners = for i <- 1..2, do: unit(100 + i, "Worker", 26, 10, activity: "Gathering")
     others = for i <- 1..7, do: unit(60 + i, "Soldier", 10, 10)
-    raid = for i <- 1..6, do: unit(900 + i, "Soldier", 25, 10, owner: 1)
+    # One raider: too small for every attacker to answer by itself (`Roles.groups/2`).
+    raid = [unit(901, "Soldier", 25, 10, owner: 1)]
     defend = Map.put(%{@gather | mode: :defend}, :help, nil)
-    refute match?(%{"type" => "Attack"}, cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others))
+    refute match?(%{"x" => 25, "y" => 10}, cmd(unit(50, "Soldier", 10, 11), defend, raid ++ miners ++ others))
 
+    # 15 tiles off: a plain move there (an attack-move stops for everything on the way); within
+    # 10, an attack-move.
     helping = %{defend | help: {25, 10}}
-    assert %{"type" => "Attack", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 10, 11), helping, raid ++ miners ++ others)
+    assert %{"type" => "Move", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 10, 11), helping, raid ++ miners ++ others)
+    assert %{"type" => "Attack", "x" => 25, "y" => 10} = cmd(unit(50, "Soldier", 16, 11), helping, miners ++ others)
   end
 
   test "a recalled wave walks home past enemies that aren't fighting it" do
@@ -183,7 +187,7 @@ defmodule Swarm.UnitBrainTest do
       enemy = unit(900, "Soldier", 36, 36, owner: 1)
       v = outpost_view([enemy | army()])
       helping = Map.put(@gather, :help, {36, 36})
-      assert {%{"type" => "Attack", "x" => 36, "y" => 36}, _} = UnitBrain.decide(201, v, helping)
+      assert {%{"type" => "Move", "x" => 36, "y" => 36}, _} = UnitBrain.decide(201, v, helping)
       # Already at its post: stays.
       assert {:no_change, _} = UnitBrain.decide(210, v, helping)
     end
@@ -199,7 +203,7 @@ defmodule Swarm.UnitBrainTest do
     test "attackers go help them; guards stay home" do
       v = field(soldiers(10))
       helping = Map.put(@gather, :help, {40, 40})
-      assert {%{"type" => "Attack", "x" => 40, "y" => 40}, _} = UnitBrain.decide(201, v, helping)
+      assert {%{"type" => "Move", "x" => 40, "y" => 40}, _} = UnitBrain.decide(201, v, helping)
       assert {:no_change, _} = UnitBrain.decide(210, v, helping)
     end
 
@@ -293,7 +297,8 @@ defmodule Swarm.UnitBrainTest do
 
     test "at home, it stands and fights" do
       soldier = unit(900, "Soldier", 12, 11, owner: 1)
-      assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 11, 11), [soldier])
+      friend = unit(3, "Soldier", 10, 10)
+      assert %{"type" => "Attack", "targetId" => 900} = archer_decides(unit(2, "Archer", 11, 11), [soldier, friend])
     end
 
     test "enemy archers don't make it run" do
@@ -361,10 +366,12 @@ defmodule Swarm.UnitBrainTest do
 
     test "an archer keeps stepping off until the shell has landed: its target doesn't call it back" do
       # An archer shooting a soldier in reach, a shell coming down on it at tick 102.
+      # Another archer with it: together they win, so it stands and shoots (no kiting).
       archer = unit(2, "Archer", 20, 20, activity: "Attacking", target_id: 900)
+      friend = unit(3, "Archer", 20, 22)
       enemy = unit(900, "Soldier", 23, 20, owner: 1)
       shell = %{"owner" => 1, "x" => 20, "y" => 20, "firedTick" => 99, "landsTick" => 102}
-      at = fn a, tick -> View.new(state(units: [a, enemy], tick: tick) |> Map.put("shells", [shell])) end
+      at = fn a, tick -> View.new(state(units: [a, friend, enemy], tick: tick) |> Map.put("shells", [shell])) end
 
       {%{"type" => "Move", "x" => x, "y" => y}, memory} = UnitBrain.decide(2, at.(archer, 100), @gather)
 
@@ -377,7 +384,7 @@ defmodule Swarm.UnitBrainTest do
       assert {:no_change, memory} = UnitBrain.decide(2, at.(off, 102), @gather, memory)
 
       # After it lands, back to the fight.
-      v = View.new(state(units: [off, enemy], tick: 103))
+      v = View.new(state(units: [off, friend, enemy], tick: 103))
       assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(2, v, @gather, memory)
     end
 

@@ -224,21 +224,53 @@ so nobody rotates across the map; each outpost also gets a Guard Tower, two once
 
 | Situation | Fighter does |
 |---|---|
-| Archer losing the fight around it (enemy fighters within 6 stronger than ours), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
-| An enemy fighter to fight within 6 tiles (8 for one it is already attacking: a path around a wall can step it out to 7 first), where we are at least as strong as they are (see below) | Attack it |
+| Archer whose fight isn't a "go" (see **Fights by group**), an enemy soldier or scout within 3, away from home | Step 3 tiles back: farther from it, as close to the rally point as possible (kiting) |
+| In a fight (see **Fights by group**) | Go: attack its enemy (at home, attack-move at the raid). Gather: to the gather spot, hitting only what it can reach from where it stands. Away: in the wave, hold at the gather spot; at home, out of its reach, by our tower on our side, else the rally point, else the Command Center |
+| An enemy fighter to fight within 6 tiles (8 for one it is already attacking: a path around a wall can step it out to 7 first), where its fight says go | Attack it |
 | In the wave, in the reach of an enemy tower we know of (in sight or remembered in the fog), with us at least as strong as it there | Attack that tower (walk at it first if we can't see it): only the unit being shot, the rest carry on |
 | Losing where it stands (they are 1.3× us by the same measure that sends it in), with nothing it may fight | In the wave: back to the wave's middle (3+ tiles off), or toward home; at home: back to the rally point. Nobody chases into more danger |
 | Something else to fight within 6 tiles (sites, workers, buildings) | Attack it (see below) |
 | In the wave | Attack-move to the target |
 | Escort | Fight enemies at its outpost if the escorts (all of them) with our fighters and towers there can meet them; a stronger raid, back to the rally point. Else stand 2 tiles out from it toward the enemy |
 | Guard or attacker, enemies near the main base | Attack-move to the threat, together: from the rally point, once everything at home and our towers there are at least as strong as what is there (those already within 6 carry on); otherwise wait at the rally point. Falling back, if no tower of ours reaches it: to the tower closest to it |
-| Attacker, with the leader helping somewhere (`strategy.help`) | Attack-move there (guards stay home); falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
+| Attacker, with the leader helping somewhere (`strategy.help`) | A plain move there until within 10, then an attack-move (an attack-move stops for everything on the way: a recalled wave sent to help fought its way through an enemy base for 100 ticks); guards stay home. Falling back, if no tower of ours reaches it, go to the tower closest to it instead, where the workers run to |
 
 **Towers:** a tower reaches 5 tiles the game's way (diagonals count as one) while a Soldier sees 5
 in a straight line, so a tower often shoots a Soldier that can't see it. The server remembers
 towers we have seen (`rememberedBuildings`), so a wave member in the reach of one we know goes
 for it, walking at it until it is in sight. Only that unit: the rest of the wave goes on, and a
 tower that isn't shooting at a unit is a building like any other to it.
+
+**Fights by group:** our fighters used to judge a fight each from where it stood (our fighters and
+theirs within 6 of it, priced by cost). Two Soldiers ten tiles apart saw different fights, a step
+forward changed the numbers, and a pack of archers parked just out of our towers' reach had our
+fighters walk up, turn back and walk up again while the archers shot our workers. Now each node
+works out, once a tick (`Swarm.Roles.groups/2`, in `prepare/2`), the fights: every group of enemy
+fighters (within 3 tiles of each other, including ones just out of sight), with our fighters in
+it (those within 10 of it, each in the nearest group's, and home attackers from anywhere in the
+nearest raid's, if it is worth 2 Soldiers or more), and for each:
+
+- an estimate of the fight played out tick by tick (`Swarm.Fight.advantage/2`): ours walking in
+  from just out of its reach, theirs shooting as soon as ours are in theirs, damage falling on the
+  front units first, both sides at once. It is our share left minus theirs, -1 to 1. Who hits
+  first decides it: 26 Soldiers going in together beat 23 stacked archers with 18 left; the same
+  26 arriving one a tick all die. Comparing prices can't see that. It is worked out for all of
+  ours in the fight (`all`) and for those ready to go in (within 3 past its reach, `ready`);
+- the gather spot, 2 tiles past its reach (and its towers'), on the side ours come from;
+- the fallback, by our tower on our side, out of its reach.
+
+Each fighter then decides for itself, by the same rule on the same numbers (`Swarm.Roles.verdict/2`):
+go in once those ready come out at least even; while all of us would but those ready wouldn't,
+gather; otherwise stay out of its reach. One already in (attacking one of them) stays in until
+`ready` drops below -0.15, and one on its way to the gather spot keeps going until `all` does:
+the one-measure rule, with a margin, so nobody flips. Nobody gives orders: they move together
+because they see the same fight. Workers run from an enemy fighter within its reach plus 2, and,
+out of our towers' reach, from one within 6 whose fight would beat us; ore whose nearest drop-off
+an enemy reaches (its range plus 2) is unsafe; an idle worker with nothing safe to mine waits by a
+tower or drop-off no enemy reaches. It is cheap: for 300 of ours against 100 of theirs the relay's
+whole `prepare/2` takes about 18 ms (it took 58 before, mostly working out odds for every pair of
+fighters); the groups take 4 of that. The decision log says each fight's call when it changes
+(`fight`).
 
 **Helping:** one decision, made and kept by the leader (`strategy.help`), not by each attacker
 every tick (which turned the group around whenever an archer stepped out of sight). It commits to
@@ -257,12 +289,13 @@ main base still comes first.
 ticks is attacked before anything else (by those within 6 of it), and the wave or strike they are
 in isn't called off meanwhile, whatever its losses: a player is eliminated with their last one.
 
-**Falling back:** when the raiders out of our towers' reach (Trebuchets aside) are stronger than
-everything at home, wherever it stands, home falls back to the towers (`Swarm.Roles.fall_back?/2`,
+**Falling back:** when a raid (2 Soldiers or more) with raiders out of our towers' reach
+(Trebuchets aside) would beat everything we have for it, gathered or not (its fight is "away"),
+home falls back to the towers (`Swarm.Roles.fall_back?/2`,
 `strategy.fall_back`): workers run for cover, defenders gather by the towers nearest the attack to
 cover them and fight whatever follows them there (with the towers), and home fighters don't go
-after those raiders, only fight back against one in range. It is the same comparison that calls
-a wave home, so the wave coming back usually ends it. It holds 15 ticks past the last reason to, so
+after those raiders, only fight back against one in range. A raid we would beat is no reason to wait at
+the towers: the attackers gather and go. It holds 15 ticks past the last reason to, so
 raiders stepping in and out of sight don't flip it every tick.
 
 **Regrouping:** when enemy fighters inside the main base (within 10 of the Command Center) are at
@@ -357,7 +390,8 @@ armor is assumed +1 once we have seen an enemy TechLab, since their research is 
 left over hit a tower shooting at them, then construction sites (worth their full cost
 in destruction at a tenth of the HP and no armor), then workers, then other buildings, and
 Command Centers last (a player is eliminated with their last one, and everything they had left
-is removed with no destruction score for anyone). Nobody chases an enemy into more danger: a fighter only goes after an enemy (or a building)
+is removed with no destruction score for anyone). Nobody chases an enemy into more danger: a fighter only goes after an enemy fighter when its
+fight says go (**Fights by group**), and after a building
 where our fighters and towers there, with it, or the group around it (our fighters within 6 of
 it, who go in with it), whichever is more, are at least as strong as theirs there (their
 fighters, including ones seen in the last 5 ticks that are out of sight now, where we last saw

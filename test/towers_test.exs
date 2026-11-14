@@ -39,9 +39,17 @@ defmodule Swarm.TowersTest do
   end
 
   test "enemy fighters come first" do
+    # Five of us (enough for the tower too) next to an enemy soldier under it.
+    enemy = unit(900, "Soldier", 26, 11, owner: 1)
+    v = view([enemy | soldiers_at(5, 26, 10)], buildings: [@tower])
+    assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(201, v, attacking(5))
+  end
+
+  test "too few for the enemy and its tower: out of both, not into them" do
     enemy = unit(900, "Soldier", 26, 11, owner: 1)
     v = view([enemy | soldiers_at(3, 26, 10)], buildings: [@tower])
-    assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(201, v, attacking(3))
+    assert {%{"type" => "Move", "x" => x, "y" => y}, _} = UnitBrain.decide(201, v, attacking(3))
+    assert View.dist({x, y}, {30, 10}) > 6
   end
 
   test "only the one being shot: a wave member out of its reach carries on" do
@@ -66,16 +74,28 @@ defmodule Swarm.TowersTest do
     assert %{"id" => 799} = Roles.target(v, wave(5), hd(ours))
   end
 
-  test "a group goes in together: the ones behind count, not only those already by the enemy" do
+  test "a group goes in together: the front waits for the ones behind, then all go" do
     # Eight archers in our base at (14, 10). Three of ours 5 tiles from them, seventeen more 5
     # behind those.
     archers = for i <- 1..8, do: unit(900 + i, "Archer", 14, 10, owner: 1)
     front = for i <- 1..3, do: unit(200 + i, "Soldier", 9, 10)
     behind = for i <- 4..20, do: unit(200 + i, "Soldier", 4, 10)
     v = view(archers ++ front ++ behind)
+
+    # All of us win it, but the three ready to go in don't: they wait at the gather spot.
+    g = Roles.group_for(v, nil, hd(front))
+    assert g.all >= 0 and g.ready < 0
+    assert Roles.verdict(g, hd(front)) == :gather
+    assert Roles.target(v, nil, hd(front)) == nil
+    assert View.dist(g.gather, {14, 10}) == 6
+
+    # The rest have come up: everyone goes.
+    behind = for u <- behind, do: %{u | "x" => 8}
+    v = view(archers ++ front ++ behind)
+    assert Roles.verdict(Roles.group_for(v, nil, hd(front)), hd(front)) == :go
     assert %{"id" => _} = Roles.target(v, nil, hd(front))
 
-    # The same three on their own still hold back.
+    # The same three on their own hold back.
     assert Roles.target(view(archers ++ front), nil, hd(front)) == nil
   end
 
