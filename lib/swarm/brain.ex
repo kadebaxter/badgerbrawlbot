@@ -437,7 +437,10 @@ defmodule Swarm.Brain do
       spare_lifted: false,
       # Enemy towers we never saw that shot at us (`towerShots`), id => as a remembered building,
       # until we see the spot without them (see `see/2`).
-      shot_towers: %{}
+      shot_towers: %{},
+      # Safe mode: the spare is over and the wave goes straight for that Command Center, called home
+      # by nothing (%{owner, id, pos}, see `spare/3`), or nil.
+      kill: nil
     }
   end
 
@@ -754,7 +757,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, spare: nil, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
+       fall_back: false, spare: nil, kill: nil, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -764,12 +767,18 @@ defmodule Swarm.Brain do
     attacked? = threat != nil or Roles.help_wanted(v) != []
     owner = opponent(v, memory)
     target = target_of(v, owner)
-    # Called home to defend this tick (all in, nothing comes home).
-    home_recall? = memory.wave != nil and not all_in?(v) and Roles.recall(v, memory.wave) != nil
+    # The last opponent's Command Center stays up (`spare/3`), the wave goes for the rest; or, in
+    # safe mode (`memory.kill`), straight for it. Before the wave is kept or called home: safe mode
+    # is what keeps it out.
+    memory = forget_kill(v, memory)
+    {spare, spare_why, memory} = spare(v, memory, memory.wave)
+    killing? = memory.kill != nil
+    # Called home to defend this tick (all in, or in safe mode, nothing comes home).
+    home_recall? = memory.wave != nil and not all_in?(v) and not killing? and Roles.recall(v, memory.wave) != nil
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     # Called home for an army near home: no new wave for `@calm_ticks` either, counterattack or
     # not: the army is still about, and a wave leaving into it was called straight back.
-    army_recall? = memory.wave != nil and not all_in?(v) and army_near_home(v, memory, memory.wave) != nil
+    army_recall? = memory.wave != nil and not all_in?(v) and not killing? and army_near_home(v, memory, memory.wave) != nil
     memory = if army_recall?, do: %{memory | army_recalled_at: v.tick}, else: memory
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
     {look, looked} = look(memory, v, rally, owner, target)
@@ -792,11 +801,14 @@ defmodule Swarm.Brain do
 
     check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
 
-    # The last opponent's Command Center stays up (`spare/3`); the wave goes for the rest.
-    # The wave out at the start of the tick counts too: one called back this tick for their army.
-    {spare, spare_why, memory} = spare(v, memory, wave || memory_wave)
-    target = if spare, do: spare.goal, else: target
-    why = why ++ spare_why
+    target =
+      cond do
+        killing? -> memory.kill.pos
+        spare -> spare.goal
+        true -> target
+      end
+
+    why = spare_why ++ why
 
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
@@ -831,6 +843,8 @@ defmodule Swarm.Brain do
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
       spare: spare,
+      # Safe mode: the Command Center id every wave member goes for (`Swarm.UnitBrain`), or nil.
+      kill: memory.kill && Map.take(memory.kill, [:id, :pos]),
       survey: nil,
       regroup: nil,
       help: nil
@@ -1316,6 +1330,11 @@ defmodule Swarm.Brain do
       finishing?(v, alive) ->
         {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
 
+      # Safe mode (`spare/3`): it goes for their last Command Center, whatever happens at home or
+      # to it on the way. Their army can't take back what the end of the match keeps.
+      memory.kill != nil and alive != [] ->
+        {%{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive), memory.next_wave, [], nil}
+
       # Its player is out: it comes home, not on into the next one (it walked into the middle and
       # bled last time). The next wave waits for it, and for a look at its target (`launch/6`).
       wave_owner_out?(v, wave) ->
@@ -1773,9 +1792,16 @@ defmodule Swarm.Brain do
   # with seven of their buildings still up, 1100 ticks early. So the wave takes everything else of
   # theirs, then camps by it (`camp`, `@camp_distance` out: farther than an
   # Archer reaches, so nobody standing there hits it on their own) and kills whatever it makes.
-  # Lifted for good (`memory.spare_lifted`) once a wave out is no longer `@margin` times what we
-  # know of their army, the same test a wave leaves on: then it comes down after all. And in the
-  # last `@spare_until` ticks it comes down anyway.
+  # Lifted for good (`memory.spare_lifted`), into safe mode (`memory.kill`: the wave goes straight
+  # for it and nothing calls it home, see `keep_wave/4` and `Swarm.UnitBrain`), when:
+  # - home is losing: what is hitting a base or our workers, or an army coming, is more than home
+  #   can meet (`Roles.recall/2`, `army_near_home/3`: the same tests that call a wave home), and the
+  #   wave is nearer their Command Center than home. Killing it ends the match with the win and
+  #   our score where it is; walking home while they wreck the base only loses it. A wave nearer
+  #   home goes home, as ever.
+  # - their army is back: a wave out is no longer `@margin` times what we know of their army, the
+  #   same test a wave leaves on.
+  # - the last `@spare_until` ticks (out of the match's own `maxTicks`).
   # Returns {the spare or nil, what to log, memory}.
   defp spare(v, memory, wave) do
     case last_cc(v) do
@@ -1785,36 +1811,87 @@ defmodule Swarm.Brain do
       _ when memory.spare_lifted ->
         {nil, [], memory}
 
-      {owner, _cc, _farm} when v.tick >= v.max_ticks - @spare_until ->
+      {owner, cc, _farm} when v.tick >= v.max_ticks - @spare_until ->
         why = "#{v.max_ticks - v.tick} ticks left: player #{owner}'s last Command Center comes down"
-        {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
+        {nil, [{:spare_lifted, why}], kill(memory, owner, cc)}
 
       {owner, cc, farm} ->
         alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
         {ours, theirs} = {Roles.strength(alive), enemy_strength(v, memory, owner)}
+        losing = if wave, do: home_losing(v, memory, wave)
 
-        if wave != nil and ours < @margin * theirs do
-          why = "player #{owner}'s army is back (#{round(theirs)} vs our #{round(ours)} out): their last Command Center comes down"
-          {nil, [{:spare_lifted, why}], %{memory | spare_lifted: true, spared: nil}}
-        else
-          spare = Map.put(spare_spots(v, owner, cc), :farm, farm)
+        cond do
+          losing != nil and nearer_them?(v, alive, View.pos(cc)) ->
+            why = "safe: #{losing}: player #{owner}'s last Command Center comes down instead of the wave coming home"
+            {nil, [{:spare_lifted, why}], kill(memory, owner, cc)}
 
-          hit_by_ours =
-            for s <- v.tower_shots, s["owner"] == v.me, s["targetId"] == cc["id"], rem(v.tick, 10) == 0 do
-              {:spare_hit, "our tower #{s["towerId"]} at #{fmt({s["fromX"], s["fromY"]})} is shooting player #{owner}'s last Command Center"}
-            end
+          wave != nil and ours < @margin * theirs ->
+            why = "safe: player #{owner}'s army is back (#{round(theirs)} vs our #{round(ours)} out): their last Command Center comes down"
+            {nil, [{:spare_lifted, why}], kill(memory, owner, cc)}
 
-          why =
-            hit_by_ours ++
-            cond do
-              memory.spared == {cc["id"], farm} -> []
-              farm -> [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
-              true -> [{:spare, "player #{owner} is the last one: their Command Center at #{fmt(spare.pos)} stays up, the rest comes down"}]
-            end
-
-          {spare, why, %{memory | spared: {cc["id"], farm}}}
+          true ->
+            keep_spare(v, memory, owner, cc, farm)
         end
     end
+  end
+
+  defp kill(memory, owner, cc),
+    do: %{memory | spare_lifted: true, spared: nil, kill: %{owner: owner, id: cc["id"], pos: View.pos(cc)}}
+
+  # Home losing, the way a wave out is called home (`keep_wave/4`): "home under attack (X vs Y at
+  # home)" or "player P's army near home (X vs Y)", or nil.
+  defp home_losing(v, memory, wave) do
+    cond do
+      home = Roles.recall(v, wave) ->
+        {theirs, ours} = home
+        "home under attack (#{round(theirs)} vs #{round(ours)} at home)"
+
+      coming = army_near_home(v, memory, wave) ->
+        {player, theirs, ours} = coming
+        "player #{player}'s army near home (#{round(theirs)} vs #{round(ours)})"
+
+      true ->
+        nil
+    end
+  end
+
+  # Most of the wave is nearer their Command Center than ours (we have one: `last_cc/1` needs it).
+  defp nearer_them?(_v, [], _pos), do: false
+
+  defp nearer_them?(v, alive, pos) do
+    home = View.pos(v.cc)
+    near = Enum.count(alive, &(View.dist(View.pos(&1), pos) < View.dist(View.pos(&1), home)))
+    near * 2 >= length(alive)
+  end
+
+  # Safe mode is over once that Command Center is gone: we see where it stood, and it isn't there
+  # (with a second one somewhere, the match goes on and the wave with it, as any other).
+  defp forget_kill(_v, %{kill: nil} = memory), do: memory
+
+  defp forget_kill(v, %{kill: kill} = memory) do
+    there? = Enum.any?(v.enemy_buildings, &(&1["id"] == kill.id))
+    if not there? and View.in_sight?(v, kill.pos), do: %{memory | kill: nil}, else: memory
+  end
+
+  # Spared: the spots by it, and what to log (when it starts, when farming starts, and any tower
+  # of ours shooting it).
+  defp keep_spare(v, memory, owner, cc, farm) do
+    spare = Map.put(spare_spots(v, owner, cc), :farm, farm)
+
+    hit_by_ours =
+      for s <- v.tower_shots, s["owner"] == v.me, s["targetId"] == cc["id"], rem(v.tick, 10) == 0 do
+        {:spare_hit, "our tower #{s["towerId"]} at #{fmt({s["fromX"], s["fromY"]})} is shooting player #{owner}'s last Command Center"}
+      end
+
+    why =
+      hit_by_ours ++
+        cond do
+          memory.spared == {cc["id"], farm} -> []
+          farm -> [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
+          true -> [{:spare, "player #{owner} is the last one: their Command Center at #{fmt(spare.pos)} stays up, the rest comes down"}]
+        end
+
+    {spare, why, %{memory | spared: {cc["id"], farm}}}
   end
 
   # The only opponent left and the one Command Center of theirs we know of: {owner, it, farm}.

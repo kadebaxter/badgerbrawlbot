@@ -370,6 +370,8 @@ defmodule Swarm.UnitBrain do
     cond do
       # A nearly dead enemy Command Center next to us: finish it, before anything else.
       cc = finish_target(v, s, unit) -> {:attack, cc["id"]}
+      # Safe mode: the wave goes for the last opponent's Command Center, and nothing else.
+      kill = role == :wave && Map.get(s, :kill) -> go_kill(v, kill)
       back = unit["type"] == "Archer" && outnumbered?(v, View.pos(unit)) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
@@ -507,6 +509,7 @@ defmodule Swarm.UnitBrain do
         s.rally == nil -> {:attack_move, s.target}
         role == :siege_out -> {:move, s.rally}
         back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
+        kill = Map.get(s, :kill) -> go_kill(v, kill)
         holding?(s) -> {:move, s.wave.staging}
         true -> onward(unit, s, :siege_camp)
       end
@@ -535,6 +538,13 @@ defmodule Swarm.UnitBrain do
           do: {:move, spare.goal},
           else: {:attack_move, spare.goal}
     end
+  end
+
+  # Safe mode (`strategy.kill`, see `Swarm.Brain`): hit the Command Center by name once we see it
+  # (an attack-move would stop for every worker and building on the way, and they come first in
+  # `Roles.leftover_target/3`); walk to where it stands until then.
+  defp go_kill(v, %{id: id, pos: pos}) do
+    if Enum.any?(v.enemy_buildings, &(&1["id"] == id)), do: {:attack, id}, else: {:move, pos}
   end
 
   # Neither the nearly dead Command Center to finish nor the leftover to hit is the one we spare.

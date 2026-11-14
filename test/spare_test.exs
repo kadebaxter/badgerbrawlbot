@@ -118,11 +118,49 @@ defmodule Swarm.SpareTest do
       v = view([units: wave, buildings: [@their_cc]], 400)
 
       assert {%{spare: nil, why: why}, _, memory} = plan(v, memory)
-      assert Enum.any?(why, &match?({:spare_lifted, "player 1's army is back" <> _}, &1))
+      assert Enum.any?(why, &match?({:spare_lifted, "safe: player 1's army is back" <> _}, &1))
       assert memory.spare_lifted
+      assert %{kill: %{id: 900, pos: {56, 56}}} = memory
 
       # Their army gone again: still not spared.
       assert {%{spare: nil}, _, _} = plan(v, %{memory | enemies: %{}})
+    end
+  end
+
+  describe "safe mode: home losing" do
+    # A wave of 30 out, ten of their Soldiers in our base with nothing home to meet them.
+    defp raided(wave_at) do
+      {x, y} = wave_at
+      wave = for i <- 1..30, do: unit(200 + i, "Soldier", x, y)
+      raid = for i <- 1..10, do: unit(960 + i, "Soldier", 9, 9, owner: 1)
+      memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..230), released: true, owner: 1, at: 50, staging: nil}, next_wave: 2}
+      {view([units: wave ++ raid, buildings: [@their_cc]], 3000), memory}
+    end
+
+    test "the wave by their Command Center doesn't come home: it comes down instead" do
+      {v, memory} = raided({50, 50})
+
+      assert {%{spare: nil, wave: %{id: 1}, target: {56, 56}, kill: %{id: 900, pos: {56, 56}}, why: why}, _, memory} = plan(v, memory)
+      assert Enum.any?(why, &match?({:spare_lifted, "safe: home under attack" <> _}, &1))
+      refute Enum.any?(why, &match?({:wave_recalled, _}, &1))
+
+      # And it stays out, the next tick too.
+      assert {%{wave: %{id: 1}, kill: %{id: 900}}, _, %{spare_lifted: true}} = plan(v, memory)
+    end
+
+    test "a wave nearer home than their Command Center comes home, as ever, and it stays spared" do
+      {v, memory} = raided({15, 15})
+
+      assert {%{spare: %{id: 900}, wave: nil, kill: nil, why: why}, _, %{spare_lifted: false}} = plan(v, memory)
+      assert Enum.any?(why, &match?({:wave_recalled, "wave 1: home under attack" <> _}, &1))
+    end
+
+    test "over once we see the spot and it's gone (a second one somewhere: the match goes on)" do
+      {v, memory} = raided({50, 50})
+      {_, _, memory} = plan(v, memory)
+
+      gone = view([units: [unit(201, "Soldier", 55, 55)]], 3000)
+      assert {%{kill: nil}, _, %{kill: nil}} = plan(gone, memory)
     end
   end
 
@@ -159,6 +197,16 @@ defmodule Swarm.SpareTest do
 
       assert %{"type" => "Attack", "targetId" => 900} = elem(UnitBrain.decide(2, v, %{strategy | spare: nil}), 0)
       refute match?(%{"targetId" => 900}, elem(UnitBrain.decide(2, v, strategy), 0))
+    end
+
+    test "safe mode: straight for the Command Center by name, past the worker by it; walk there until we see it" do
+      strategy = %{@strategy | spare: nil} |> Map.put(:kill, %{id: 900, pos: {56, 56}})
+      worker = unit(950, "Worker", 57, 56, owner: 1)
+      assert %{"type" => "Attack", "targetId" => 900} = decide(unit(2, "Soldier", 52, 52), strategy, [worker])
+      assert %{"type" => "Attack", "targetId" => 900} = decide(unit(2, "Trebuchet", 50, 50), strategy)
+
+      v = View.new(state(units: [unit(2, "Soldier", 20, 20)]))
+      assert %{"type" => "Move", "x" => 56, "y" => 56} = elem(UnitBrain.decide(2, v, strategy), 0)
     end
 
     test "a Trebuchet waits farther out, beyond its own reach of it" do
