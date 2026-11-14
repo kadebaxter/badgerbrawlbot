@@ -170,6 +170,9 @@ defmodule Swarm.Brain do
   # Where the army waits by the last Command Center we leave standing (`spare/3`): out of an
   # Archer's reach (4) of it, so standing there idle nobody shoots it; Trebuchets (reach 7) farther.
   @camp_distance 6
+  # Safe mode takes a real army hitting home: at least this much (`Roles.strength/2`, 5 Soldiers).
+  # One archer with everyone out called it once, and the match ended 1100 ticks early.
+  @safe_raid 5 * 990
   @siege_camp_distance 9
   # It comes down this many ticks before the end, for its 400 and the win by elimination: the
   # army at the camp walks the 6 tiles and knocks its 1500 HP down in about ten.
@@ -1830,8 +1833,9 @@ defmodule Swarm.Brain do
   # Lifted for good (`memory.spare_lifted`), into safe mode (`memory.kill`: the wave goes straight
   # for it and nothing calls it home, see `keep_wave/4` and `Swarm.UnitBrain`), when:
   # - home is losing: what is hitting a base or our workers, or an army coming, is more than home
-  #   can meet (`Roles.recall/2`, `army_near_home/3`: the same tests that call a wave home), and the
-  #   wave is nearer their Command Center than home. Killing it ends the match with the win and
+  #   can meet (`Roles.recall/2`, `army_near_home/3`: the same tests that call a wave home) and
+  #   worth `@safe_raid` or more (a smaller raid only calls the wave home, as ever), and the wave
+  #   is nearer their Command Center than home. Killing it ends the match with the win and
   #   our score where it is; walking home while they wreck the base only loses it. A wave nearer
   #   home goes home, as ever.
   # - their army is back: a wave out is no longer `@margin` times what we know of their army, the
@@ -1873,15 +1877,19 @@ defmodule Swarm.Brain do
   defp kill(memory, owner, cc),
     do: %{memory | spare_lifted: true, spared: nil, kill: %{owner: owner, id: cc["id"], pos: View.pos(cc)}}
 
-  # Home losing, the way a wave out is called home (`keep_wave/4`): "home under attack (X vs Y at
-  # home)" or "player P's army near home (X vs Y)", or nil.
+  # Home losing to a real army (`@safe_raid` or more), the way a wave out is called home
+  # (`keep_wave/4`): "home under attack (X vs Y at home)" or "player P's army near home (X vs Y)",
+  # or nil.
   defp home_losing(v, memory, wave) do
+    home = Roles.recall(v, wave)
+    coming = army_near_home(v, memory, wave)
+
     cond do
-      home = Roles.recall(v, wave) ->
+      match?({theirs, _} when theirs >= @safe_raid, home) ->
         {theirs, ours} = home
         "home under attack (#{round(theirs)} vs #{round(ours)} at home)"
 
-      coming = army_near_home(v, memory, wave) ->
+      match?({_, theirs, _} when theirs >= @safe_raid, coming) ->
         {player, theirs, ours} = coming
         "player #{player}'s army near home (#{round(theirs)} vs #{round(ours)})"
 

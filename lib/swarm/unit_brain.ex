@@ -394,7 +394,7 @@ defmodule Swarm.UnitBrain do
   # The tick the leader takes the serum, every Soldier sends its order again, so that it goes out
   # with the serum key: the serum only boosts Soldiers a command with the key reaches.
   defp fighter(unit, v, strategy, memory) do
-    intent = intent(unit, v, strategy)
+    intent = spare_safe(unit, strategy, intent(unit, v, strategy))
     serum? = Map.get(strategy, :serum) == :take and unit["type"] == "Soldier"
 
     if carrying_out?(unit, intent, memory.intent) and not serum?,
@@ -620,6 +620,8 @@ defmodule Swarm.UnitBrain do
         true -> onward(unit, s, :siege_camp)
       end
 
+    intent = spare_safe(unit, s, intent)
+
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
@@ -645,6 +647,19 @@ defmodule Swarm.UnitBrain do
           else: {:attack_move, spare.goal}
     end
   end
+
+  # Within `@spare_sight` of the Command Center we spare, no attack-move at all, whatever it is
+  # for: the game turns one on anything in sight, that included. A plain move to the same spot.
+  # One check for every order: a wave waiting for its Trebuchets was told to attack-move to its
+  # staging point while standing by it, and 37 Soldiers took it from full to dead in six ticks.
+  defp spare_safe(unit, s, {:attack_move, to} = intent) do
+    case Map.get(s, :spare) do
+      %{pos: spared} -> if View.dist(View.pos(unit), spared) <= @spare_sight, do: {:move, to}, else: intent
+      _ -> intent
+    end
+  end
+
+  defp spare_safe(_unit, _s, intent), do: intent
 
   # Safe mode (`strategy.kill`, see `Swarm.Brain`): hit the Command Center by name once we see it
   # (an attack-move would stop for every worker and building on the way, and they come first in

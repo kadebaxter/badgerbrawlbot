@@ -155,6 +155,16 @@ defmodule Swarm.SpareTest do
       assert Enum.any?(why, &match?({:wave_recalled, "wave 1: home under attack" <> _}, &1))
     end
 
+    test "one archer at home with everyone out isn't an army: the wave comes home, it stays spared" do
+      wave = for i <- 1..30, do: unit(200 + i, "Soldier", 50, 50)
+      archer = unit(961, "Archer", 9, 9, owner: 1)
+      memory = %{Brain.new_memory() | wave: %{id: 1, members: Enum.to_list(201..230), released: true, owner: 1, at: 50, staging: nil}, next_wave: 2}
+      v = view([units: wave ++ [archer], buildings: [@their_cc]], 3000)
+
+      assert {%{spare: %{id: 900}, kill: nil, why: why}, _, %{spare_lifted: false}} = plan(v, memory)
+      refute Enum.any?(why, &match?({:spare_lifted, _}, &1))
+    end
+
     test "over once we see the spot and it's gone (a second one somewhere: the match goes on)" do
       {v, memory} = raided({50, 50})
       {_, _, memory} = plan(v, memory)
@@ -177,6 +187,16 @@ defmodule Swarm.SpareTest do
       soldier = unit(2, "Soldier", 55, 55)
       assert %{"type" => "Attack", "targetId" => 900} = decide(soldier, %{@strategy | spare: nil})
       assert %{"type" => "Move", "x" => 50, "y" => 50} = decide(soldier, @strategy)
+    end
+
+    test "no attack-move by it for any order: a wave waiting for its Trebuchets walks to its staging point" do
+      # Game 82: by it after the last Barracks fell, told to wait at the staging point.
+      holding = %{@strategy | wave: %{id: 1, members: [2], released: false, staging: {49, 49}}}
+      assert %{"type" => "Move", "x" => 49, "y" => 49} = decide(unit(2, "Soldier", 55, 55), holding)
+      # Far from it, as before.
+      assert %{"type" => "Attack", "x" => 49, "y" => 49} = decide(unit(2, "Soldier", 30, 30), holding)
+      # Nor a Trebuchet.
+      assert %{"type" => "Move"} = decide(unit(301, "Trebuchet", 53, 53), %{holding | wave: %{holding.wave | members: [301]}, rally: nil})
     end
 
     test "far from it, the wave attack-moves to the goal" do
