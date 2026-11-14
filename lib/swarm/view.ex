@@ -26,6 +26,12 @@ defmodule Swarm.View do
     researching: [],
     events: [],
     shells: [],
+    # Guard tower shots on the last tick: ours, and any where we can see the tower or its target
+    # (`towerShots`: towerId, owner, fromX/fromY, targetId, x/y). A tower hits at once.
+    tower_shots: [],
+    # Where the last opponent's Command Center we leave standing is (set by `Swarm.Brain.plan/3`),
+    # or nil: no tower of ours goes up in reach of it.
+    spared: nil,
     # In sight, plus remembered ones once `with_known_ore/2` has run (those have a "seen" tick).
     deposits: [],
     enemy_starts: [],
@@ -75,6 +81,7 @@ defmodule Swarm.View do
       events: state["events"] || [],
       # Siege shots in flight: ours, and any landing where we can see.
       shells: state["shells"] || [],
+      tower_shots: state["towerShots"] || [],
       map_width: state["mapWidth"],
       players: length(state["players"]),
       map_height: state["mapHeight"],

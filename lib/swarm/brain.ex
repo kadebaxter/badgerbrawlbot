@@ -174,6 +174,8 @@ defmodule Swarm.Brain do
   # It comes down this many ticks before the end, for its 400 and the win by elimination: the
   # army at the camp walks the 6 tiles and knocks its 1500 HP down in about ten.
   @spare_until 30
+  # How far a Guard Tower shoots (ours or theirs).
+  @tower_reach 5
   # An ordered building that hasn't appeared by then is ordered again.
   @build_timeout_ticks 60
   # A worker sent to finish an abandoned site gets this long to show up before we send another.
@@ -195,6 +197,9 @@ defmodule Swarm.Brain do
     "Harvesting2" => 200,
     "Weapons2" => 250,
     "Armor2" => 250,
+    "Armor3" => 350,
+    "Fortify1" => 150,
+    "Fortify2" => 250,
     "SiegeEngineering" => 200,
     "SiegeWorkshop" => 250,
     "Trebuchet" => 350
@@ -326,8 +331,10 @@ defmodule Swarm.Brain do
   @opening_ticks 300
   @rebuild_workers 5
 
-  # Each tier 2 comes after its tier 1, and a TechLab researches one at a time.
-  @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2"]
+  # Each tier comes after the one before it (`@research_needs`), and a TechLab researches one at a
+  # time. Fortify: +1 armor for every finished building (towers, outposts) each tier.
+  @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2", "Fortify1", "Armor3", "Fortify2"]
+  @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
 
@@ -427,7 +434,10 @@ defmodule Swarm.Brain do
       # The last opponent's Command Center we leave standing ({its id, farm}, for logging each once),
       # and whether that was given up for this match (their army came back; see `spare/3`).
       spared: nil,
-      spare_lifted: false
+      spare_lifted: false,
+      # Enemy towers we never saw that shot at us (`towerShots`), id => as a remembered building,
+      # until we see the spot without them (see `see/2`).
+      shot_towers: %{}
     }
   end
 
@@ -448,7 +458,26 @@ defmodule Swarm.Brain do
       |> Map.merge(seen)
 
     v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies)}
-    {View.with_known_ore(v, ore), %{memory | ore: ore}}
+    shot_towers = shot_towers(v, memory.shot_towers)
+    v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
+    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
+  end
+
+  # An enemy tower that shot at us from the fog (`towerShots` names it and where it stands) is
+  # known from then on, like one we saw, so we keep out of its reach. Forgotten once the server
+  # has it (in sight, or remembered), or we see the spot and it isn't there (destroyed).
+  defp shot_towers(%View{} = v, known) do
+    shot =
+      for s <- v.tower_shots, s["owner"] != v.me, into: %{} do
+        {s["towerId"],
+         %{"id" => s["towerId"], "type" => "GuardTower", "owner" => s["owner"], "x" => s["fromX"], "y" => s["fromY"], "hp" => 500, "completed" => true, "seen" => v.tick}}
+      end
+
+    listed = MapSet.new(v.enemy_buildings ++ v.remembered, & &1["id"])
+
+    known
+    |> Map.merge(shot)
+    |> Map.reject(fn {id, t} -> MapSet.member?(listed, id) or (not Map.has_key?(shot, id) and View.in_sight?(v, View.pos(t))) end)
   end
 
   # Enemy fighters out of sight now that we saw in the last `@recent_enemy_ticks` ticks, where we
@@ -686,6 +715,8 @@ defmodule Swarm.Brain do
     # workers idle for the last 600 ticks of a game, with 20,000 ore on the map. Not while the rest
     # of their base still stands: no depots by their towers.
     v = if match?(%{farm: true}, Map.get(strategy, :spare)), do: %{v | enemy_starts: []}, else: v
+    # And no tower of ours goes up in its reach: towers shoot buildings too, once no unit is near.
+    v = %{v | spared: Map.get(strategy, :spare) && strategy.spare.pos}
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
@@ -1768,7 +1799,13 @@ defmodule Swarm.Brain do
         else
           spare = Map.put(spare_spots(v, owner, cc), :farm, farm)
 
+          hit_by_ours =
+            for s <- v.tower_shots, s["owner"] == v.me, s["targetId"] == cc["id"], rem(v.tick, 10) == 0 do
+              {:spare_hit, "our tower #{s["towerId"]} at #{fmt({s["fromX"], s["fromY"]})} is shooting player #{owner}'s last Command Center"}
+            end
+
           why =
+            hit_by_ours ++
             cond do
               memory.spared == {cc["id"], farm} -> []
               farm -> [{:spare, "player #{owner}'s last Command Center at #{fmt(spare.pos)} stays up: we farm until the end"}]
@@ -2221,7 +2258,7 @@ defmodule Swarm.Brain do
         gated? and not rich?(v) -> {:halt, nil}
         # Rich, a depot still waits for its workers; the rest of the order goes on.
         gated? and type == "ResourceDepot" -> {:cont, nil}
-        site = site(terrain, v, where, avoid) -> {:halt, {type, site}}
+        (site = site(terrain, v, where, avoid)) && clear_of_spared?(v, type, site) -> {:halt, {type, site}}
         true -> {:cont, nil}
       end
     end)
@@ -2239,7 +2276,7 @@ defmodule Swarm.Brain do
       |> Enum.reject(fn o -> Enum.count(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) >= wanted end)
       |> Enum.find_value(fn o ->
         site = site(terrain, v, {:outpost, o})
-        site && {"GuardTower", site}
+        if site && clear_of_spared?(v, "GuardTower", site), do: {"GuardTower", site}
       end)
     end
   end
@@ -2330,7 +2367,10 @@ defmodule Swarm.Brain do
     lab = Enum.find(View.buildings_of(v, "TechLab"), &(&1["completed"] and &1["research"] == nil))
     upgrade =
       Enum.find(@research, fn u ->
-        u not in v.upgrades and u not in v.researching and (u != "SiegeEngineering" or siege_time?(v))
+        needs = @research_needs[u]
+
+        u not in v.upgrades and u not in v.researching and (needs == nil or needs in v.upgrades) and
+          (u != "SiegeEngineering" or siege_time?(v))
       end)
 
     if lab && upgrade && ore >= @costs[upgrade] do
@@ -2586,11 +2626,18 @@ defmodule Swarm.Brain do
   end
 
   # Ore worth a depot: on our side (closer to our Command Center than to any enemy's start, so
-  # never a contested deposit between two players), and not where we just lost a building.
+  # never a contested deposit between two players), not where we just lost a building, and not in
+  # reach of an enemy tower.
   defp safe_ore?(%View{} = v, deposit, avoid) do
     pos = View.pos(deposit)
-    View.ours?(v, pos) and not Enum.any?(avoid, &(View.dist(&1, pos) <= 4))
+    View.ours?(v, pos) and not Enum.any?(avoid, &(View.dist(&1, pos) <= 4)) and not Roles.under_tower?(v, pos)
   end
+
+  # Towers shoot buildings too, once no unit is in reach: a Guard Tower of ours in reach of the
+  # Command Center we spare (`v.spared`) would end the match on its own. Not there.
+  defp clear_of_spared?(%View{spared: nil}, _type, _site), do: true
+  defp clear_of_spared?(_v, type, _site) when type != "GuardTower", do: true
+  defp clear_of_spared?(%View{spared: spared}, _type, site), do: View.dist(site, spared) > @tower_reach + 1
 
   # By the field around `target`, two tiles from as many of its deposits as possible: a worker
   # on the tile between depot and deposit mines and banks without a step (units stack, so they
@@ -2621,7 +2668,9 @@ defmodule Swarm.Brain do
           x in 0..(width - 1)//1 and y in 0..(height - 1)//1,
           String.at(Enum.at(terrain, y), x) == ".",
           not Enum.any?(buildings, &(View.dist(&1, {x, y}) <= 1)),
-          not Enum.any?(ore, &(View.dist(&1, {x, y}) <= 1)) do
+          not Enum.any?(ore, &(View.dist(&1, {x, y}) <= 1)),
+          # Towers shoot buildings too: nothing goes up in reach of an enemy one.
+          not Roles.under_tower?(v, {x, y}) do
         {score.({x, y}, d), {x, y}}
       end
 

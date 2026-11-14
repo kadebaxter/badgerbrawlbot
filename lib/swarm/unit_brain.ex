@@ -247,13 +247,15 @@ defmodule Swarm.UnitBrain do
       |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
   end
 
-  # Ore with an enemy fighter this close isn't worth walking into (worked out once for everyone in
-  # `prepare/2`, when it has run).
+  # Ore with an enemy fighter this close, or in reach of an enemy Guard Tower, isn't worth walking
+  # into (worked out once for everyone in `prepare/2`, when it has run).
   defp unsafe?(deposit, %View{shared: %{unsafe_ore: unsafe}}), do: MapSet.member?(unsafe, deposit["id"])
   defp unsafe?(deposit, v), do: near_enemy?(deposit, v)
 
   defp near_enemy?(deposit, v),
-    do: Enum.any?(Roles.enemy_fighters(v), &(View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore))
+    do:
+      Enum.any?(Roles.enemy_fighters(v), &(View.dist(View.pos(&1), View.pos(deposit)) <= @unsafe_ore)) or
+        Roles.under_tower?(v, View.pos(deposit))
 
   @doc """
   The view with everything every unit needs about the whole team worked out once

@@ -186,19 +186,21 @@ defmodule Swarm.Roles do
 
   @doc """
   Enemy Command Centers nearly dead: our fighters within `@engage_radius` of one can bring it down
-  in `@finish_ticks` ticks (their hits, its armor of 2 taken off, over that many ticks, are at
-  least its HP). A player is eliminated with their last one, and everything they had goes with
+  in `@finish_ticks` ticks (their hits, its armor taken off, over that many ticks, are at least
+  its HP). Its armor is 2, and one more once they have a TechLab: Fortify adds up to 2, and we
+  can't see their upgrades. A player is eliminated with their last one, and everything they had goes with
   it: finishing one comes before anything else, including calling a wave off.
   """
   def finishable_ccs(%View{} = v) do
     View.cached(v, :finishable_ccs, fn ->
       weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
+      armor = if enemy_tech_lab?(v), do: 3, else: 2
 
       for b <- v.enemy_buildings,
           b["type"] == "CommandCenter",
           by = Enum.filter(fighters(v), &(View.dist(View.pos(&1), View.pos(b)) <= @engage_radius)),
           by != [],
-          per_tick = Enum.sum_by(by, &(max(1, stats(&1).damage + weapons - 2) / stats(&1).cooldown)),
+          per_tick = Enum.sum_by(by, &(max(1, stats(&1).damage + weapons - armor) / stats(&1).cooldown)),
           (b["hp"] || 1500) <= per_tick * @finish_ticks,
           do: b
     end)
@@ -521,8 +523,9 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Finished enemy Guard Towers we know of: those in sight, and those the server remembers for us
-  (`rememberedBuildings`: seen before, hidden by fog now, where we last saw them).
+  Finished enemy Guard Towers we know of: those in sight, and those remembered
+  (`rememberedBuildings`: seen before, hidden by fog now, where we last saw them; and towers we
+  never saw that shot at us, from `towerShots`, see `Swarm.Brain.see/2`).
   """
   def enemy_towers(%View{} = v), do: View.cached(v, :enemy_towers, fn -> known_towers(v) end)
 
@@ -543,11 +546,27 @@ defmodule Swarm.Roles do
     here = View.pos(unit)
 
     if unit["id"] in members(wave) do
-      v
-      |> enemy_towers()
-      |> Enum.filter(&(View.dist(View.pos(&1), here) <= range(&1)))
-      |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
+      towers = enemy_towers(v)
+      # The server says which towers shot it last tick; else any that has it in reach.
+      shooting = shot_by(v, unit["id"])
+      hitting = Enum.filter(towers, &(&1["id"] in shooting))
+      hitting = if hitting == [], do: Enum.filter(towers, &(View.dist(View.pos(&1), here) <= range(&1))), else: hitting
+      Enum.min_by(hitting, &{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
     end
+  end
+
+  @doc "Ids of the enemy towers that shot unit or building `id` last tick (`towerShots`)."
+  def shot_by(%View{} = v, id) do
+    for s <- v.tower_shots, s["owner"] != v.me, s["targetId"] == id, do: s["towerId"]
+  end
+
+  @doc """
+  Whether `pos` is within reach of an enemy Guard Tower we know of, plus `margin`. Towers shoot
+  buildings too, once no unit is in reach: nothing of ours goes up there, and no ore there is
+  safe to mine.
+  """
+  def under_tower?(%View{} = v, pos, margin \\ 1) do
+    Enum.any?(enemy_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1) + margin))
   end
 
   @doc """
