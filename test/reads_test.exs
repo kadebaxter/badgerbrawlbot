@@ -87,9 +87,11 @@ defmodule Swarm.ReadsTest do
   describe "floods on two sides" do
     @flood %{kind: :flood, candidate: :flood, since: 150, looked: true, scouts: 0, trebuchets: 0}
     # Us at (7, 7) with neighbors at (56, 7) and (7, 56).
-    defp three(opts) do
-      s = state([tick: 250] ++ opts)
-      other = fn slot, x, y -> %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}, "score" => %{"survival" => 5000, "economy" => 3000, "total" => 8000}} end
+    # `alive` is the ore value of all each has alive, by the scoreboard: with our 20 workers taken
+    # off it, 1,500 is ten Soldiers' worth of army.
+    defp three(opts, alive \\ 1500) do
+      s = state(Keyword.put_new(opts, :tick, 250))
+      other = fn slot, x, y -> %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}, "score" => %{"survival" => alive, "economy" => 3000, "total" => 8000}} end
       View.new(%{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ [other.(1, 56, 7), other.(2, 7, 56)]})
     end
 
@@ -115,6 +117,27 @@ defmodule Swarm.ReadsTest do
 
       # Thirty of ours: as many as the bigger of them, and the rest gets its share again.
       {_, commands, _} = Brain.plan(three(Keyword.put(opts, :units, workers(20) ++ soldiers(30))), looked(floods, 1, 250), terrain())
+      refute army_first?(commands)
+    end
+
+    test "with two or more opponents in, a neighbor's army by the scoreboard is a floor too: no read needed" do
+      barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
+      opts = [units: workers(20) ++ soldiers(12), buildings: barracks ++ [building(20, "TechLab", 10, 12)], ore: 450]
+
+      # 4,000 ore alive each, less our 20 workers' worth: thirty Soldiers against our twelve.
+      {_, commands, _} = Brain.plan(three(opts, 4000), Brain.new_memory(), terrain())
+      assert army_first?(commands)
+
+      # Thirty of ours: the rest gets its share again.
+      {_, commands, _} = Brain.plan(three(Keyword.put(opts, :units, workers(20) ++ soldiers(30)), 4000), Brain.new_memory(), terrain())
+      refute army_first?(commands)
+
+      # Not before tick 120, and not with one opponent left: that game is as it was.
+      {_, commands, _} = Brain.plan(three([tick: 100] ++ opts, 4000), Brain.new_memory(), terrain())
+      refute army_first?(commands)
+      s = state([tick: 250] ++ opts)
+      one = %{s | "players" => Enum.map(s["players"], &if(&1["slot"] == 0, do: &1, else: Map.put(&1, "score", %{"survival" => 4000, "economy" => 3000, "total" => 7000})))}
+      {_, commands, _} = Brain.plan(View.new(one), Brain.new_memory(), terrain())
       refute army_first?(commands)
     end
 

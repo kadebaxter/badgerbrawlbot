@@ -31,7 +31,8 @@ defmodule Swarm.UnitBrain do
   Scouts watch, one per neighbor (the two nearest opponents): each waits halfway between our
   Command Center and its neighbor's start, where an attack from them comes through. When the leader
   wants a look at a target before attacking (`strategy.look`), the scout watching that side goes
-  there, then comes back to its post; the other stays. While a wave is out, the scout watching
+  through to it, whatever is in the way (it doesn't step back on that run: what it sees on the way
+  in is worth the scout), then comes back to its post; the other stays. While a wave is out, the scout watching
   the side of its target works in front of it: `@scout_ahead` tiles ahead of its lead unit for up
   to `@ahead_ticks` ticks, then `@scout_behind` tiles behind it for `@behind_ticks`, out of the
   fight, and again; the wave doesn't wait for it. A scout steps back once an enemy could reach it
@@ -834,6 +835,9 @@ defmodule Swarm.UnitBrain do
 
     {intent, fled_at, phase} =
       cond do
+        # Looking at a target for the leader, it runs through whatever is there: what it sees on
+        # the way in is worth the scout.
+        match?({:through, _}, job) -> scout_post(v, s, here, job, Map.get(memory, :phase))
         threat = danger(v, here, hurt?) -> run(v, s, here, threat, hurt?, job)
         fled_at != nil and v.tick - fled_at < @scout_rest -> {memory.intent || {:move, here}, fled_at, Map.get(memory, :phase)}
         true -> scout_post(v, s, here, job, Map.get(memory, :phase))
@@ -848,7 +852,8 @@ defmodule Swarm.UnitBrain do
 
   @doc """
   What each of our scouts is doing, for the leader's log: [{id, job, position}], where the job is
-  `:look` (looking at a target before a wave leaves), `:wave` (working in front of the wave out),
+  `:through` (running through to a target to look at it before a wave leaves), `:look` (looking
+  where a checker died), `:wave` (working in front of the wave out),
   `:survey` (looking round our side for ore) or `:post` (watching its side from halfway).
   """
   def scout_jobs(%View{} = v, strategy) do
@@ -866,7 +871,7 @@ defmodule Swarm.UnitBrain do
 
     cond do
       peek && peeker(v, peek) == unit["id"] -> {:look, peek}
-      spot && looker(v, spot) == unit["id"] -> {:look, spot}
+      spot && looker(v, spot) == unit["id"] -> {:through, spot}
       front && looker(v, s.target) == unit["id"] -> {:wave, front}
       survey && surveyor?(v, unit) -> {:survey, survey}
       true -> {:post, watch_post(v, unit)}
@@ -900,6 +905,7 @@ defmodule Swarm.UnitBrain do
   # Returns {intent, nil, its phase with the wave}. A post or a spot to look from that an enemy we
   # can see covers is pulled back out of its reach, or the scout would walk into it again.
   defp scout_post(v, _s, _here, {:look, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
+  defp scout_post(_v, _s, _here, {:through, spot}, _phase), do: {{:move, spot}, nil, nil}
   defp scout_post(v, s, here, {:wave, front}, phase), do: with_wave(v, s, here, front, phase)
   defp scout_post(v, _s, _here, {:post, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}
   defp scout_post(v, _s, _here, {:survey, spot}, _phase), do: {{:move, safe_spot(v, spot)}, nil, nil}

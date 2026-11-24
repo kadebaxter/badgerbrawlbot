@@ -484,6 +484,12 @@ defmodule Swarm.UnitBrainTest do
       assert %{"type" => "Move", "x" => 31, "y" => 31} = cmd(unit(5, "Scout", 50, 50), @gather)
     end
 
+    test "looking at a target for the leader, it runs through to it, whatever is in the way" do
+      enemy = unit(900, "Soldier", 33, 30, owner: 1)
+      look = Map.put(@gather, :look, {56, 56})
+      assert %{"type" => "Move", "x" => 56, "y" => 56} = cmd(unit(5, "Scout", 30, 30), look, [enemy])
+    end
+
     test "it steps back just out of reach, straight away from the enemy, not home" do
       # A soldier reaches 4 (range 1, margin 2, plus one): the scout goes to 6 from it.
       enemy = unit(900, "Soldier", 33, 30, owner: 1)

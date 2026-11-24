@@ -50,7 +50,7 @@ defmodule Swarm.StalledScenarioTest do
     places = Map.values(t.strategy.search)
     assert length(Enum.uniq(places)) == 4
     assert Enum.all?(places, &(View.dist(&1, {56, 56}) >= 14))
-    assert %{"type" => "Move", "x" => 45, "y" => 45} = t.orders[101]
+    assert %{"type" => "Move", "x" => 52, "y" => 52} = t.orders[101]
     for {id, {x, y}} <- t.strategy.search, do: assert(%{"type" => "Move", "x" => ^x, "y" => ^y} = t.orders[id])
 
     # The army doesn't walk into fifteen Soldiers and a tower with thirteen attackers.

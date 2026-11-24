@@ -153,12 +153,13 @@ defmodule Swarm.Brain do
   @raid_gone 20
   @counter_radius 10
   # Before a wave leaves, a scout looks at the target: once `@look_at` attackers wait at the rally
-  # point, unless we looked at that player in the last `@look_fresh` ticks. It goes to `@look_from`
-  # tiles short of the target (its vision is 8); the look is done once a scout is within
-  # `@look_sight` of that spot. The launch waits at most `@look_timeout` ticks for it.
+  # point, unless we looked at that player in the last `@look_fresh` ticks. It runs through to
+  # the target itself, whatever is in the way (`Swarm.UnitBrain`); the look is done once a scout
+  # has the target well inside its sight (its vision is 8). The launch waits at most
+  # `@look_timeout` ticks for it. A look from seven tiles short was "done" by a scout passing 13
+  # tiles from their base that had seen none of it: "0 fighters", and a wave of 15 left into 41.
   @look_at 5
   @look_fresh 60
-  @look_from 7
   @look_sight 3
   @look_timeout 40
   # How far our units see, for forgetting enemies we should see and don't (one less, as they move).
@@ -177,13 +178,11 @@ defmodule Swarm.Brain do
   # A scout's look at a player (`look/5`) that finds less than that count brings it down, but to
   # no less than this share of it: a scout sees one spot, and the army may be standing at another.
   @look_trust 0.5
-  # A scout that stops short of its look because their fighters stand at the spot (it is within
-  # `@look_near` of it, and they are within `@wave_sight` of it) has been turned back: their army
-  # is there. It only saw the nearest few, so the count is theirs by the scoreboard
-  # (`army_by_score/2`), if that is more. That is a look, and the wave is weighed against that
-  # count like any. One stood six tiles from 40 Soldiers for 25 ticks, the look timed out as
-  # nothing learned, and a wave of 19 left on a count of 13.
-  @look_near 10
+  # A scout that dies on its way in, or doesn't get there in time, but saw their fighters on the
+  # way: their army is there. It only saw the nearest few, so the count is theirs by the
+  # scoreboard (`army_by_score/2`), if that is more. That is a look, and the wave is weighed
+  # against that count like any. One stood six tiles from 40 Soldiers for 25 ticks, the look timed
+  # out as nothing learned, and a wave of 19 left on a count of 13.
   # With no ore left that we can get at and no Scout alive, from this tick on, an idle worker does
   # the looking before a wave (`stand_in/1`).
   @stand_in_from 300
@@ -271,6 +270,7 @@ defmodule Swarm.Brain do
   @army_floor_ticks 100
   # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
   @flood_floor 40
+  @score_floor_from 120
 
   # Built once the build order is done and only while rich, one at a time, in this order.
   @extras [
@@ -1409,9 +1409,11 @@ defmodule Swarm.Brain do
       end
 
     if want? do
-      spot = toward(target, View.pos(v.cc), @look_from)
       who = if stand_in, do: "worker #{stand_in["id"]} (no scout, no ore left to mine)", else: "scout"
-      {%{owner: owner, pos: spot, at: v.tick, done: nil}, why ++ [{:scout_sent, "#{who} looking at player #{owner} by #{fmt(spot)}"}], counted}
+      lookers = length(View.units_of(v, "Scout") ++ List.wrap(stand_in))
+
+      {%{owner: owner, pos: target, at: v.tick, done: nil, lookers: lookers},
+       why ++ [{:scout_sent, "#{who} looking at player #{owner}, through to #{fmt(target)}"}], counted}
     else
       {look, why, counted}
     end
@@ -1431,26 +1433,30 @@ defmodule Swarm.Brain do
     # A worker walks a tile a tick where a Scout runs two: it gets twice as long.
     timeout = if stand_in, do: 2 * @look_timeout, else: @look_timeout
 
-    at_spot = turned_back(look, v, lookers)
+    # Their fighters as we know them, and those of them seen since the scout left.
+    in_sight = for u <- v.enemy_units, u["owner"] == look.owner, u["type"] not in ["Worker", "Scout"], do: Map.put(u, "seen", v.tick)
+    known = Enum.uniq_by(in_sight ++ Enum.filter(Map.values(memory.enemies), &(&1["owner"] == look.owner)), & &1["id"])
+    on_the_way = Enum.filter(known, &(Map.get(&1, "seen", v.tick) >= look.at))
+    lost? = length(lookers) < Map.get(look, :lookers, 0)
 
     cond do
-      there? and at_spot == [] ->
-        seen = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] == look.owner))
-        why = "scouted player #{look.owner}: #{length(seen)} fighters, strength #{round(Roles.strength(seen))}"
-        {%{look | done: v.tick}, [{:scouted, why}], {look.owner, Roles.strength(seen)}}
+      there? ->
+        counted = Roles.strength(known)
+        why = "scouted player #{look.owner}: their base in sight, #{length(known)} fighters known, strength #{round(counted)}"
+        {%{look | done: v.tick}, [{:scouted, why}], {:at_least, look.owner, counted}}
 
-      # Their fighters at the spot (`@look_near`): turned back, or standing among them.
-      at_spot != [] ->
-        counted = max(Roles.strength(at_spot), army_by_score(v, look.owner))
+      # It died on the way in, or never got there, but saw their fighters: their army is there.
+      (lost? or lookers == [] or v.tick - look.at >= timeout) and on_the_way != [] ->
+        counted = max(Roles.strength(on_the_way), army_by_score(v, look.owner))
 
         why =
-          "scouted player #{look.owner}: #{length(at_spot)} of their fighters in sight at the spot, their army is there: " <>
-            "strength #{round(counted)} by what the scout saw and their score"
+          "scouted player #{look.owner}: the scout didn't get to their base, #{length(on_the_way)} of their fighters seen on the way: " <>
+            "strength #{round(counted)} by what it saw and their score"
 
         {%{look | done: v.tick}, [{:scouted, why}], {:at_least, look.owner, counted}}
 
-      lookers == [] or v.tick - look.at >= timeout ->
-        why = "no look at player #{look.owner} (no scout got there in #{v.tick - look.at} ticks): no wave leaves on that"
+      lost? or lookers == [] or v.tick - look.at >= timeout ->
+        why = "no look at player #{look.owner} (no scout got to their base in #{v.tick - look.at} ticks): no wave leaves on that"
         {look |> Map.put(:done, v.tick) |> Map.put(:failed, true), [{:scouted, why}], nil}
 
       true ->
@@ -1459,16 +1465,6 @@ defmodule Swarm.Brain do
   end
 
   defp settle_look(look, _v, _memory, _stand_in), do: {look, [], nil}
-
-  # Their fighters in sight at the look's spot, if one of ours is near it and short of it: what
-  # turned it back. Empty otherwise.
-  defp turned_back(look, v, lookers) do
-    near? = Enum.any?(lookers, &(View.dist(View.pos(&1), look.pos) <= @look_near))
-
-    if near?,
-      do: Enum.filter(v.enemy_units, &(&1["owner"] == look.owner and &1["type"] not in ["Worker", "Scout"] and View.dist(View.pos(&1), look.pos) <= @wave_sight)),
-      else: []
-  end
 
   # A player's army going by the scoreboard, as a strength: the ore value of everything they have
   # alive (the server reports it), less their finished buildings we know of and as many workers as
@@ -3478,14 +3474,24 @@ defmodule Swarm.Brain do
   # fed before anything else is built or researched. Among five of them we had 31 fighters at
   # tick 300 to their 48 to 56 each, on the same workers: the difference had gone into research,
   # depots, a second Tech Lab and a base, and the first raid took the Barracks and the workers.
-  # As a strength; 0 with fewer than two floods next to us.
+  #
+  # With two or more opponents still in, the floor is also a neighbor's army going by the
+  # scoreboard (`army_by_score/2`), from tick `@score_floor_from`: no look or read needed, one
+  # such neighbor is enough. The read of a flood came at tick 300, a tick after 37 Soldiers were
+  # at our towers with 25 of ours home.
+  # As a strength; 0 otherwise.
   defp flood_floor(v, memory) do
     reads = Map.get(memory, :reads, %{})
-    floods = for {_start, slot} <- Roles.neighbors(v), Reads.kind(reads, slot) == :flood, do: enemy_army(memory, slot)
+    neighbors = Roles.neighbors(v)
+    floods = for {_start, slot} <- neighbors, Reads.kind(reads, slot) == :flood, do: enemy_army(memory, slot)
+    by_reads = if length(floods) >= 2, do: Enum.max(floods), else: 0
 
-    if length(floods) >= 2,
-      do: min(Enum.max(floods), @flood_floor * Roles.strength([%{"type" => "Soldier"}])),
-      else: 0
+    by_score =
+      if map_size(v.start_owner) >= 2 and v.tick >= @score_floor_from,
+        do: neighbors |> Enum.map(fn {_start, slot} -> army_by_score(v, slot) end) |> Enum.max(fn -> 0 end),
+        else: 0
+
+    min(max(by_reads, by_score), @flood_floor * Roles.strength([%{"type" => "Soldier"}]))
   end
 
   defp from_build_order(v, terrain, avoid) do

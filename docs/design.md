@@ -607,11 +607,12 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    towers too), Weapons and Armor 1 and 2 before the second Harvesting; a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.
    **No wave without a look:** an ordinary wave only leaves within 60 ticks of a scout having got
-   to its look at the target (within 3 tiles of the spot, or a Scout with it well inside its sight).
-   A scout near the spot with their fighters standing at it has been turned back: that is a look,
-   and their army then counts for at least what their score says (the ore value of everything they
-   have alive, less their buildings we know of and as many workers as we have): it only saw the
-   nearest few. A look no scout got to in time is no look (it is asked for again);
+   to its look at the target itself (within 3 tiles of it, or a Scout with it well inside its
+   sight): their base, not a spot short of it. A scout that dies on the way in, or doesn't get
+   there in time, having seen their fighters since it left: that is a look, and their army then
+   counts for at least what their score says (the ore value of everything they have alive, less
+   their buildings we know of and as many workers as we have): it only saw the nearest few. A
+   look that saw nothing of them and never got there is no look (it is asked for again);
    with no scout at all the wave waits for one. A counterattack right after a beaten raid, a
    siege party and the end-of-match push go without.
    **Their army as last counted:** the most we have known of a player's army in the last 150
@@ -649,8 +650,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    opponents), each waiting halfway between our Command Center and that neighbor's start, where
    an attack from them comes through. Before a wave leaves, once 5 attackers wait at the rally
    point and we haven't looked at that player in the last 60 ticks, the scout watching that side
-   goes to 6 tiles short of the target, then back to its post; the launch waits for the look (at
-   most 40 ticks), except for a counterattack. While a wave is out, the scout watching its
+   runs through to the target itself and doesn't step back from anything on that run (what it
+   sees on the way in is worth the scout), then goes back to its post; the launch waits for the
+   look (at most 40 ticks), except for a counterattack. While a wave is out, the scout watching its
    target's side works in front of it: 6 tiles ahead of its lead unit for up to 8 ticks, then 5
    tiles behind its middle for 10 ticks, out of the fight, and again, through every new target;
    the wave never waits for it. With enemies already by the spot ahead, the wave is at them, so
@@ -720,6 +722,12 @@ is none. Everything that calls a wave home still does.
 **Floods on two sides.** With two neighbors that read as floods, the army floor (below which the
 Barracks train before anything is built or researched) is the bigger army of the two as we know
 it, up to 40 Soldiers' worth. What the Barracks can't take still goes to the rest.
+
+**Three or more players.** With two or more opponents still in, from tick 120 the floor is also
+the bigger of our neighbors' armies going by the scoreboard (the same count a look falls back on;
+too high if anything, as their buildings we haven't seen count as army), up to the same 40
+Soldiers' worth. No look or read is needed and one such neighbor is enough: the read of a flood
+came a tick after 37 Soldiers were at our towers. With one opponent left, the floor is as it was.
 
 ## Messages
 

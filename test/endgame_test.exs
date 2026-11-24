@@ -25,38 +25,48 @@ defmodule Swarm.EndgameTest do
       assert elem(memory.army_seen[1], 0) == 12 * 990.0
     end
 
-    test "turned back by their fighters at the spot: that is a look, and their army counts by their score if that is more" do
-      # The scout is six tiles short of the spot, eight of theirs in its sight there. Their score says
+    # Their fighters as the scout saw them at tick 125, on its way in.
+    defp on_the_way(n), do: for(i <- 1..n, into: %{}, do: {900 + i, %{"id" => 900 + i, "owner" => 1, "type" => "Soldier", "hp" => 110, "x" => 49, "y" => 49, "seen" => 125}})
+
+    test "the scout dies on its way in, having seen their fighters: that is a look, and their army counts by their score if that is more" do
+      # The scout that left at tick 120 is gone; it saw eight of theirs on the way. Their score says
       # 9,000 ore alive; we know of their Command Center (400) and have 20 workers ourselves (1,000).
-      scout = unit(300, "Scout", 44, 44)
-      seen = for i <- 1..8, do: unit(900 + i, "Soldier", 49, 49, owner: 1)
       their_cc = building(900, "CommandCenter", 56, 56, 1)
 
       state =
-        state(units: [scout | workers(20) ++ soldiers(22)] ++ seen, buildings: [their_cc], tick: 130)
+        state(units: workers(20) ++ soldiers(22), buildings: [their_cc], tick: 130)
         |> Map.update!("players", fn [me, them] -> [me, Map.put(them, "score", %{"survival" => 9000, "total" => 9000})] end)
 
-      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}, enemies: on_the_way(8)}
       {strategy, _, memory} = Brain.plan(View.new(state), memory, terrain())
 
       assert %{look: %{done: 130}} = memory
-      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :scouted and text =~ "8 of their fighters in sight at the spot" end)
+      refute Map.get(memory.look, :failed, false)
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :scouted and text =~ "8 of their fighters seen on the way" end)
       # (9000 - 400 - 1000) ore of army, at a Soldier's 990 a hundred: 75,240. Not the eight it saw.
       assert elem(memory.army_seen[1], 0) == 75_240.0
       # Fifteen attackers against that: no wave.
       assert strategy.wave == nil
     end
 
-    test "a few of theirs at the spot and a small score: the wave is weighed against that, and goes" do
-      scout = unit(300, "Scout", 44, 44)
-      seen = for i <- 1..2, do: unit(900 + i, "Soldier", 49, 49, owner: 1)
-
+    test "a few of theirs seen on the way and a small score: the wave is weighed against that, and goes" do
       state =
-        state(units: [scout | workers(20) ++ soldiers(22)] ++ seen, buildings: [building(900, "CommandCenter", 56, 56, 1)], tick: 130)
+        state(units: workers(20) ++ soldiers(22), buildings: [building(900, "CommandCenter", 56, 56, 1)], tick: 130)
         |> Map.update!("players", fn [me, them] -> [me, Map.put(them, "score", %{"survival" => 1600, "total" => 1600})] end)
 
-      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}, enemies: on_the_way(2)}
       assert {%{wave: %{members: [_ | _]}}, _, _} = Brain.plan(View.new(state), memory, terrain())
+    end
+
+    test "the scout dies having seen nothing of them: that is no look" do
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}}
+      assert {%{wave: nil}, _, %{look: %{done: 130, failed: true}}} = Brain.plan(View.new(state(units: soldiers(22), tick: 130)), memory, terrain())
+    end
+
+    test "passing short of their base without seeing it is no look yet" do
+      # Thirteen tiles from their start at (56, 56): where the old spot, seven short of it, counted.
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}}
+      assert {_, _, %{look: %{done: nil}}} = Brain.plan(View.new(state(units: [unit(300, "Scout", 47, 47) | soldiers(22)], tick: 130)), memory, terrain())
     end
 
     test "a Scout sees the spot from a distance: that is a look too" do
