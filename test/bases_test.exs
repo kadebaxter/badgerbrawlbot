@@ -303,7 +303,7 @@ defmodule Swarm.BasesTest do
     end
 
     test "it gets two towers, rich or not" do
-      built = [@barracks, @base, building(3, "ResourceDepot", 4, 9), building(5, "GuardTower", 12, 12), building(6, "GuardTower", 24, 7)]
+      built = labs_busy([@barracks, @base, building(3, "ResourceDepot", 4, 9), building(5, "GuardTower", 12, 12), building(6, "GuardTower", 24, 7), building(9, "TechLab", 7, 12)])
       # 300 ore: not rich. An outpost depot would have its one tower and wait.
       state = state(units: workers(12) ++ soldiers(8), buildings: built, deposits: [@home_ore | @field], ore: 300)
       {_, commands, _} = plan(state, %{Brain.new_memory() | bases: [{22, 5}]})

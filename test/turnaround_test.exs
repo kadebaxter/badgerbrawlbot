@@ -229,7 +229,7 @@ defmodule Swarm.TurnaroundTest do
 
     test "before the build order is done too" do
       early = busy([building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)])
-      {_, commands, _} = plan(units: workers(10) ++ soldiers(8), buildings: early, ore: 300, tick: 60)
+      {_, commands, _} = plan(units: workers(9) ++ soldiers(8), buildings: early, ore: 300, tick: 60)
       assert builds(commands) == ["Barracks"]
     end
 
@@ -333,7 +333,7 @@ defmodule Swarm.RecentCountTest do
       assert builds.(commands) == ["TechLab"]
 
       labs = [building(9, "TechLab", 3, 12) | built]
-      state = put_in(state(units: workers(25) ++ soldiers(8), buildings: labs, ore: 1000), ["you", "upgrades"], ["Harvesting1"])
+      state = put_in(state(units: workers(25) ++ soldiers(8), buildings: labs, ore: 1000), ["you", "upgrades"], ["Harvesting1", "Harvesting2"])
       state = put_in(state, ["you", "researching"], [%{"upgrade" => "Weapons1"}])
       lab_busy = for b <- state["buildings"], do: if(b["id"] == 6, do: Map.put(b, "research", "Weapons1"), else: b)
       {_, commands, _} = Brain.plan(View.new(%{state | "buildings" => lab_busy}), looked(nil), terrain())

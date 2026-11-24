@@ -604,11 +604,17 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    in the last 45 ticks: the survey scout goes there, and back every 20 ticks, while that field is
    worth a base. With no field worth one, the build order's hidden backup goes up as before.
    **Upgrades:** every tier of Weapons (units and towers), Armor (units) and Fortify (buildings,
-   towers too), in the order Harvesting1, Weapons1, Armor1, Armor2, Weapons2, Armor3, then
-   SiegeEngineering, the second Harvesting and Fortify (all the Armor before SiegeEngineering:
+   towers too), in the order Harvesting1, Harvesting2, Weapons1, Armor1, Armor2, Weapons2, Armor3,
+   then SiegeEngineering and Fortify (all the Armor before SiegeEngineering:
    the house bots end with Armor3); a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.
-   **The first six come first:** Harvesting1 and every Weapons and Armor are started the tick a
+   **Both Harvestings ahead of the rest, and the Tech Lab early:** each Harvesting is one more ore
+   a mining tick (2, then 3, then 4) for every worker we ever have. The first Tech Lab is ordered
+   at ten workers (it was thirteen) and built by two, so it is up in 20 ticks. The house bots had
+   Harvesting1 at ticks 122 and 128 and we at 164: for those 40 ticks they mined 750 to 860 ore in
+   20 ticks to our 510 on the same workers. Harvesting2 they had at tick 251, and we after all the
+   Weapons, the Armor and SiegeEngineering.
+   **These come first:** both Harvestings and every Weapons and Armor are started the tick a
    Tech Lab is free, ahead of every building, base, worker and fighter, and their ore is kept
    until it is there (`research_first/2`). One on one, a house bot had Weapons2 and Armor2 at
    ticks 385 and 391 and we at 441 and 431, behind two Command Centers and ten towers: 15 of its

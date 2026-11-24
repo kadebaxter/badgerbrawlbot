@@ -405,7 +405,7 @@ defmodule Swarm.Brain do
   @build_order [
     {"ResourceDepot", 1, 0, :ore},
     {"Barracks", 1, 7, :base},
-    {"TechLab", 1, 13, :base},
+    {"TechLab", 1, 10, :base},
     {"Barracks", 2, 15, :base},
     {"Barracks", 3, 19, :base},
     {"GuardTower", 1, 21, :front},
@@ -423,7 +423,7 @@ defmodule Swarm.Brain do
                      {"Barracks", 1, 7, :base},
                      {"GuardTower", 1, 10, :square},
                      {"Barracks", 2, 12, :base},
-                     {"TechLab", 1, 13, :base},
+                     {"TechLab", 1, 10, :base},
                      {"GuardTower", 2, 14, :square},
                      {"Barracks", 3, 16, :base},
                      {"GuardTower", 3, 16, :square},
@@ -440,7 +440,7 @@ defmodule Swarm.Brain do
                         {"GuardTower", 1, 10, :front},
                         {"GuardTower", 2, 11, :front},
                         {"Barracks", 2, 12, :base},
-                        {"TechLab", 1, 13, :base},
+                        {"TechLab", 1, 10, :base},
                         {"Barracks", 3, 15, :base},
                         {"GuardTower", 3, 16, :front},
                         {"GuardTower", 4, 18, :front},
@@ -475,6 +475,7 @@ defmodule Swarm.Brain do
   # many (see `builders/4`).
   @depot_builders 5
   @first_barracks_builders 3
+  @first_lab_builders 2
   @short_for_ticks 30
   # ...or under this much for each worker: a bigger workforce empties the fields sooner.
   @low_ore_per_worker 150
@@ -510,8 +511,12 @@ defmodule Swarm.Brain do
   # Armor before SiegeEngineering: the house bots end with Armor3, and in two games of three we
   # stopped at Armor1. On the game's engine, 30 Soldiers with Armor3 beat 30 with Armor1 (both
   # with Weapons2) four times in five, with 7 left.
-  @research ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Harvesting2", "Fortify1", "Fortify2"]
-  @research_first ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
+  # Both Harvestings first: each is one more ore a mining tick (2, then 3, then 4) for every worker
+  # we ever have. The house bots had the first at ticks 122 and 128 and we at 164, and for those
+  # 40 ticks they mined 750 to 860 ore in 20 ticks to our 510 on the same workers; the second they
+  # had at tick 251, and we after all the Weapons, the Armor and SiegeEngineering.
+  @research ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
+  @research_first ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -3283,6 +3288,12 @@ defmodule Swarm.Brain do
 
   defp builders(v, free, "Barracks", site) do
     n = if count(v, "Barracks") == 0, do: @first_barracks_builders, else: usual_builders(v)
+    closest_first(free, site) |> Enum.take(n)
+  end
+
+  # The first Tech Lab: two builders, so it is up in 20 ticks, not 40, and Harvesting1 with it.
+  defp builders(v, free, "TechLab", site) do
+    n = if count(v, "TechLab") == 0, do: @first_lab_builders, else: usual_builders(v)
     closest_first(free, site) |> Enum.take(n)
   end
 
