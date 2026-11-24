@@ -208,24 +208,19 @@ defmodule Swarm.UnitBrain do
   # workers we lost in one game walked straight into the archers that killed them) or building
   # (a site under fire waits; the builder doesn't stand there and die) runs just like a miner.
   #
-  # Except inside our base with the fight there lost (`stand?/3`): then there is no cover to run
-  # to, and it hits back (a worker does 4 damage a tick) for as long as that holds.
-  defp worker(%{"activity" => "Attacking"} = unit, v, %{rally: rally} = s) when rally != nil do
-    enemy = worker_danger(unit, v, s)
-    if enemy && stand?(v, s, enemy), do: :no_change, else: worker(%{unit | "activity" => "Idle"}, v, s)
-  end
-
+  # A worker never stands and fights: it does 4 damage a tick with 40 health, against a Soldier's 9
+  # and 110. Hitting back inside a base we were losing, 75 workers died in fifteen ticks at one
+  # base, and the match with them.
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
-       when activity in ["Idle", "Gathering", "Returning", "Moving", "Building"] and rally != nil do
+       when activity in ["Idle", "Gathering", "Returning", "Moving", "Building", "Attacking"] and rally != nil do
     case worker_danger(unit, v, s) do
       nil ->
         stand_in(unit, s) || search(unit, s) || worker(unit, v)
 
       enemy ->
-        {x, y} = spot = refuge(unit, v, enemy) || rally
+        {x, y} = spot = retreat(v, s, enemy) || refuge(unit, v, enemy) || rally
 
         cond do
-          stand?(v, s, enemy) -> command(unit, {:attack, enemy["id"]})
           # Already there: it may mine ore safe from here (`unsafe?/2`), or stays.
           View.dist(View.pos(unit), spot) <= 1 -> worker(unit, v)
           # Already on its way there.
@@ -281,20 +276,20 @@ defmodule Swarm.UnitBrain do
     cond do
       closest == nil -> nil
       View.dist(View.pos(closest), here) <= Roles.range(closest) + @worker_margin -> closest
+      retreat(v, s, closest) -> closest
       Roles.sheltered?(v, here) -> nil
       Map.get(s, :fall_back, false) or not winning?(v, s, closest) -> closest
       true -> nil
     end
   end
 
-  # Whether a worker stands and fights `enemy`: its group is inside our base (`Roles.inside?/2`) and
-  # would beat us (`Roles.away?/1`). Our fighters are all fighting it by then, and losing; the
-  # workers die there either way. 45 fighters and five towers fell with some forty workers
-  # running between them.
-  defp stand?(v, s, enemy) do
+  # Where a worker goes from `enemy` when its group has taken the base they are at: our next base
+  # (`Roles.retreat/2`), the same one the fighters there fall back to. Nil when there is none, or
+  # the fight there isn't lost (`Roles.away?/1`): the towers by it are cover then (`refuge/3`).
+  defp retreat(v, s, enemy) do
     case Roles.group_of_enemy(v, s.wave, enemy["id"]) do
-      nil -> false
-      g -> Roles.inside?(v, g) and Roles.away?(g)
+      nil -> nil
+      g -> if Roles.away?(g), do: Roles.retreat(v, g)
     end
   end
 
@@ -545,8 +540,9 @@ defmodule Swarm.UnitBrain do
   # - gather: to the gather spot, just out of the group's reach, hitting only what it can hit from
   #   where it stands; at home only for a raid (anything else is not ours to fight).
   # - away: in the wave, hold at the gather spot (the leader calls the wave off); at home, out of
-  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach; but once it is inside
-  #   our base (`Roles.inside?/2`: in our towers' reach or at the Command Center), everyone fights.
+  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach; once it is inside
+  #   our base (`Roles.inside?/2`: in our towers' reach or at the Command Center), to our next base
+  #   if there is one behind it (`Roles.retreat/2`), and with none everyone fights.
   #
   # The end-of-match push (`all_in`) fights on regardless.
   defp in_fight(_unit, _v, %{wave: %{all_in: true}}, :wave, _group), do: nil
@@ -579,9 +575,15 @@ defmodule Swarm.UnitBrain do
 
       :away ->
         back = home? && fallback(v, s, group)
+        retreat = home? && Roles.retreat(v, group)
 
         cond do
           not home? -> {:move, group.gather}
+          # It is inside a base of ours with another one behind it: to that one, with the workers,
+          # where the rest of ours and its towers are. 69 Soldiers stood by the towers of the base
+          # in the middle against 91 while 14 more waited at home; 83 died for 36.
+          retreat && enemy && View.dist(here, retreat) <= 3 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
+          retreat -> {:move, retreat}
           # Inside our base there is nowhere to stay out of its way: everyone fights it, whatever
           # the estimate. Walking to a spot out of its reach, 45 fighters by five towers killed 16
           # of 39 Soldiers and were down to 3 in twenty ticks.

@@ -1,5 +1,5 @@
 defmodule Swarm.InsideTest do
-  @moduledoc "A raid that would beat us is stayed out of only while it is outside our base; inside it, everyone fights."
+  @moduledoc "A raid that would beat us is stayed out of only while it is outside our base; inside it the fighters fight (or go to our next base, with three or four players), and workers run."
   use ExUnit.Case, async: true
   import Swarm.Test.GameState
   alias Swarm.{Roles, UnitBrain, View}
@@ -32,12 +32,11 @@ defmodule Swarm.InsideTest do
   describe "workers" do
     @worker unit(101, "Worker", 11, 10, activity: "Gathering")
 
-    test "inside our base with the fight lost, a worker by them hits back, and keeps at it" do
+    test "inside our base with the fight lost, a worker by them runs; it never hits back" do
       v = view({14, 10}, {12, 12}, [@worker])
-      assert {%{"type" => "Attack", "unitIds" => [101], "targetId" => id}, _} = UnitBrain.decide(101, v, @defend)
-      assert id in 901..912
+      assert {%{"type" => "Move", "unitIds" => [101]}, _} = UnitBrain.decide(101, v, @defend)
       v = view({14, 10}, {12, 12}, [%{@worker | "activity" => "Attacking"}])
-      assert {:no_change, _} = UnitBrain.decide(101, v, @defend)
+      assert {%{"type" => "Move", "unitIds" => [101]}, _} = UnitBrain.decide(101, v, @defend)
     end
 
     test "with them outside the base, it runs for cover as ever" do
@@ -65,6 +64,48 @@ defmodule Swarm.InsideTest do
 
     test "with one opponent it mines on where it is" do
       assert {:no_change, _} = UnitBrain.decide(101, field_state(2), @defend)
+    end
+  end
+
+  describe "a base of ours lost, with another behind it" do
+    # Our base in the middle at (28, 40) with a tower, twelve of theirs in the tower's reach; four
+    # of ours and a miner there; another base of ours at (20, 20); home at (7, 7).
+    defp lost(players, at \\ {31, 40}) do
+      {x, y} = at
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", x, y, owner: 1)
+      ours = for i <- 1..4, do: unit(200 + i, "Soldier", 28, 38)
+      miner = unit(101, "Worker", 26, 41, activity: "Gathering")
+      s = state(units: ours ++ raid ++ [miner],
+                buildings: [building(60, "CommandCenter", 28, 40), building(61, "GuardTower", 29, 39), building(62, "CommandCenter", 20, 20)])
+      third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
+      %{View.new(if(players == 3, do: %{s | "players" => s["players"] ++ [third]}, else: s)) | bases: [{28, 40}, {20, 20}]}
+    end
+
+    test "with three players the fighters there go to the nearest other base, and so do the workers" do
+      v = lost(3)
+      g = Roles.group_for(v, nil, hd(View.units_of(v, "Soldier")))
+      assert Roles.away?(g) and Roles.inside?(v, g)
+      assert Roles.retreat(v, g) == {20, 20}
+      assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(201, v, @defend)
+      assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
+    end
+
+    test "with one opponent everyone fights it there, as before" do
+      v = lost(2)
+      assert Roles.retreat(v, Roles.group_for(v, nil, hd(View.units_of(v, "Soldier")))) == nil
+      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @defend)
+    end
+
+    test "nobody leaves the main base: a raid at it is fought there" do
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 10, 8, owner: 1)
+      ours = for i <- 1..4, do: unit(200 + i, "Soldier", 8, 9)
+      s = state(units: ours ++ raid, buildings: [building(62, "CommandCenter", 28, 28)])
+      third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
+      v = %{View.new(%{s | "players" => s["players"] ++ [third]}) | bases: [{28, 28}]}
+      g = Roles.group_for(v, nil, hd(ours))
+      assert Roles.away?(g) and Roles.inside?(v, g)
+      assert Roles.retreat(v, g) == nil
+      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @defend)
     end
   end
 

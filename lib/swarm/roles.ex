@@ -85,6 +85,8 @@ defmodule Swarm.Roles do
   # ten times in twenty ticks, 37 of ours walking to and fro in front of 72 with the serum on.
   @back_in 0.3
   @inside 3
+  # How far from a group a base of ours has to be to fall back to (`retreat/2`).
+  @retreat_clear 10
   @sideways 4
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
@@ -992,6 +994,25 @@ defmodule Swarm.Roles do
       (cc != nil and View.dist(spot, cc) <= @inside) or Enum.any?(our_towers(v), &(View.dist(View.pos(&1), spot) <= range(&1) + 1))
     end)
   end
+
+  @doc """
+  Where to go from group `g` once it is inside a base of ours (`inside?/2`) with three or four
+  players: the nearest other finished Command Center of ours it is more than `@retreat_clear`
+  from. Nil when there is none, and when it is that close to the main one: nobody leaves that.
+  For a fight we would lose (the caller's check), workers and fighters both: one place, so they
+  end up together under the next base's towers.
+  """
+  def retreat(%View{players: players, cc: cc} = v, g) when players in 3..4 and cc != nil do
+    if inside?(v, g) and dist_to(g, View.pos(cc)) > @retreat_clear do
+      spot = center(g.spots)
+
+      [View.pos(cc) | View.base_ccs(v)]
+      |> Enum.filter(&(dist_to(g, &1) > @retreat_clear))
+      |> Enum.min_by(&{View.dist(&1, spot), &1}, fn -> nil end)
+    end
+  end
+
+  def retreat(_v, _g), do: nil
 
   @doc "The group whose fight `unit` (ours) is in (`groups/2`), or nil."
   def group_for(%View{} = v, wave, unit) do

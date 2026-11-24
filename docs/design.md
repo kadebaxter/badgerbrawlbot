@@ -737,9 +737,16 @@ up to six; the ore for the next one is kept until it is there.
 **Inside our base, everyone fights.** A raid that would beat us is stayed out of only while it
 is outside the base. Once one of them is within reach of a finished Guard Tower of ours (its range
 plus one) or within 3 tiles of our Command Center, there is nowhere left to stay out of its way:
-every fighter attacks, whatever the estimate (`Roles.inside?/2`). A worker in danger from that raid
-hits back too (4 damage a tick) instead of running for cover that isn't there, for as long as the
-raid is inside the base and the fight is lost.
+every fighter attacks, whatever the estimate (`Roles.inside?/2`). Workers never fight: a worker
+does 4 damage a tick with 40 health against a Soldier's 9 and 110. They hit back for a while, and
+75 of them died in fifteen ticks at one base, and the match with them.
+
+**Three or four players: a lost base is left for the next one.** When that raid is inside a base
+of ours that isn't the main one, and another finished Command Center of ours is more than 10
+tiles from it, the fighters there and the workers go to the nearest such one (`Roles.retreat/2`,
+one place for both) and the fight is taken there, with the rest of ours and its towers. Nobody
+leaves the main base. 69 Soldiers stood by the towers of the base in the middle against 91 while
+14 more waited at home: 83 Soldiers and 75 workers died for 36 of theirs.
 
 **Three or four players: the middle first.** Whoever holds the middle with towers mines the
 most ore on the map and keeps the others off it. While we have no base Command Center there and a
