@@ -270,6 +270,7 @@ defmodule Swarm.Brain do
   @army_floor_ticks 100
   # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
   @flood_floor 40
+  @help_chase 3
   @score_floor_from 120
 
   # Built once the build order is done and only while rich, one at a time, in this order.
@@ -838,14 +839,18 @@ defmodule Swarm.Brain do
       nil ->
         case spots |> Enum.filter(&may_help?(v, memory, s, &1)) |> Enum.min_by(&{View.dist(&1, s.rally || &1), &1}, fn -> nil end) do
           nil -> {nil, memory, []}
-          spot -> {spot, %{memory | help: %{pos: spot, clear_since: nil}}, [{:help, "home goes to help at #{fmt(spot)}"}]}
+          spot -> {spot, %{memory | help: %{pos: spot, from: spot, clear_since: nil}}, [{:help, "home goes to help at #{fmt(spot)}"}]}
         end
 
       %{pos: pos} = help ->
         near = Enum.filter(spots, &(View.dist(&1, pos) <= @help_follow))
         # It follows the fight only to where home can still take what is there: following onto
         # the middle of the pack had it called off the next tick, and committed again at its edge.
-        takeable = Enum.filter(near, &Roles.can_take?(v, s.wave, &1))
+        # And no farther from home than `@help_chase` past where it committed: after two Soldiers
+        # by a depot halfway to a neighbor it went eight tiles on, to their base, and led 53 home.
+        home = View.pos(v.cc)
+        leash = View.dist(Map.get(help, :from, pos), home) + @help_chase
+        takeable = Enum.filter(near, &(View.dist(&1, home) <= leash and Roles.can_take?(v, s.wave, &1)))
         pos = Enum.min_by(takeable, &{View.dist(&1, pos), &1}, fn -> pos end)
         clear_since = if near == [], do: help.clear_since || v.tick, else: nil
         # The same measure that committed to it (`Roles.help_odds/3`).
@@ -860,7 +865,7 @@ defmodule Swarm.Brain do
             {nil, %{memory | help: nil, help_off_at: v.tick, help_off_pos: pos}, [{:help, why}]}
 
           true ->
-            {pos, %{memory | help: %{pos: pos, clear_since: clear_since}}, []}
+            {pos, %{memory | help: %{help | pos: pos, clear_since: clear_since}}, []}
         end
     end
   end
@@ -880,6 +885,10 @@ defmodule Swarm.Brain do
     # behind them. Staying is still judged on what is there (`help/3`), so it doesn't flip.
     owners = for e <- v.enemy_units, e["type"] != "Worker", View.dist(View.pos(e), spot) <= @help_follow, uniq: true, do: e["owner"]
     lately = owners |> Enum.map(&elem(Map.get(memory.army_seen, &1, {0, 0}), 0)) |> Enum.max(fn -> 0 end)
+    # With two or more opponents in, also for their army by the scoreboard (`army_by_score/2`), a
+    # look or none: nobody had looked at the neighbor whose two Soldiers drew 32 of ours out to 50.
+    by_score = if map_size(v.start_owner) >= 2, do: owners |> Enum.map(&army_by_score(v, &1)) |> Enum.max(fn -> 0 end), else: 0
+    theirs = max(theirs, by_score)
     theirs = max(theirs, lately)
     if near_last?, do: ours >= @help_give_up * theirs, else: ours >= theirs
   end

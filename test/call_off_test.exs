@@ -95,6 +95,29 @@ defmodule Swarm.CallOffTest do
       assert Enum.any?(s.why, &match?({:help, "home goes to help at (27,7)"}, &1))
     end
 
+    test "with two or more opponents in, not against a player whose army by the scoreboard is more than home's" do
+      # Player 1 has 5,000 ore alive: less our four workers' worth, 48 Soldiers against our ten.
+      scored = fn s, players ->
+        other = fn slot, x, y -> %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}, "score" => %{"survival" => 5000, "total" => 5000}} end
+        %{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ Enum.take([other.(1, 56, 56), other.(2, 7, 56)], players)}
+      end
+
+      s = state(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      memory = looked(Brain.new_memory(), 1, 100)
+      assert {%{help: nil}, _, _} = Brain.plan(View.new(scored.(s, 2)), memory, terrain())
+      # One opponent: as it was.
+      assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(scored.(s, 1)), memory, terrain())
+    end
+
+    test "it follows the fight no more than three tiles farther from home than where it committed" do
+      # Committed at (26, 7), 19 tiles from home: as far as (29, 7), not to (30, 7).
+      {_, _, memory} = plan(units: field_miners() ++ field_raid(2, 26) ++ soldiers(10))
+      {s, _, memory} = plan([units: field_miners() ++ field_raid(2, 29) ++ soldiers(10), tick: 101], memory)
+      assert s.help == {29, 7}
+      {s, _, _} = plan([units: field_miners() ++ field_raid(2, 30) ++ soldiers(10), tick: 102], memory)
+      assert s.help == {29, 7}
+    end
+
     test "not when home can't take it" do
       assert {%{help: nil}, _, _} = plan(units: field_miners() ++ field_raid(14) ++ soldiers(10))
     end

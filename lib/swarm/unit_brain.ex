@@ -500,7 +500,8 @@ defmodule Swarm.UnitBrain do
   # - gather: to the gather spot, just out of the group's reach, hitting only what it can hit from
   #   where it stands; at home only for a raid (anything else is not ours to fight).
   # - away: in the wave, hold at the gather spot (the leader calls the wave off); at home, out of
-  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach.
+  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach; but once it is inside
+  #   our base (`Roles.inside?/2`: in our towers' reach or at the Command Center), everyone fights.
   #
   # The end-of-match push (`all_in`) fights on regardless.
   defp in_fight(_unit, _v, %{wave: %{all_in: true}}, :wave, _group), do: nil
@@ -536,6 +537,10 @@ defmodule Swarm.UnitBrain do
 
         cond do
           not home? -> {:move, group.gather}
+          # Inside our base there is nowhere to stay out of its way: everyone fights it, whatever
+          # the estimate. Walking to a spot out of its reach, 45 fighters by five towers killed 16
+          # of 39 Soldiers and were down to 3 in twenty ticks.
+          Roles.inside?(v, group) -> if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
           # Already there: it fights what reaches it.
           enemy && View.dist(here, back) <= 2 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
           group.raid or Roles.dist_to(group, here) <= group.reach + 2 -> {:move, back}

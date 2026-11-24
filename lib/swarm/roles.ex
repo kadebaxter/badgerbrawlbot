@@ -84,6 +84,7 @@ defmodule Swarm.Roles do
   # out this far ahead. The estimate swings every tick: at 0 the call went gather, stay out, gather
   # ten times in twenty ticks, 37 of ours walking to and fro in front of 72 with the serum on.
   @back_in 0.3
+  @inside 3
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
   # Trebuchet can't hit anything closer than `min_range`.
@@ -977,6 +978,19 @@ defmodule Swarm.Roles do
 
   @doc "Whether group `g` would beat us, gathered or not: nobody is going in."
   def away?(g), do: call(g) == :away
+
+  @doc """
+  Whether group `g` is inside our base: one of them within reach of a finished Guard Tower of ours
+  (its range plus one), or within `@inside` of our Command Center. There is nowhere left to stay
+  out of its way then.
+  """
+  def inside?(%View{} = v, g) do
+    cc = v.cc && View.pos(v.cc)
+
+    Enum.any?(g.spots, fn spot ->
+      (cc != nil and View.dist(spot, cc) <= @inside) or Enum.any?(our_towers(v), &(View.dist(View.pos(&1), spot) <= range(&1) + 1))
+    end)
+  end
 
   @doc "The group whose fight `unit` (ours) is in (`groups/2`), or nil."
   def group_for(%View{} = v, wave, unit) do
