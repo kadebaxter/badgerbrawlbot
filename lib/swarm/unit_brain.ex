@@ -60,6 +60,13 @@ defmodule Swarm.UnitBrain do
   @melee ["Soldier", "Scout"]
   # A Trebuchet can't hit anything this close: it steps back instead.
   @siege_blind_spot 3
+  # A Trebuchet out with a wave shells the known enemy tower nearest it, of those within this many
+  # tiles of the wave's target or of itself.
+  @siege_towers 14
+  # A punish wave (`strategy.wave.punish`, see `Swarm.Brain`) goes after enemy workers this close,
+  # and waits this far short of a target that is in a tower's reach.
+  @punish_reach 8
+  @punish_hold 8
   # No attack-move this close to a Command Center we spare: an Archer sees 6.
   @spare_sight 8
 
@@ -355,8 +362,9 @@ defmodule Swarm.UnitBrain do
 
   defp worker(unit, v), do: take_cover(unit, v)
 
-  # Safe ore away from our drop-offs (not by a backup Command Center): on our side of the map; with none there and none by a
-  # drop-off at all, any we can see (as before we remembered ore).
+  # Safe ore away from our drop-offs (not by a backup Command Center): on our side of the map; with
+  # none there, ore clear of every enemy base; with none of that and none by a drop-off at all, any
+  # we can see (as before we remembered ore).
   # Never by a backup Command Center (`View.backups/1`): that would show the enemy where it is.
   defp far_ore(v, near) do
     backups = View.backups(v)
@@ -364,8 +372,16 @@ defmodule Swarm.UnitBrain do
     far = Enum.reject(v.deposits, &(&1 in near or unsafe?(&1, v) or by_backup?.(&1)))
 
     case Enum.filter(far, &View.ours?(v, View.pos(&1))) do
-      [] when near == [] -> Enum.filter(far, &(not Map.has_key?(&1, "seen")))
-      ours -> ours
+      [] ->
+        # None on our side: ore clear of every enemy base (`View.claimable?/2`), remembered ore
+        # too; the walk to a drop-off is long, but it pays for the depot the brain puts by it.
+        case Enum.filter(far, &View.claimable?(v, View.pos(&1))) do
+          [] when near == [] -> Enum.filter(far, &(not Map.has_key?(&1, "seen")))
+          free -> free
+        end
+
+      ours ->
+        ours
     end
   end
 
@@ -415,6 +431,7 @@ defmodule Swarm.UnitBrain do
       # In a fight: what its group's estimate says (`Roles.verdict/2`).
       fight = group && in_fight(unit, v, s, role, group) -> fight
       enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
+      punish = role == :wave && punishing?(s) && punish(unit, v, s) -> punish
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
       back = group == nil && regroup_or_retreat(unit, v, s, role) -> {:move, back}
       enemy = leftover_target(v, s, unit) -> {:attack, enemy["id"]}
@@ -482,6 +499,31 @@ defmodule Swarm.UnitBrain do
   defp fallback(v, s, group) do
     cc = v.cc && View.pos(v.cc)
     Enum.find([group.fallback, s.rally, cc], &(&1 != nil and Roles.clear_of?(group, &1))) || s.rally || cc || group.gather
+  end
+
+  defp punishing?(%{wave: %{punish: true}}), do: true
+  defp punishing?(_strategy), do: false
+
+  # In a punish wave, with no enemy fighter to fight: never in a known enemy tower's reach (out of
+  # it, straight away from the tower); then the closest enemy worker within `@punish_reach` that no
+  # tower covers; with none, on to the target, or, with that in a tower's reach, a plain move to
+  # `@punish_hold` tiles short of it (an attack-move would walk in after whatever it sees there).
+  defp punish(unit, v, s) do
+    here = View.pos(unit)
+    reaching = Enum.filter(Roles.enemy_towers(v), &(View.dist(View.pos(&1), here) <= Roles.range(&1)))
+
+    worker =
+      v.enemy_units
+      |> Enum.filter(&(&1["type"] == "Worker" and View.dist(View.pos(&1), here) <= @punish_reach and not Roles.under_tower?(v, View.pos(&1))))
+      |> Enum.min_by(&{if(unit["targetId"] == &1["id"], do: 0, else: 1), View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
+
+    cond do
+      reaching != [] -> {:move, away(v, here, reaching |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}) |> View.pos())}
+      worker -> {:attack, worker["id"]}
+      s.target == nil -> nil
+      Roles.under_tower?(v, s.target, 2) -> {:move, toward(s.target, s.rally || here, @punish_hold)}
+      true -> {:attack_move, s.target}
+    end
   end
 
   # To help at `spot`: an attack-move once near (`@help_near`), a plain move until then. An
@@ -616,7 +658,9 @@ defmodule Swarm.UnitBrain do
         role == :siege_out -> {:move, s.rally}
         back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
         kill = Map.get(s, :kill) -> go_kill(v, kill)
-        holding?(s) -> {:move, s.wave.staging}
+        holding?(s) and not sieging?(s) -> {:move, s.wave.staging}
+        # No spared Command Center in a shell's way: with one, the camp out of its reach as ever.
+        tower = Map.get(s, :spare) == nil && siege_tower(unit, v, s) -> shell(unit, v, s, tower)
         true -> onward(unit, s, :siege_camp)
       end
 
@@ -625,6 +669,40 @@ defmodule Swarm.UnitBrain do
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
+  end
+
+  defp sieging?(%{wave: %{sieging: since}}) when since != nil, do: true
+  defp sieging?(_strategy), do: false
+
+  # The known enemy tower a Trebuchet out with the wave shells: the nearest to it of those within
+  # `@siege_towers` of the wave's target or of itself. The nearest, so every other tower is at
+  # least as far from where it stands to fire.
+  defp siege_tower(unit, v, s) do
+    here = View.pos(unit)
+
+    Roles.enemy_towers(v)
+    |> Enum.filter(fn t ->
+      pos = View.pos(t)
+      View.dist(pos, here) <= @siege_towers or (s.target != nil and View.dist(pos, s.target) <= @siege_towers)
+    end)
+    |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
+  end
+
+  # Shell `tower` by name: attack-moving, a Trebuchet fires at the nearest unit, and a building only
+  # with no unit in reach. In sight, the game walks it to its own reach (7; a tower's is 5) and it
+  # fires from there. Out of sight (we can only attack what we see) it walks to 7 tiles off, then
+  # 6; still unseen there, on with the wave as before.
+  defp shell(unit, v, s, tower) do
+    here = View.pos(unit)
+    there = View.pos(tower)
+    d = View.dist(here, there)
+
+    cond do
+      Enum.any?(v.enemy_buildings, &(&1["id"] == tower["id"])) -> {:attack, tower["id"]}
+      d > 7 -> {:move, toward(there, here, 7)}
+      d > 6 -> {:move, toward(there, here, 6)}
+      true -> onward(unit, s, :siege_camp)
+    end
   end
 
   # The wave waits at its staging point for its Trebuchets.

@@ -424,7 +424,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
 | 6–9 (medium) | 30 workers; army first: Barracks → depot → a tower facing each neighbor (2) → 2nd Barracks → TechLab → 3rd Barracks → 2 more towers (4 in all) → backup Command Center (at 20 fighters); first wave at 15, then 12, at the weaker neighbor, no waiting for a tower square. Once a neighbor is eliminated, a depot goes on its ore (the side nearest us) with a tower: a second base in a corner next to us, not in the middle |
 | 10+ (big) | 30 workers; three Barracks early and a square of 10 towers around the base; first wave at 18 once the square is up (or tick 900), then 15 |
 
-1. **Economy (done):** grow to ~20 workers (30 in a big game) while following a build order kept as data: Barracks
+1. **Economy (done):** grow to ~20 workers (30 in a big game; more while there is the ore for them: one for every 150 ore left in the fields we can mine or take, up to 60) while following a build order kept as data: Barracks
    (7 workers) → Resource Depot by the ore (9) → Guard Tower (11) → TechLab (13) → 2nd Barracks
    (15) → 2nd Guard Tower (17) → backup Command Center (17, once we have 10 fighters: in a small
    game it is 400 ore while the first raids come, so it comes last). The backup Command Center goes to a free
@@ -460,7 +460,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    takes (the game has no limit on miners per deposit, and each mines at full speed), so with a
    depot two tiles from its field they mine and bank without walking. A miner moves over once
    another deposit's trip is 2 tiles shorter than its own (a new depot went up by fresh ore). With all of that unsafe, safe ore farther away on our side
-   (where the rule below puts a depot); with no safe ore at all, an idle worker waits next to the
+   (where the rule below puts a depot), and with none on our side, ore clear of every enemy base
+   (at least 14 tiles from every opponent's start and every enemy building we know of: the ore in
+   the gap between two bases is on nobody's side); with no safe ore at all, an idle worker waits next to the
    closest of our towers instead of standing in the field.
    **Ore is remembered:** the server only sends the deposits in sight, but deposits never move and a
    Gather may name one in the fog, so the leader keeps every deposit it has seen (forgetting one
@@ -473,10 +475,17 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    anything else. While the main base is raided or overrun, the reserve isn't spent on workers
    there (they only die); the backup Command Center's own workers have first claim on it: losing
    every worker with nothing banked would end the economy for good. When home has been short of ore for 30 ticks in a row (under
-   3,000 left within reach of a drop-off, so the next depot is up before it runs out; how many
-   workers there are doesn't matter, they stack), a Resource
+   3,000 left within reach of a drop-off, or under 100 for each worker, so the next depot is up
+   before it runs out), a Resource
    Depot goes by the ore with the shortest trip of those out of reach (where idle workers go
-   next), ahead of the build order; while it goes up, workers with no ore in reach mine by it.
+   next; on our side first, else clear of every enemy base, and a field with at least 400 left),
+   ahead of the build order, and in a big game without waiting for 15 fighters; while it goes up,
+   workers with no ore in reach mine by it.
+   **A spot where building keeps failing** (away from home: more than 10 tiles from the Command
+   Center) is blocked for 300 ticks at three strikes: an order that failed or whose builder died,
+   a worker sent to an abandoned site again, or what stood there destroyed (two strikes). No
+   worker is sent to a site there, nothing new goes up within 2 tiles, and the next depot goes by
+   another field (logged as `site_blocked`).
    And whenever 3 or more workers are mining one field more than 2 tiles from a drop-off (a
    depot going up counts) with at least 1,000 ore left, a depot goes right by that field, 2 tiles
    from the ore, right away: a
@@ -500,12 +509,23 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    ore it will serve, up to 5 (a co-op in about 5
    ticks, by the miners it saves the walk), and the first Barracks by the 3 closest workers. Siege is only for the waves (at home a 350-ore Trebuchet is
    a fifth as strong as the 3.5 Soldiers it costs): at 25 fighters, with the build order done,
-   SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets. They wait
+   SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets, and one
+   for every 2 finished towers of the opponent with the most we know of, up to 6. They wait
    at the rally point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of
-   its target until the Trebuchets are there (at most 60 ticks), then goes in; Trebuchets step
-   back from anything inside their 3-tile blind spot.
+   its target until the Trebuchets are there (at most 60 ticks). With towers within 10 of the
+   target, the Trebuchets then shell them while the rest keeps holding: each attacks the known
+   tower nearest it by name (attack-moving, the game fires a Trebuchet at the nearest unit, and at
+   a building only with no unit in reach), which walks it to 7 tiles off, outside the tower's 5;
+   one in the fog it walks toward until someone sees it. Everyone goes in once those towers are
+   down, the Trebuchets are gone, or after 200 ticks. Trebuchets step
+   back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
+   theirs within 6) the wave takes together, shooting at us or not.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
-   point (18 for the first in a big game; 10, before the tower square, for an early strike on a
+   point (18 for the first in a big game; 8, at 1.2 times their fighters we know of, towers not
+   counted, at an opponent with an **exposed base**: a Command Center or Resource Depot more than
+   15 tiles from where they started. Such a punish wave goes for that drop-off; its members go
+   for workers no tower covers, step out of any tower's reach, hold 8 tiles short of a target
+   that is in one, and are called back as outmatched by their fighters only; 10, before the tower square, for an early strike on a
    neighbor within 30 tiles that a scout has just looked at and that we outmatch 2 to 1), and never with fewer than 12 (15 in a big game),
    counterattacks included. While it is out, attackers trained later follow it in batches of 5 or more and become
    part of it, so it goes out and comes back as one. The members are kept in the replicated

@@ -654,10 +654,16 @@ defmodule Swarm.Roles do
   @doc """
   Nothing to fight among the enemy fighters: the tower shooting at this unit, then sites, then
   workers and buildings, Command Centers last. Stay on what we are already hitting. A tower that
-  isn't shooting at it is a building like the rest: we don't all go for every tower we see.
+  isn't shooting at it is a building like the rest: we don't all go for every tower we see, except,
+  in the wave, one standing on its own.
   """
   def leftover_target(v, wave, unit) do
     here = View.pos(unit)
+    towers = enemy_towers(v)
+    in_wave? = unit["id"] in members(wave)
+    # A tower on its own (no other of theirs within `@engage_radius` of it): the wave takes it
+    # together, like one shooting at us. Eight Soldiers bring one down in about nine ticks.
+    lone? = fn t -> in_wave? and t["completed"] != false and not Enum.any?(towers, &(&1["id"] != t["id"] and View.dist(View.pos(&1), View.pos(t)) <= @engage_radius)) end
 
     (Enum.filter(v.enemy_units, &(&1["type"] == "Worker")) ++ v.enemy_buildings)
     |> Enum.filter(fn t ->
@@ -674,7 +680,7 @@ defmodule Swarm.Roles do
           cond do
             t["type"] == "Worker" -> if workers_first?, do: 2, else: 3
             t["completed"] == false -> 1
-            t["type"] == "GuardTower" and View.dist(View.pos(t), here) <= range(t) -> 0
+            t["type"] == "GuardTower" and (View.dist(View.pos(t), here) <= range(t) or lone?.(t)) -> 0
             t["type"] == "CommandCenter" -> 4
             true -> if workers_first?, do: 3, else: 2
           end

@@ -66,12 +66,22 @@ defmodule Swarm.TowersTest do
     assert {%{"type" => "Move", "x" => 30, "y" => 10}, _} = UnitBrain.decide(201, v, attacking(5))
   end
 
-  test "a tower that isn't shooting at it is a building like the rest" do
-    # Five of us 6 from a tower (out of its reach) and from a Barracks: the Barracks, by id.
+  test "a tower among others that isn't shooting at it is a building like the rest" do
+    # Five of us 6 from a tower (out of its reach) and from a Barracks, with a second tower behind
+    # the first: the Barracks, by id.
+    ours = soldiers_at(5, 25, 10)
+    barracks = building(799, "Barracks", 25, 16, 1)
+    v = view(ours, buildings: [%{@tower | "id" => 803, "x" => 31}, %{@tower | "id" => 804, "x" => 35}, barracks])
+    assert %{"id" => 799} = Roles.target(v, wave(5), hd(ours))
+  end
+
+  test "a tower standing on its own: the wave takes it, shooting at us or not" do
     ours = soldiers_at(5, 25, 10)
     barracks = building(799, "Barracks", 25, 16, 1)
     v = view(ours, buildings: [%{@tower | "id" => 803, "x" => 31}, barracks])
-    assert %{"id" => 799} = Roles.target(v, wave(5), hd(ours))
+    assert %{"id" => 803} = Roles.target(v, wave(5), hd(ours))
+    # Not fighters at home: only the wave.
+    assert Roles.target(v, nil, hd(ours)) == nil
   end
 
   test "a group goes in together: the front waits for the ones behind, then all go" do

@@ -51,7 +51,10 @@ defmodule Swarm.View do
     # Team-wide answers worked out once per tick on each node (`Swarm.Roles.share/2`), or nil.
     shared: nil,
     # player slot => survival score (the ore value of everything they have alive), opponents only
-    enemy_survival: %{}
+    enemy_survival: %{},
+    # Spots away from home where building keeps failing (set by `Swarm.Brain.plan/3`): nothing
+    # goes up by one for a while.
+    blocked: []
   ]
 
   @type t :: %__MODULE__{}
@@ -62,6 +65,9 @@ defmodule Swarm.View do
   # Depots this close to the Command Center are home (see `home_drop_offs/1`); one farther out is an
   # outpost, as `Swarm.Roles` has it.
   @home_ore 6
+  # Ore off our side of the map is still free to take this far from every opponent's start and
+  # every building of theirs we know of (see `claimable?/2`).
+  @enemy_clear 14
 
   @spec new(map()) :: t()
   def new(state) do
@@ -290,5 +296,17 @@ defmodule Swarm.View do
   def ours?(%__MODULE__{cc: cc} = v, pos) do
     home = dist(pos, pos(cc))
     Enum.all?(v.enemy_starts, &(home < dist(pos, &1)))
+  end
+
+  @doc """
+  Whether ore at `pos` is free for us to take: on our side (`ours?/2`), or at least
+  #{@enemy_clear} tiles from every opponent's start and every enemy building we know of. Ore in
+  the gap between two bases is as far from one as from the other, so it is on nobody's side; with
+  only our side to mine, 25 workers stood idle for 1,200 ticks with 16 deposits known.
+  """
+  def claimable?(%__MODULE__{} = v, pos) do
+    ours?(v, pos) or
+      (Enum.all?(v.enemy_starts, &(dist(pos, &1) >= @enemy_clear)) and
+         Enum.all?(v.enemy_buildings ++ v.remembered, &(dist(pos, pos(&1)) >= @enemy_clear)))
   end
 end

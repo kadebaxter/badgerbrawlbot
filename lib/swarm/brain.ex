@@ -41,6 +41,12 @@ defmodule Swarm.Brain do
   @target_workers 20
   # A big game needs a bigger economy to out-grow everyone: this many workers there.
   @big_target_workers 30
+  # More than that while there is the ore for them: a worker for every `@ore_per_worker` ore left in
+  # the fields we can mine or take (`minable_ore/1`), up to `@max_workers`. A worker (50) pays for
+  # itself in about 35 ticks of mining, and every ore banked counts twice on time: once as gathered,
+  # again in what it buys.
+  @ore_per_worker 150
+  @max_workers 60
   # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
   @scouts 2
   @first_wave 15
@@ -233,6 +239,24 @@ defmodule Swarm.Brain do
   # build order to be done), and then we keep `@trebuchets` of them, for the waves.
   @siege_after_fighters 25
   @trebuchets 2
+  # More against a wall of towers: one for every `@towers_per_trebuchet` finished towers of the
+  # opponent who has the most we know of, up to `@max_trebuchets`. Two take about 56 ticks a tower
+  # (40 damage every 8 ticks against 500 HP), six about 19, from outside its reach.
+  @towers_per_trebuchet 2
+  @max_trebuchets 6
+  # A wave with Trebuchets shells the towers by its target before the rest goes in (`release/4`):
+  # towers within `@siege_clear` of the target, for at most `@siege_ticks`.
+  @siege_clear 10
+  @siege_ticks 200
+  # An exposed base: a drop-off of an opponent's (Command Center or Resource Depot, finished or
+  # not) more than `@exposed_from` tiles from where they started. One who mines out there first
+  # and leaves the home ore for later has few fighters early and every worker in the open: the
+  # wave goes for that drop-off and its workers (`Swarm.UnitBrain`), with `@punish_min` attackers
+  # `@punish_margin` times their fighters we know of. Their towers don't count, to leave or to be
+  # called back: a punish wave stays out of their reach.
+  @exposed_from 15
+  @punish_min 8
+  @punish_margin 1.2
   # Trebuchets needed at the rally point to go out with a wave.
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
@@ -321,6 +345,18 @@ defmodule Swarm.Brain do
   @depot_builders 5
   @first_barracks_builders 3
   @short_for_ticks 30
+  # ...or under this much for each worker: a bigger workforce empties the fields sooner.
+  @low_ore_per_worker 100
+  # A field worth a new depot away from home has at least this much ore left.
+  @expansion_ore 400
+  # Building that keeps failing at a spot away from home (`strike/4`): the order failed or its
+  # builder died, a worker had to be sent to an abandoned site again, or what stood there was
+  # destroyed (that counts double). At `@site_strikes` in `@avoid_lost_ticks` ticks the spot is
+  # blocked: no worker is sent to the site, nothing new goes up within `@blocked_radius` of it, and
+  # the next depot goes by another field. A depot site under a tower we couldn't see was started
+  # six times in 80 ticks; a backup Command Center had a worker sent to it eight times.
+  @site_strikes 3
+  @blocked_radius 2
   # The survey for ore (see `survey/3`): rings this far around the Command Center, and how long the
   # scout tries for one spot.
   @survey_rings [10, 20]
@@ -393,6 +429,10 @@ defmodule Swarm.Brain do
       ore_short_since: nil,
       buildings: %{},
       lost: %{},
+      # spot => the ticks building failed there lately (see `@site_strikes`).
+      strikes: %{},
+      # The spots blocked last tick, for logging each once.
+      blocked: [],
       recalled_at: nil,
       raid: nil,
       look: nil,
@@ -691,8 +731,9 @@ defmodule Swarm.Brain do
         do: spot
   end
 
-  # Spots to look at for ore once home runs short, anywhere on our side of the map (all of it with
-  # the last opponent spared, see `plan/3`): every eliminated player's start, and a grid
+  # Spots to look at for ore once home runs short, anywhere on our side of the map or clear of
+  # every enemy base (`View.claimable?/2`; all of it with the last opponent spared, see `plan/3`):
+  # every eliminated player's start, and a grid
   # `@far_grid` tiles apart, on open ground (the nearest open tile within 3).
   defp far_spots(%View{} = v, terrain) do
     rows = List.to_tuple(terrain)
@@ -705,7 +746,7 @@ defmodule Swarm.Brain do
     grid = for x <- half..(v.map_width - 1)//@far_grid, y <- half..(v.map_height - 1)//@far_grid, do: {x, y}
 
     for {x, y} <- v.fallen_starts ++ grid,
-        View.ours?(v, {x, y}),
+        View.claimable?(v, {x, y}),
         spot = Enum.find(for(d <- 0..3, dx <- -d..d, dy <- -d..d, do: {x + dx, y + dy}), open?),
         spot != nil,
         uniq: true,
@@ -729,8 +770,17 @@ defmodule Swarm.Brain do
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
     strategy = %{strategy | survey: survey, regroup: regroup, help: help, why: strategy.why ++ surveyed ++ regrouped ++ helped}
-    memory = %{memory | pending: still_pending(memory.pending, v), ore_short_since: short_since(memory, v)}
+    memory = settle_pending(memory, v)
+    memory = %{memory | ore_short_since: short_since(memory, v)}
     memory = remember_losses(memory, v)
+    v = %{v | blocked: blocked(memory, v)}
+
+    gave_up =
+      for spot <- v.blocked -- memory.blocked,
+          do: {:site_blocked, "building keeps failing at #{fmt(spot)}: nothing goes up there for #{@avoid_lost_ticks} ticks"}
+
+    strategy = %{strategy | why: strategy.why ++ gave_up}
+    memory = %{memory | blocked: v.blocked}
 
     # Ore for a couple of workers stays back from everything else once the army is being trained
     # (a Barracks is up, or past the opening: the Barracks may be gone): with every worker dead and
@@ -771,7 +821,8 @@ defmodule Swarm.Brain do
     # Any base under attack, outposts included, or our workers out in the field.
     attacked? = threat != nil or Roles.help_wanted(v) != []
     owner = opponent(v, memory)
-    target = target_of(v, owner)
+    # Their exposed base, if they have one (`exposed_base/2`); else their building nearest us.
+    target = exposed_base(v, owner) || target_of(v, owner)
     # The last opponent's Command Center stays up (`spare/3`), the wave goes for the rest; or, in
     # safe mode (`memory.kill`), straight for it. Before the wave is kept or called home: safe mode
     # is what keeps it out.
@@ -1259,7 +1310,7 @@ defmodule Swarm.Brain do
       Roles.siege_threats(v) == [] and there? ->
         {nil, memory.next_wave, [{:wave_recalled, "sortie: #{at} is cleared"}], nil}
 
-      facing = outmatched(v, alive, spot) ->
+      facing = outmatched(v, alive, spot, true) ->
         {player, theirs} = facing
         why = "sortie at #{at}: outmatched by player #{player}, #{round(Roles.strength(alive))} vs #{round(theirs)}"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
@@ -1300,7 +1351,7 @@ defmodule Swarm.Brain do
         why = "strike at #{at}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
 
-      facing = outmatched(v, alive, wave.tower_pos) ->
+      facing = outmatched(v, alive, wave.tower_pos, true) ->
         {player, theirs} = facing
         why = "strike at #{at}: outmatched by player #{player}, #{round(Roles.strength(alive))} vs #{round(theirs)}"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
@@ -1394,7 +1445,8 @@ defmodule Swarm.Brain do
       losses = bleeding(wave, alive) ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: #{losses}"}], nil}
 
-      facing = outmatched(v, alive, target) ->
+      # A punish wave (`@exposed_from`) keeps out of their towers' reach, so only their fighters count.
+      facing = outmatched(v, alive, target, not Map.get(wave, :punish, false)) ->
         {player, theirs} = facing
         why = "wave #{wave.id}: outmatched by player #{player}, strength #{round(Roles.strength(alive))} vs #{round(theirs)} nearby"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
@@ -1402,7 +1454,7 @@ defmodule Swarm.Brain do
       true ->
         wave = %{wave | members: Enum.map(alive, & &1["id"])} |> peaked(alive)
         {wave, more, hold} = reinforce(v, wave, rally)
-        {wave, next_wave, why} = release(v, wave, memory.next_wave)
+        {wave, next_wave, why} = release(v, wave, memory.next_wave, target)
         {wave, next_wave, more ++ why, hold}
     end
   end
@@ -1532,34 +1584,59 @@ defmodule Swarm.Brain do
 
   # A wave holding at its staging point goes in once its Trebuchets are there (or gone), or after
   # `@siege_wait` ticks in case they are stuck.
-  defp release(v, %{released: false} = wave, next_wave) do
+  # Then, with towers by the target (`@siege_clear`), the Trebuchets shell them from outside their
+  # reach while the rest holds at the staging point (`sieging`, the tick it began): attack-moving
+  # in, a Trebuchet fires at the nearest unit and the soldiers die under the towers it was built
+  # for. Everyone goes in once those towers are down, the Trebuchets are gone, or `@siege_ticks` on.
+  defp release(v, %{released: false} = wave, next_wave, target) do
     siege = Enum.filter(v.my_units, &(&1["type"] == "Trebuchet" and &1["id"] in wave.members))
     there? = Enum.all?(siege, &(View.dist(View.pos(&1), wave.staging) <= @staged_radius))
+    towers = if target, do: Enum.count(Roles.enemy_towers(v), &(View.dist(View.pos(&1), target) <= @siege_clear)), else: 0
 
-    if there? or v.tick - wave.at >= @siege_wait do
-      why = "wave #{wave.id}: #{length(siege)} trebuchet(s) in place, going in"
-      {%{wave | released: true}, next_wave, [{:wave_released, why}]}
-    else
-      {wave, next_wave, []}
+    case Map.get(wave, :sieging) do
+      nil when siege != [] and towers > 0 and (there? or v.tick - wave.at >= @siege_wait) ->
+        why = "wave #{wave.id}: #{length(siege)} trebuchet(s) in place, shelling #{towers} tower(s) by #{fmt(target)}; the rest hold"
+        {Map.put(wave, :sieging, v.tick), next_wave, [{:wave_released, why}]}
+
+      nil when there? or v.tick - wave.at >= @siege_wait ->
+        why = "wave #{wave.id}: #{length(siege)} trebuchet(s) in place, going in"
+        {%{wave | released: true}, next_wave, [{:wave_released, why}]}
+
+      nil ->
+        {wave, next_wave, []}
+
+      since ->
+        done =
+          cond do
+            siege == [] -> "its trebuchets are gone"
+            towers == 0 -> "the towers by #{fmt(target)} are down"
+            v.tick - since >= @siege_ticks -> "#{towers} tower(s) still up after #{@siege_ticks} ticks"
+            true -> nil
+          end
+
+        if done,
+          do: {%{wave | released: true}, next_wave, [{:wave_released, "wave #{wave.id}: #{done}, going in"}]},
+          else: {wave, next_wave, []}
     end
   end
 
-  defp release(_v, wave, next_wave), do: {wave, next_wave, []}
+  defp release(_v, wave, next_wave, _target), do: {wave, next_wave, []}
 
   # The strongest single enemy player at the wave's front, as {player, strength}, if stronger than
   # the whole wave; else nil. Players are counted apart: two fighting each other near us don't add
   # up, and we may well come in on them.
   # The front: the members within `@wave_sight` of the one nearest the target (reinforcements
   # walking up behind are counted in the wave, not in where it is fighting).
-  defp outmatched(v, alive, target) do
-    case facing(v, alive, target) do
+  defp outmatched(v, alive, target, towers?) do
+    case facing(v, alive, target, towers?) do
       {_player, theirs} = top when theirs > 0 -> if Roles.strength(alive) < theirs, do: top
       _ -> nil
     end
   end
 
-  # The strongest single enemy player at the wave's front, as {player, strength}, or nil.
-  defp facing(v, alive, target) do
+  # The strongest single enemy player at the wave's front, as {player, strength}, or nil; their
+  # towers there count unless `towers?` is false.
+  defp facing(v, alive, target, towers?) do
     lead = if target, do: Enum.min_by(alive, &View.dist(View.pos(&1), target)), else: hd(alive)
     front = Enum.filter(alive, &(View.dist(View.pos(&1), View.pos(lead)) <= @wave_sight))
     n = length(front)
@@ -1567,7 +1644,7 @@ defmodule Swarm.Brain do
     near? = &(View.dist(View.pos(&1), center) <= @wave_sight)
 
     (Enum.filter(v.enemy_units, &(&1["type"] != "Worker" and near?.(&1))) ++
-       Enum.filter(Roles.enemy_towers(v), near?))
+       if(towers?, do: Enum.filter(Roles.enemy_towers(v), near?), else: []))
     |> strongest_player()
   end
 
@@ -1674,12 +1751,23 @@ defmodule Swarm.Brain do
     theirs = enemy_strength(v, memory, owner)
 
     early? = early_strike?(v, memory, owner, staged, ours, theirs)
-    want = if early?, do: @early_min, else: wave_min(v, memory)
+    # Their exposed base (`@exposed_from`): fewer attackers will do, against their fighters alone.
+    their_army = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] in [owner, nil])) |> Roles.strength()
+    punish? = exposed_base(v, owner) != nil and length(staged) >= @punish_min and Roles.strength(staged) >= @punish_margin * their_army
+
+    want =
+      cond do
+        punish? -> min(@punish_min, wave_min(v, memory))
+        early? -> @early_min
+        true -> wave_min(v, memory)
+      end
 
     ready? =
-      if scouted?,
-        do: length(staged) >= want and ours >= @margin * theirs,
-        else: length(staged) >= max(@first_wave, want)
+      cond do
+        punish? -> true
+        scouted? -> length(staged) >= want and ours >= @margin * theirs
+        true -> length(staged) >= max(@first_wave, want)
+      end
 
     leaving = %{members: Enum.map(staged ++ siege, & &1["id"])}
     home = Roles.recall(v, leaving)
@@ -1709,7 +1797,7 @@ defmodule Swarm.Brain do
         length(staged) < want ->
           "#{at_rally}, want #{want}"
 
-        (towers = if(early?, do: nil, else: towers_short(v, memory))) != nil ->
+        (towers = if(early? or punish?, do: nil, else: towers_short(v, memory))) != nil ->
           "#{at_rally}, building the tower square first (#{towers} of #{@big_towers})"
 
         not counter? and looking?(memory.look, owner) ->
@@ -1739,6 +1827,7 @@ defmodule Swarm.Brain do
       counter =
         cond do
           counter? -> "counterattack: "
+          punish? -> "their base at #{fmt(target)} is out in the open, their fighters #{round(their_army)}: at its workers, clear of their towers: "
           early? -> "early strike on a weak neighbor: "
           true -> ""
         end
@@ -1757,7 +1846,8 @@ defmodule Swarm.Brain do
         # With siege, everyone holds short of the target until it arrives.
         staging: if(siege != [], do: staging(v, target, from)),
         released: siege == [],
-        at: v.tick
+        at: v.tick,
+        punish: punish?
       }
 
       {wave, memory.next_wave + 1, [{:wave_launched, why}], nil}
@@ -1808,6 +1898,20 @@ defmodule Swarm.Brain do
           {_start, slot} -> slot
           nil -> nil
         end
+    end
+  end
+
+  # The drop-off of `owner`'s nearest us (Command Center or Resource Depot, finished or going up,
+  # seen now or remembered) that is more than `@exposed_from` tiles from where they started, or nil.
+  defp exposed_base(v, owner) do
+    from = if v.cc, do: View.pos(v.cc), else: center(v)
+    start = Enum.find_value(v.start_owner, fn {pos, slot} -> if slot == owner, do: pos end)
+
+    if start do
+      (v.enemy_buildings ++ v.remembered)
+      |> Enum.filter(&(&1["owner"] == owner and &1["type"] in ["CommandCenter", "ResourceDepot"] and View.dist(View.pos(&1), start) > @exposed_from))
+      |> Enum.map(&View.pos/1)
+      |> Enum.min_by(&{View.dist(&1, from), &1}, fn -> nil end)
     end
   end
 
@@ -2037,8 +2141,6 @@ defmodule Swarm.Brain do
 
   # Forget the pending building once it is up, or if it isn't coming: the builder died, its
   # order failed, or it is taking too long.
-  defp still_pending(nil, _v), do: nil
-
   defp still_pending(p, %View{} = v) do
     failed? =
       Enum.any?(v.events, fn e ->
@@ -2054,10 +2156,40 @@ defmodule Swarm.Brain do
     end
   end
 
+  # The pending building, kept or forgotten (`still_pending/2`); one forgotten without having
+  # appeared failed: a strike against its site.
+  defp settle_pending(%{pending: nil} = memory, _v), do: memory
+
+  defp settle_pending(%{pending: p} = memory, v) do
+    case still_pending(p, v) do
+      nil -> if count(v, p.type) > p.had, do: %{memory | pending: nil}, else: strike(%{memory | pending: nil}, v, Map.get(p, :site))
+      kept -> %{memory | pending: kept}
+    end
+  end
+
+  # Building failed at `spot` (`times` over): remembered for `@avoid_lost_ticks`. Not at home (within
+  # `@base_radius` of the Command Center): a raid on the base is no reason to build elsewhere.
+  defp strike(memory, v, spot, times \\ 1)
+  defp strike(memory, _v, nil, _times), do: memory
+
+  defp strike(memory, v, spot, times) do
+    if v.cc != nil and View.dist(spot, View.pos(v.cc)) <= @base_radius do
+      memory
+    else
+      %{memory | strikes: Map.update(memory.strikes, spot, List.duplicate(v.tick, times), &(List.duplicate(v.tick, times) ++ &1))}
+    end
+  end
+
+  # The spots building keeps failing at (`@site_strikes` strikes in the last `@avoid_lost_ticks`).
+  defp blocked(memory, v) do
+    for {spot, ticks} <- memory.strikes, Enum.count(ticks, &(v.tick - &1 <= @avoid_lost_ticks)) >= @site_strikes, do: spot
+  end
+
   # A site nobody is working on (its builder died or was called away) gets the closest free
-  # worker. Its cost was paid when it was started, so this needs no ore.
+  # worker. Its cost was paid when it was started, so this needs no ore. Not a site at a blocked
+  # spot (`@site_strikes`): workers sent there keep coming back or dying; it waits.
   defp finish_sites({cmds, mem, ore}, v) do
-    unfinished = Enum.reject(v.my_buildings, & &1["completed"])
+    unfinished = Enum.reject(v.my_buildings, &(&1["completed"] or View.pos(&1) in v.blocked))
     worked_on = MapSet.new(View.units_of(v, "Worker"), & &1["targetId"])
     # Forget sites that are finished or gone.
     helpers = Map.take(mem.helpers, Enum.map(unfinished, & &1["id"]))
@@ -2079,6 +2211,10 @@ defmodule Swarm.Brain do
           {[build_cmd([worker], b["type"], View.pos(b)) | cmds], Map.put(helpers, b["id"], {worker["id"], v.tick})}
         end
       end)
+
+    # Each worker sent is a strike against the site: whoever was building it left or died.
+    sent = for {id, {_worker, at}} <- helpers, at == v.tick, b = Enum.find(unfinished, &(&1["id"] == id)), b != nil, do: View.pos(b)
+    mem = Enum.reduce(sent, mem, &strike(&2, v, &1))
 
     {cmds, %{mem | helpers: helpers}, ore}
   end
@@ -2104,7 +2240,7 @@ defmodule Swarm.Brain do
 
       free ->
         builders = builders(v, free, type, site)
-        pending = %{type: type, builder: hd(builders)["id"], at: v.tick, had: count(v, type)}
+        pending = %{type: type, builder: hd(builders)["id"], at: v.tick, had: count(v, type), site: site}
         {[build_cmd(builders, type, site) | cmds], %{mem | pending: pending}, ore - @costs[type]}
     end
   end
@@ -2170,7 +2306,7 @@ defmodule Swarm.Brain do
   defp next_build(%View{cc: nil}, _terrain, _mem), do: nil
 
   defp next_build(%View{} = v, terrain, mem) do
-    depot = if may_expand?(v), do: conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
+    depot = if may_expand?(v, mem), do: conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
 
     case depot do
       nil ->
@@ -2220,10 +2356,30 @@ defmodule Swarm.Brain do
     end
   end
 
-  defp target_workers(v), do: if(big?(v), do: @big_target_workers, else: @target_workers)
+  # The usual number, and more while there is ore for them (`@ore_per_worker`).
+  defp target_workers(v) do
+    usual = if big?(v), do: @big_target_workers, else: @target_workers
+    v |> minable_ore() |> div(@ore_per_worker) |> min(@max_workers) |> max(usual)
+  end
 
-  # A new co-op away from home, in a big game only with an army to hold it.
-  defp may_expand?(v), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army
+  # The ore left that we can get at: by our drop-offs, or free to take (`View.claimable?/2`) and
+  # not in reach of an enemy tower.
+  defp minable_ore(v) do
+    near = MapSet.new(View.near_deposits(v), & &1["id"])
+
+    v.deposits
+    |> Enum.filter(fn d ->
+      MapSet.member?(near, d["id"]) or (View.claimable?(v, View.pos(d)) and not Roles.under_tower?(v, View.pos(d)))
+    end)
+    |> Enum.sum_by(&(&1["remaining"] || 0))
+  end
+
+  # A new co-op away from home, in a big game only with an army to hold it; or with home short of
+  # ore for a while (`@short_for_ticks`), army or not: the choice then is a depot that may be lost
+  # or every worker idle for the rest of the game.
+  defp may_expand?(v, mem), do: not big?(v) or length(Roles.fighters(v)) >= @expand_army or short_long_enough?(v, mem)
+
+  defp short_long_enough?(v, mem), do: mem.ore_short_since != nil and v.tick - mem.ore_short_since >= @short_for_ticks
 
   # A big game's first wave may go early, with `@early_min` attackers and before the tower square,
   # at a neighbor that is close (its start within `@early_reach`), that a scout has just looked at,
@@ -2311,10 +2467,10 @@ defmodule Swarm.Brain do
 
   # Home has been short of ore for a while: a depot by the closest other ore.
   defp expansion(v, terrain, mem) do
-    building_one? = Enum.any?(View.buildings_of(v, "ResourceDepot"), &(not &1["completed"]))
-    short_long_enough? = mem.ore_short_since != nil and v.tick - mem.ore_short_since >= @short_for_ticks
+    # A site at a blocked spot isn't one going up: it waits, and the next depot goes elsewhere.
+    building_one? = Enum.any?(View.buildings_of(v, "ResourceDepot"), &(not &1["completed"] and View.pos(&1) not in v.blocked))
 
-    if short_long_enough? and not building_one?, do: site(terrain, v, :expansion, avoid(v, mem))
+    if short_long_enough?(v, mem) and not building_one?, do: site(terrain, v, :expansion, avoid(v, mem))
   end
 
   # Where we lost a building lately (`mem.lost`) and enemy fighters we know of are still near (within
@@ -2324,7 +2480,8 @@ defmodule Swarm.Brain do
     enemies = for {_id, e} <- mem.enemies, e["type"] not in ["Worker", "Scout"], do: View.pos(e)
     enemies = enemies ++ for(e <- v.enemy_units, e["type"] not in ["Worker", "Scout"], do: View.pos(e))
 
-    for spot <- Map.keys(mem.lost), Enum.any?(enemies, &(View.dist(&1, spot) <= @lost_clear)), do: spot
+    # Blocked spots too, enemies in sight or not: what kills a site there may be a tower in the fog.
+    v.blocked ++ for(spot <- Map.keys(mem.lost), Enum.any?(enemies, &(View.dist(&1, spot) <= @lost_clear)), do: spot)
   end
 
   # A building of ours that was there last tick and isn't now was destroyed: remember the spot.
@@ -2337,7 +2494,12 @@ defmodule Swarm.Brain do
       |> Map.merge(Map.new(gone, &{&1, v.tick}))
       |> Map.reject(fn {_spot, at} -> v.tick - at > @avoid_lost_ticks end)
 
-    %{memory | buildings: now, lost: lost, hp: Map.new(v.my_buildings, &{&1["id"], &1["hp"]})}
+    # Old strikes are forgotten; a building destroyed is two against its spot.
+    strikes =
+      for {spot, ticks} <- memory.strikes, recent = Enum.filter(ticks, &(v.tick - &1 <= @avoid_lost_ticks)), recent != [], into: %{}, do: {spot, recent}
+
+    memory = %{memory | buildings: now, lost: lost, strikes: strikes, hp: Map.new(v.my_buildings, &{&1["id"], &1["hp"]})}
+    Enum.reduce(gone, memory, &strike(&2, v, &1, 2))
   end
 
   # Since when home has been short of ore (see `@low_home_ore`), or nil if it isn't.
@@ -2348,7 +2510,9 @@ defmodule Swarm.Brain do
     ore_left = Enum.sum_by(near, &(&1["remaining"] || 0))
 
     # Ore actually left, not workers per deposit: they stack, so a crowded field isn't running out.
-    if ore_left < @low_home_ore,
+    low = max(@low_home_ore, @low_ore_per_worker * length(View.units_of(v, "Worker")))
+
+    if ore_left < low,
       do: memory.ore_short_since || v.tick,
       else: nil
   end
@@ -2526,7 +2690,7 @@ defmodule Swarm.Brain do
     queued = for w <- workshops, p <- w["production"], p["unitType"] == "Trebuchet", do: p
     free = Enum.find(workshops, &(length(&1["production"]) < 2))
     cost = @costs["Trebuchet"]
-    wanted = if siege_time?(v), do: @trebuchets, else: 0
+    wanted = if siege_time?(v), do: trebuchets_wanted(v), else: 0
 
     cond do
       free == nil or length(View.units_of(v, "Trebuchet")) + length(queued) >= wanted ->
@@ -2539,6 +2703,12 @@ defmodule Swarm.Brain do
       true ->
         {cmds, mem, ore - cost}
     end
+  end
+
+  # `@trebuchets`, and more for the opponent with the most towers we know of (`@towers_per_trebuchet`).
+  defp trebuchets_wanted(v) do
+    most = v |> Roles.enemy_towers() |> Enum.frequencies_by(& &1["owner"]) |> Map.values() |> Enum.max(fn -> 0 end)
+    most |> Kernel.+(@towers_per_trebuchet - 1) |> div(@towers_per_trebuchet) |> max(@trebuchets) |> min(@max_trebuchets)
   end
 
   # Every finished Barracks trains non-stop: two soldiers for each archer.
@@ -2644,6 +2814,7 @@ defmodule Swarm.Brain do
         not Enum.any?(for(dx <- -1..1, dy <- -1..1, do: {x + dx, y + dy}), &MapSet.member?(taken, &1)) and
         not Enum.any?(enemy, &(View.dist(&1, tile) <= 8)) and
         not Enum.any?(v.deposits, &(View.dist(View.pos(&1), tile) <= 4)) and
+        not Enum.any?(v.blocked, &(View.dist(&1, tile) <= @blocked_radius)) and
         View.dist(home, tile) >= near
     end
 
@@ -2726,11 +2897,12 @@ defmodule Swarm.Brain do
 
     # The shortest trip from a drop-off, the way an idle worker picks its ore, so the miners and
     # the depot end up at the same field.
+    # On our side first; with none there, ore clear of every enemy base (`View.claimable?/2`).
     target =
       v.deposits
       |> Enum.reject(&(&1 in near))
-      |> Enum.filter(&safe_ore?(v, &1, avoid))
-      |> Enum.min_by(&{View.trip(v, &1), View.dist(View.pos(&1), View.pos(cc)), &1["id"]}, fn -> nil end)
+      |> Enum.filter(&(free_ore?(v, &1, avoid) and field_ore(v, &1) >= @expansion_ore))
+      |> Enum.min_by(&{not View.ours?(v, View.pos(&1)), View.trip(v, &1), View.dist(View.pos(&1), View.pos(cc)), &1["id"]}, fn -> nil end)
 
     if target, do: by_field(terrain, v, target)
   end
@@ -2751,6 +2923,13 @@ defmodule Swarm.Brain do
   defp safe_ore?(%View{} = v, deposit, avoid) do
     pos = View.pos(deposit)
     View.ours?(v, pos) and not Enum.any?(avoid, &(View.dist(&1, pos) <= 4)) and not Roles.under_tower?(v, pos)
+  end
+
+  # Ore a depot may go by when home runs short: like `safe_ore?/3`, but off our side too, as long
+  # as it is clear of every enemy base.
+  defp free_ore?(%View{} = v, deposit, avoid) do
+    pos = View.pos(deposit)
+    View.claimable?(v, pos) and not Enum.any?(avoid, &(View.dist(&1, pos) <= 4)) and not Roles.under_tower?(v, pos)
   end
 
   # Towers shoot buildings too, once no unit is in reach: a Guard Tower of ours in reach of the
@@ -2789,6 +2968,7 @@ defmodule Swarm.Brain do
           String.at(Enum.at(terrain, y), x) == ".",
           not Enum.any?(buildings, &(View.dist(&1, {x, y}) <= 1)),
           not Enum.any?(ore, &(View.dist(&1, {x, y}) <= 1)),
+          not Enum.any?(v.blocked, &(View.dist(&1, {x, y}) <= @blocked_radius)),
           # Towers shoot buildings too: nothing goes up in reach of an enemy one.
           not Roles.under_tower?(v, {x, y}) do
         {score.({x, y}, d), {x, y}}
