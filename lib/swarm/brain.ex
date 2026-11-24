@@ -160,6 +160,7 @@ defmodule Swarm.Brain do
   # tiles from their base that had seen none of it: "0 fighters", and a wave of 15 left into 41.
   @look_at 5
   @look_after_kills 8
+  @serum_contact 6
   @look_fresh 60
   @look_sight 3
   @look_timeout 40
@@ -2365,11 +2366,19 @@ defmodule Swarm.Brain do
     met? =
       MapSet.size(on_serum) > 0 and
         Enum.any?(Roles.groups(v, wave).groups, fn {_id, g} ->
-          g.size >= @serum_soldiers and g.worth >= @serum_raid and Enum.any?(g.ids, &MapSet.member?(on_serum, &1))
+          g.size >= @serum_soldiers and g.worth >= @serum_raid and Enum.any?(g.ids, &MapSet.member?(on_serum, &1)) and
+            in_contact?(v, g, on_serum)
         end)
 
     length(View.units_of(v, "Soldier")) >= @serum_soldiers and
       (met? or (raiders != [] and ((raid >= @serum_raid and overrun? and turns_it?) or joined? or answer?)))
+  end
+
+  # `@serum_soldiers` of our Soldiers or more within `@serum_contact` of a fighter of group `g` on
+  # the serum: the fight is on, not just in sight. Taken on sight, ours ran for 30 ticks before a blow.
+  defp in_contact?(v, g, on_serum) do
+    theirs = for e <- v.enemy_units, MapSet.member?(on_serum, e["id"]), MapSet.member?(g.ids, e["id"]), do: View.pos(e)
+    Enum.count(View.units_of(v, "Soldier"), fn u -> Enum.any?(theirs, &(View.dist(&1, View.pos(u)) <= @serum_contact)) end) >= @serum_soldiers
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.

@@ -63,6 +63,9 @@ defmodule Swarm.TurnaroundTest do
       juiced = Enum.map(theirs, &Map.put(&1, "effects", ["serum"]))
       assert {%{serum: nil}, _, _} = plan(units: ours ++ theirs)
       assert {%{serum: :take}, _, _} = plan(units: ours ++ juiced)
+      # Nine tiles off, in sight but not on us yet: kept until they are.
+      coming = Enum.map(juiced, &Map.put(&1, "x", 39))
+      assert {%{serum: nil}, _, _} = plan(units: ours ++ coming)
       # Seven of ours: not a fight to spend it on.
       assert {%{serum: nil}, _, _} = plan(units: Enum.take(ours, 7) ++ juiced)
     end
@@ -115,6 +118,26 @@ defmodule Swarm.TurnaroundTest do
       assert attacks?.(261, on, Map.put(strategy, :serum_on, true))
     end
 
+    test "with ours on, nobody stays out of a fight they are in, whatever the estimate" do
+      raid = for i <- 1..30, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+      ours = for i <- 1..5, do: unit(200 + i, "Soldier", 20, 12)
+      strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
+      v = View.new(state(units: ours ++ raid))
+      attacks? = fn v, s -> match?({%{"type" => "Attack"}, _}, UnitBrain.decide(201, v, s)) end
+      refute attacks?.(v, strategy)
+      assert attacks?.(%{v | serum_on: true}, strategy)
+    end
+
+    test "theirs on and at hand, ours stand and fight: a Soldier on it is twice as fast as one running" do
+      juiced = for i <- 1..30, do: unit(900 + i, "Soldier", 24, 12, owner: 1) |> Map.put("effects", ["serum"])
+      ours = for i <- 1..5, do: unit(200 + i, "Soldier", 20, 12)
+      strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
+      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, View.new(state(units: ours ++ juiced)), strategy)
+      # Ten tiles off they aren't on us yet: out of their way as ever.
+      far = for i <- 1..30, do: unit(900 + i, "Soldier", 30, 12, owner: 1) |> Map.put("effects", ["serum"])
+      refute match?({%{"type" => "Attack"}, _}, UnitBrain.decide(201, View.new(state(units: ours ++ far)), strategy))
+    end
+
     test "the view has our serum on from the tick after it is taken until it wears off" do
       v = View.new(state(units: soldiers(10), tick: 101))
       assert {%{serum_on: true}, _} = Brain.see(v, %{Brain.new_memory() | serum: {:until, 130}})
@@ -138,8 +161,8 @@ defmodule Swarm.TurnaroundTest do
       take = Map.put(strategy, :serum, :take)
       assert attacks?.(201, was_in, take)
       assert attacks?.(261, was_in, take)
-      # A fight we weren't in isn't started by it.
-      refute attacks?.(261, %{was_in | going_in: MapSet.new()}, take)
+      # Nor one we weren't going into: taking the serum is going in.
+      assert attacks?.(261, %{was_in | going_in: MapSet.new()}, take)
     end
   end
 

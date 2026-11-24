@@ -781,13 +781,18 @@ the fighters of theirs we remember, wherever they are, are half their army as we
 more: with none remembered every base looked clear, and that party left for the base their 70
 stood by.
 
-**A lost base is left for the next one.** When that raid is inside a base
-of ours that isn't the main one, and another finished Command Center of ours is more than 10
-tiles from it, the fighters there and the workers go to the nearest such one (`Roles.retreat/2`,
-one place for both) and the fight is taken there, with the rest of ours and its towers. Nobody
-leaves the main base. 69 Soldiers stood by the towers of the base in the middle against 91 while
-14 more waited at home: 83 Soldiers and 75 workers died for 36 of theirs. One on one the same
-happened at a base of ours in the middle (61 workers and 38 Soldiers), so it goes for every game.
+**A lost base is left for the next one, by its workers.** When a raid we would lose to is inside
+a base of ours that isn't the main one, and another finished Command Center of ours is more than
+10 tiles from it, the workers there go to the nearest such one (`Roles.retreat/2`). The fighters
+fight where they are, as inside any base of ours. For a while they left too: 98 of them by a base
+with towers, with 91 on the serum at hand, walked for the main base and killed about 25 for all 98.
+
+**The serum is a fight, ours or theirs.** With ours on, nobody stays out of a fight they are in,
+whatever the estimate, until it wears off: it was taken with 82 coming into sight, the call that
+tick was "stay out", 56 Soldiers walked back to the towers with it on, and it got 5 kills. With
+theirs on within six tiles of a fighter of ours, that fighter stands and fights: a Soldier on the
+serum is twice as fast as one running. And theirs is only answered with ours once eight of our
+Soldiers are within six tiles of their fighters on it, not when they come into sight.
 
 **Three or four players: the middle first.** Whoever holds the middle with towers mines the
 most ore on the map and keeps the others off it. While we have no base Command Center there and a

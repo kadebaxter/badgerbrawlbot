@@ -66,6 +66,8 @@ defmodule Swarm.UnitBrain do
   # A Trebuchet out with a wave shells the known enemy tower nearest it, of those within this many
   # tiles of the wave's target or of itself.
   @siege_towers 14
+  # How near an enemy on the serum has to be for a fighter to stand and fight it whatever the odds.
+  @serum_contact 6
   @siege_at_hand 8
   # ...after any stack of this many enemy workers or more on one tile in its reach (`worker_stack/2`).
   @stack 3
@@ -564,9 +566,10 @@ defmodule Swarm.UnitBrain do
   # - gather: to the gather spot, just out of the group's reach, hitting only what it can hit from
   #   where it stands; at home only for a raid (anything else is not ours to fight).
   # - away: in the wave, hold at the gather spot (the leader calls the wave off); at home, out of
-  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach; once it is inside
-  #   our base (`Roles.inside?/2`: in our towers' reach or at the Command Center), to our next base
-  #   if there is one behind it (`Roles.retreat/2`), and with none everyone fights.
+  #   its way (`fallback/3`), for a raid or once within 2 tiles of its reach; but once it is inside
+  #   our base (`Roles.inside?/2`: in our towers' reach or at the Command Center), everyone fights.
+  #   (The workers there leave for our next base, `Roles.retreat/2`; the fighters did too for a
+  #   while, and ran from a base with towers to be cut down on the way.)
   #
   # The end-of-match push (`all_in`) fights on regardless.
   defp in_fight(_unit, _v, %{wave: %{all_in: true}}, :wave, _group), do: nil
@@ -582,7 +585,18 @@ defmodule Swarm.UnitBrain do
     # while 34 Soldiers fought 49 alone.
     verdict = if Map.get(s, :serum) == :take and Map.get(group, :was_in, false), do: :go, else: Roles.verdict(group, unit)
 
-    case verdict do
+    # The serum is a fight, ours or theirs. With ours on, nobody stays out of a fight they are in:
+    # it was taken at tick 434 with 82 coming into sight, the call that tick was "stay out", and 56
+    # Soldiers walked back to the towers with it on; it got 5 kills. And theirs on, within
+    # `@serum_contact` of us: a Soldier on it is twice as fast as ours, so falling back is dying
+    # with our backs turned. 98 of ours by a base of ours with 91 on it at hand were told to stay
+    # out and killed about 25 for all 98.
+    stand? = v.serum_on or Map.get(s, :serum) == :take or serum_at_hand?(v, group, here)
+
+    case if(stand?, do: :stand, else: verdict) do
+      :stand ->
+        if enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)}
+
       :go ->
         cond do
           enemy -> {:attack, enemy["id"]}
@@ -599,15 +613,9 @@ defmodule Swarm.UnitBrain do
 
       :away ->
         back = home? && fallback(v, s, group)
-        retreat = home? && Roles.retreat(v, group)
 
         cond do
           not home? -> {:move, group.gather}
-          # It is inside a base of ours with another one behind it: to that one, with the workers,
-          # where the rest of ours and its towers are. 69 Soldiers stood by the towers of the base
-          # in the middle against 91 while 14 more waited at home; 83 died for 36.
-          retreat && enemy && View.dist(here, retreat) <= 3 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
-          retreat -> {:move, retreat}
           # Inside our base there is nowhere to stay out of its way: everyone fights it, whatever
           # the estimate. Walking to a spot out of its reach, 45 fighters by five towers killed 16
           # of 39 Soldiers and were down to 3 in twenty ticks.
@@ -618,6 +626,13 @@ defmodule Swarm.UnitBrain do
           true -> nil
         end
     end
+  end
+
+  # Whether an enemy of `group` on the serum is within `@serum_contact` of `here`.
+  defp serum_at_hand?(v, group, here) do
+    Enum.any?(v.enemy_units, fn e ->
+      Roles.serum?(e) and MapSet.member?(group.ids, e["id"]) and View.dist(View.pos(e), here) <= @serum_contact
+    end)
   end
 
   # Out of the way of a group that would beat us: by our tower on our side (`group.fallback`), else
