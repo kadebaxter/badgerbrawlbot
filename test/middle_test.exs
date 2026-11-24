@@ -37,7 +37,7 @@ defmodule Swarm.MiddleTest do
     end
   end
 
-  describe "with three or four players, the middle is gone for as fast as we can" do
+  describe "with three or four players, the nearest field first" do
     # The same game with a third player, at (7, 56).
     defp three(opts, memory \\ Brain.new_memory()) do
       s = state(opts)
@@ -45,23 +45,34 @@ defmodule Swarm.MiddleTest do
       Brain.plan(View.new(%{s | "players" => s["players"] ++ [third]}), looked(memory, 1, opts[:tick] || 100), terrain())
     end
 
-    defp spent(commands), do: for(%{"type" => type} = c <- commands, type in ["Produce", "Build", "Research"], do: c)
     defp towers(commands), do: for(%{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} <- commands, do: {x, y})
 
     defp opts, do: [units: @seeing ++ workers(16) ++ soldiers(12), buildings: [@barracks, @depot], deposits: [@home_ore | field(30, 26, 26) ++ field(40, 6, 22)]]
 
-    test "short of its Command Center's price, the ore is kept for it: nothing else is bought" do
-      {_, commands, _} = three(opts() ++ [ore: 350])
-      assert spent(commands) == []
-      # With one opponent the Barracks train meanwhile, as ever.
-      {_, commands, _} = plan(opts() ++ [ore: 350])
-      assert spent(commands) != []
-    end
-
-    test "with the ore for it, it goes up in the middle" do
+    test "the nearest field comes first: the middle is a field like any other" do
+      # The field at (6, 22) is 15 tiles from home, the one in the middle 19.
       {_, commands, _} = three(opts() ++ [ore: 1200])
       assert [%{"x" => x, "y" => y}] = ccs(commands)
+      assert View.dist({x, y}, {7, 22}) <= 4
+      # With one opponent the middle comes first, as ever.
+      {_, commands, _} = plan(opts() ++ [ore: 1200])
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
       assert View.dist({x, y}, {27, 26}) <= 4
+    end
+
+    test "short of its price the Barracks go on training: nothing is held for the middle" do
+      {_, commands, _} = three(opts() ++ [ore: 350])
+      assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Soldier"}, &1))
+    end
+
+    test "no base farther from home than the middle while every opponent is in" do
+      # Only a field along the edge at (40, 10), seen: 33 tiles from home, the middle is 25.
+      far = [units: [unit(300, "Scout", 40, 8) | workers(16) ++ soldiers(12)], buildings: [@barracks, @depot], deposits: [@home_ore | field(30, 40, 10)], ore: 1200]
+      {_, commands, _} = three(far)
+      assert ccs(commands) == []
+      # With one opponent it goes there.
+      {_, commands, _} = plan(far)
+      assert [_] = ccs(commands)
     end
 
     test "it goes by the field in the middle nearest us, and waits for a scout to have seen that one" do
@@ -87,21 +98,6 @@ defmodule Swarm.MiddleTest do
       # With one opponent they wait for it to be up.
       {_, commands, _} = plan(opts, memory)
       assert towers(commands) == []
-    end
-
-    test "the base and its towers come first for 120 ticks at most: then the fighters do again" do
-      base = building(60, "CommandCenter", 28, 28)
-      barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
-      opts = Keyword.merge(opts(), buildings: barracks ++ [@depot, base], ore: 300, units: @seeing ++ workers(16) ++ soldiers(2))
-      memory = fn at -> %{Brain.new_memory() | bases: [{28, 28}], middle_at: at} end
-
-      # Up for twenty ticks and short of its towers: a tower gets the ore.
-      {_, commands, _} = three(opts, memory.(80))
-      assert [_] = towers(commands)
-      # A hundred and thirty ticks on and still short: the Barracks get it first again, and none is left.
-      {_, commands, _} = three(Keyword.put(opts, :tick, 210), memory.(80))
-      assert towers(commands) == []
-      assert Enum.any?(commands, &(&1["type"] == "Produce"))
     end
   end
 

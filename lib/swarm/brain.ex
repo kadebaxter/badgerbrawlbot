@@ -271,7 +271,7 @@ defmodule Swarm.Brain do
   @army_floor 6
   @army_floor_ticks 100
   @help_chase 3
-  @claim_ticks 120
+  @base_slack 4
   # An opponent with this much ore or less alive outside the buildings we know of has no army.
   @no_army_ore 1500
   @help_cover 5
@@ -653,8 +653,6 @@ defmodule Swarm.Brain do
       help_off_pos: nil,
       # The tick the army living at a forward base was last called home (`home_call/3`), or nil.
       home_call: nil,
-      # The tick we first had a base Command Center in the middle (`claiming_middle?/2`), or nil.
-      middle_at: nil,
       # The last opponent's Command Center we leave standing ({its id, farm}, for logging each once),
       # and whether that was given up for this match (their army came back; see `spare/3`).
       spared: nil,
@@ -1035,10 +1033,6 @@ defmodule Swarm.Brain do
     # Under the flood floor (`flood_floor/2`), the next Barracks comes right after the fighters,
     # ahead of everything else that is built (`more_barracks/4`).
     catch_up? = Roles.strength(Roles.fighters(v)) < flood_floor(v, memory)
-    # With three or four players, the base in the middle and its towers come before all that
-    # (`claiming_middle?/2`).
-    memory = if memory.middle_at == nil and v.cc != nil and middle_base(v) != nil, do: %{memory | middle_at: v.tick}, else: memory
-    claiming? = claiming_middle?(v, memory)
 
     {commands, memory, _ore} =
       {[], memory, v.ore - reserve - held}
@@ -1046,11 +1040,11 @@ defmodule Swarm.Brain do
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
       |> research_first(v)
-      |> then(&if(claiming?, do: &1 |> found_base(v, terrain) |> hold_for_middle(v, terrain) |> build(v, terrain), else: &1))
-      |> then(&if(claiming?, do: &1, else: first_base(&1, v, terrain)))
+      |> first_base(v, terrain)
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
-      |> then(&if(claiming?, do: &1, else: &1 |> found_base(v, terrain) |> build(v, terrain)))
+      |> found_base(v, terrain)
+      |> build(v, terrain)
       |> then(&if(catch_up?, do: &1, else: more_barracks(&1, v, terrain, false)))
       |> with_reserve(home_reserve, &train_workers(&1, v))
       |> research(v)
@@ -3185,32 +3179,6 @@ defmodule Swarm.Brain do
 
   defp found_base(acc, _v, _terrain), do: acc
 
-  # With three or four players, the middle of the map is gone for as fast as we can: whoever holds
-  # it with towers mines the most ore on the map and keeps the others off it. Against two house
-  # bots we put a depot there at tick 227 with no tower, spent the army defending it, and the one
-  # that then made it a base ended with five Command Centers and 95 workers to our 60.
-  #
-  # Claiming it: we have no base Command Center there yet (finished or going up) and a field there
-  # is worth one and clear of them (`base_candidates/2`), or we have one and it is short of its
-  # `@forward_towers` towers, for `@claim_ticks` at most. While that holds, the base and what is built (its towers first,
-  # `next_build/3`) come before the fighters and the Barracks, the ore is kept for its Command
-  # Center once it may go up (`hold_for_middle/3`), and no depot goes to a field there
-  # (`remote_depot/3`): a depot there has no towers, and a field with a depot by it gets no base.
-  defp claiming_middle?(%View{cc: nil}, _mem), do: false
-
-  defp claiming_middle?(v, mem) do
-    contested?(v) and
-      case middle_base(v) do
-        nil -> Enum.any?(base_candidates(v, mem), &middle?(v, View.pos(hd(&1))))
-        pos ->
-          # ...for `@claim_ticks` from when it went up at most: a base that never got its fourth
-          # tower kept the buildings ahead of the fighters for a whole game, 30 Soldiers' worth
-          # at tick 414.
-          v.tick - (mem.middle_at || v.tick) < @claim_ticks and
-            Enum.count(View.buildings_of(v, "GuardTower"), &(View.dist(View.pos(&1), pos) <= @outpost_tower_reach)) < @forward_towers
-      end
-  end
-
   # Three or four players: two or three opponents around a middle everyone wants.
   defp contested?(%View{players: players}), do: players in 3..4
 
@@ -3220,17 +3188,6 @@ defmodule Swarm.Brain do
       if View.base?(v, b) and middle?(v, View.pos(b)), do: View.pos(b)
     end)
   end
-
-  # The ore we have is kept for the Command Center in the middle once one may go up there
-  # (`base_cc/3`) and we are short of its price: nothing else is bought meanwhile.
-  defp hold_for_middle({cmds, %{base_order: nil} = mem, ore} = acc, v, terrain) do
-    case ore < @costs["CommandCenter"] && base_cc(v, terrain, mem) do
-      {"CommandCenter", site, :base} -> if middle?(v, site), do: {cmds, mem, 0}, else: acc
-      _ -> acc
-    end
-  end
-
-  defp hold_for_middle(acc, _v, _terrain), do: acc
 
   # Our first base comes ahead of the army floor (`army_floor/3`), and the ore is kept for it while
   # we are short of its price: with the floor at their army and our income theirs, nothing was ever
@@ -3503,8 +3460,8 @@ defmodule Swarm.Brain do
   end
 
   # The field the next base goes by: the best one a unit of ours has seen lately (`base_fields/2`).
-  # But with three or four players the base in the middle goes by the field there nearest us and
-  # no other: until a scout has seen that one (it is sent there, `survey/3`), none goes up. A
+  # But with three or four players it goes by the nearest field (the best there, `base_candidates/2`)
+  # and no other: until a scout has seen that one (it is sent there, `survey/3`), none goes up. A
   # scout on its way to look at an opponent had seen a field across the map, between the other
   # two players, and the base went there, 50 tiles from home, with the one 18 tiles away unseen.
   # (With no scout alive, any seen field as before.)
@@ -3513,7 +3470,7 @@ defmodule Swarm.Brain do
 
     case base_candidates(v, mem) do
       [best | _] ->
-        nearest_only? = contested?(v) and middle_base(v) == nil and middle?(v, View.pos(hd(best))) and View.units_of(v, "Scout") != []
+        nearest_only? = contested?(v) and View.units_of(v, "Scout") != []
         if nearest_only?, do: Enum.find(seen, &(&1 == best)), else: List.first(seen)
 
       [] ->
@@ -3543,8 +3500,15 @@ defmodule Swarm.Brain do
       min(min(from_them, 2 * View.dist(pos, middle)), @safe_enough)
     end
 
-    # Until we have a base in the middle (`@forward_towers`), finished or going up, the fields there
-    # come first.
+    # With three or four players the nearest field comes first, the middle like any other, and
+    # none farther from home than the middle is (by `@base_slack`) while every opponent is still
+    # in. Two house bots each took the field nine tiles from their base; we took the middle 25
+    # tiles off and then one 41 tiles off, with the one nine tiles from ours left to last, and
+    # had 34 Soldiers at one and 22 at the other when 75 came.
+    too_far? = fn pos -> contested?(v) and v.fallen_starts == [] and View.dist(pos, home) > View.dist(middle, home) + @base_slack end
+
+    # Otherwise, until we have a base in the middle (`@forward_towers`), finished or going up, the
+    # fields there come first.
     ours_middle? = Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.base?(v, &1) and middle?(v, View.pos(&1))))
 
     ore
@@ -3557,11 +3521,15 @@ defmodule Swarm.Brain do
         not Enum.any?(avoid, &(View.dist(&1, center) <= 4)) and
         Enum.all?(field, &clear_of_enemies?(v, mem, View.pos(&1)))
     end)
+    |> Enum.reject(fn field -> too_far?.(View.pos(hd(field))) end)
     |> Enum.sort_by(fn field ->
       center = View.pos(hd(field))
       fallen? = Enum.any?(v.fallen_starts, &(View.dist(&1, center) <= @conquest_reach))
-      wanted_middle? = not ours_middle? and middle?(v, center)
-      {not fallen?, not wanted_middle?, if(wanted_middle?, do: 0, else: -safety.(center)), View.dist(center, home), center}
+      wanted_middle? = not contested?(v) and not ours_middle? and middle?(v, center)
+
+      if contested?(v),
+        do: {not fallen?, View.dist(center, home), center},
+        else: {not fallen?, not wanted_middle?, if(wanted_middle?, do: 0, else: -safety.(center)), View.dist(center, home), center}
     end)
   end
 
@@ -3611,7 +3579,7 @@ defmodule Swarm.Brain do
          true <- Enum.count(far, &(View.dist(View.pos(&1), View.pos(target)) <= 4)) >= @remote_miners,
          true <- field_ore(v, target) >= @depot_ore,
          false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)),
-         # The middle gets a base with towers, not a bare depot (`claiming_middle?/2`).
+         # The middle gets a base with towers, not a bare depot.
          false <- contested?(v) and middle?(v, View.pos(target)) and middle_base(v) == nil do
       right_by(terrain, v, target)
     else

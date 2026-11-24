@@ -794,18 +794,17 @@ theirs on within six tiles of a fighter of ours, that fighter stands and fights:
 serum is twice as fast as one running. And theirs is only answered with ours once eight of our
 Soldiers are within six tiles of their fighters on it, not when they come into sight.
 
-**Three or four players: the middle first.** Whoever holds the middle with towers mines the
-most ore on the map and keeps the others off it. While we have no base Command Center there and a
-field there is worth one and clear of them, or we have one short of its four towers:
-the base and what is built come before the fighters and the Barracks; once the Command Center may
-go up (16 workers, 12 fighters, a scout has seen the field) the ore is kept for it and nothing
-else is bought; its towers are ordered while it is still going up, ahead of the build order; and
-no depot goes to a field in the middle before the base, since a field with a depot by it gets no
-base and a depot has no towers. That base goes by the field in the middle nearest our own
-Command Center and no other: it waits until a scout has seen that field (with no scout alive, any
-field seen lately, as in other games).
-Its towers come ahead of the fighters for 120 ticks from when it goes up at most, four towers or
-not.
+**Three or four players: the nearest field first.** The next base goes by the field worth one
+nearest our own Command Center, the middle like any other, and by none farther from home than the
+middle is (by 4 tiles) while every opponent is still in. It waits until a scout has seen that
+field (with no scout alive, any field seen lately, as in other games). Only our first base comes
+ahead of the army floor; the next ones wait until our army is theirs. A base's towers are ordered
+while it is still going up, and no depot goes to a field in the middle before a base does.
+(The middle used to come first, its Command Center and four towers ahead of the fighters for 120
+ticks, and any other base with them. Two house bots each took the field nine tiles from their
+base. We took the middle 25 tiles off, then a field 41 tiles off, with the one nine tiles from
+ours left to last: 30 Soldiers to their 43 and 45 at tick 300, and 34 at the middle with 22 at
+home when 75 came.)
 
 **Help under our towers only.** With two or more opponents in, the army only goes out to help
 at a spot within reach of a finished Guard Tower of ours (its range plus one) or within 5 tiles of
