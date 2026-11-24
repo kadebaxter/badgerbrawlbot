@@ -27,6 +27,17 @@ defmodule Swarm.SiegeTest do
       assert %{"type" => "Attack", "targetId" => 710} = decide(unit(301, "Trebuchet", 42, 42), siege_view([worker]), @siege)
     end
 
+    test "in the tower's own reach it backs out to a tile outside it before it fires, seen or not" do
+      # Come at corner-on, tower 710 at (52, 50) is first seen from (47, 45): five off, its reach.
+      at = {47, 45}
+      assert %{"type" => "Move", "x" => x, "y" => y} = decide(unit(301, "Trebuchet", 47, 45), siege_view([], at), @siege)
+      assert Enum.all?(@towers, &(View.dist({x, y}, {&1["x"], &1["y"]}) > 5))
+      assert View.dist({x, y}, {52, 50}) <= 7
+
+      # From there it shells it.
+      assert %{"type" => "Attack", "targetId" => 710} = decide(unit(301, "Trebuchet", x, y), siege_view([], {x, y}), @siege)
+    end
+
     test "the rest of the wave holds at the staging point meanwhile" do
       assert %{"type" => "Attack", "x" => 42, "y" => 42} = decide(unit(201, "Soldier", 36, 36), siege_view([], {36, 36}), @siege)
     end

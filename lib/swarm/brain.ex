@@ -129,6 +129,12 @@ defmodule Swarm.Brain do
   @help_rest 20
   # Where help was called off is remembered this long (see `may_help?/4`).
   @help_memory 120
+  # The army at a forward base is called home for enemy fighters this close to the main Command
+  # Center; those of ours and our towers within `@home_call_base` of it are the ones at home; and
+  # it stays home this long after the last of them is gone.
+  @home_call 15
+  @home_call_base 10
+  @home_call_hold 20
   # The main base is overrun by enemies this many times all of home; regrouping holds this long
   # after the last tick it was (see `regroup/2`). The base's reach is `Swarm.Roles`'.
   @overrun_margin 1.5
@@ -624,6 +630,8 @@ defmodule Swarm.Brain do
       help: nil,
       help_off_at: nil,
       help_off_pos: nil,
+      # The tick the army living at a forward base was last called home (`home_call/3`), or nil.
+      home_call: nil,
       # The last opponent's Command Center we leave standing ({its id, farm}, for logging each once),
       # and whether that was given up for this match (their army came back; see `spare/3`).
       spared: nil,
@@ -1180,7 +1188,7 @@ defmodule Swarm.Brain do
   end
 
   defp strategy(%View{} = v, memory) do
-    rally = rally(v)
+    {rally, memory, home_why} = home_call(v, memory, rally(v))
     threat = Roles.threat(v)
     # Any base under attack, outposts included, or our workers out in the field.
     attacked? = threat != nil or Roles.help_wanted(v) != []
@@ -1230,7 +1238,7 @@ defmodule Swarm.Brain do
         true -> target
       end
 
-    why = spare_why ++ why
+    why = home_why ++ spare_why ++ why
 
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
@@ -2705,16 +2713,61 @@ defmodule Swarm.Brain do
   # Three tiles from the Command Center toward the middle of the map; with a base of ours in the
   # middle (`forward_base/1`), three tiles from that, toward the nearest enemy start: the army
   # lives where the ore is fought over, and its towers with it.
-  defp rally(%View{cc: cc} = v) do
+  defp rally(%View{} = v) do
     case forward_base(v) do
       nil ->
-        {x, y} = View.pos(cc)
-        {cx, cy} = center(v)
-        {x + 3 * sign(cx - x), y + 3 * sign(cy - y)}
+        home_rally(v)
 
       {x, y} = base ->
         {ex, ey} = Enum.min_by(v.enemy_starts, &View.dist(&1, base), fn -> center(v) end)
         {clamp(x + 3 * sign(ex - x), v.map_width), clamp(y + 3 * sign(ey - y), v.map_height)}
+    end
+  end
+
+  defp home_rally(%View{cc: cc} = v) do
+    {x, y} = View.pos(cc)
+    {cx, cy} = center(v)
+    {x + 3 * sign(cx - x), y + 3 * sign(cy - y)}
+  end
+
+  # The army living at a forward base is called home: the rally point is the main base's again
+  # while enemy fighters are coming at it (within `@home_call` of the main Command Center, nearer
+  # to it than to the forward base), more than those at home and the towers there can meet, and
+  # all of ours with those towers are at least as strong as they are. Called once, it stays while
+  # they are there and we still are; it ends `@home_call_hold` ticks after. (36 Soldiers took the
+  # main Command Center and its towers from 8 guards while 39 of ours stood at the forward base:
+  # by the time everyone counted, the towers were down and the fight was no longer ours.)
+  # Returns {rally, memory, notes for the decision log}.
+  defp home_call(%View{cc: cc} = v, memory, rally) do
+    home = View.pos(cc)
+    base = forward_base(v)
+    last = Map.get(memory, :home_call)
+
+    raid =
+      if base,
+        do: for(e <- Roles.enemy_fighters(v), d = View.dist(View.pos(e), home), d <= @home_call and d < View.dist(View.pos(e), base), do: e),
+        else: []
+
+    towers = Enum.filter(Roles.our_towers(v), &(View.dist(View.pos(&1), home) <= @home_call_base))
+    fighters = Roles.home(v, memory.wave)
+    there = Enum.filter(fighters, &(View.dist(View.pos(&1), home) <= @home_call_base))
+    theirs = Roles.strength(raid)
+    can? = raid != [] and Roles.strength(fighters ++ towers, v.me) >= theirs
+    needed? = theirs > Roles.strength(there ++ towers, v.me)
+
+    cond do
+      can? and (needed? or last != nil) ->
+        why = if last == nil, do: [{:home_call, "#{length(raid)} of theirs coming at the main base: the army goes home to its towers"}], else: []
+        {home_rally(v), Map.put(memory, :home_call, v.tick), why}
+
+      last != nil and raid == [] and v.tick - last < @home_call_hold ->
+        {home_rally(v), memory, []}
+
+      last != nil ->
+        {rally, Map.put(memory, :home_call, nil), [{:home_call, "the army goes back to the forward base"}]}
+
+      true ->
+        {rally, memory, []}
     end
   end
 

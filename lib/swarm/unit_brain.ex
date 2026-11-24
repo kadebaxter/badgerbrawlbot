@@ -741,8 +741,13 @@ defmodule Swarm.UnitBrain do
   defp shell(unit, v, s, tower) do
     here = View.pos(unit)
 
+    # In the tower's own reach it backs out to that tile first, seen or not: told to attack, the
+    # game has it fire from where it stands. Coming at a tower corner-on it only sees it from 5
+    # off, the tower's reach, and one stood there shelling it and lost half its HP.
+    under? = View.dist(here, View.pos(tower)) <= Roles.range(tower)
+
     cond do
-      Enum.any?(v.enemy_buildings, &(&1["id"] == tower["id"])) -> {:attack, tower["id"]}
+      not under? and Enum.any?(v.enemy_buildings, &(&1["id"] == tower["id"])) -> {:attack, tower["id"]}
       spot = stand(v, here, tower) -> {:move_to, spot}
       true -> onward(unit, s, :siege_camp)
     end

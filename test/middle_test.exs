@@ -50,6 +50,39 @@ defmodule Swarm.MiddleTest do
       assert strategy.rally == {10, 10}
     end
 
+    test "called home: a raid on the main base that home's few can't meet and all of ours with its towers can" do
+      home_tower = building(5, "GuardTower", 11, 11)
+      buildings = [@barracks, @depot, @middle, home_tower]
+      # Eight guards at home, thirty of ours out at the middle base.
+      guards = for i <- 1..8, do: unit(400 + i, "Soldier", 9, 9)
+      army = for i <- 1..30, do: unit(200 + i, "Soldier", 30, 30)
+      raid = fn n, x, y -> for i <- 1..n, do: unit(900 + i, "Soldier", x, y, owner: 1) end
+
+      # Thirty coming at home, ten tiles off it: the army's rally point is home's again.
+      {strategy, _, memory} = plan([units: guards ++ army ++ raid.(30, 17, 16), buildings: buildings], held())
+      assert strategy.rally == {10, 10} and memory.home_call == 100
+      assert Enum.any?(strategy.why, &match?({:home_call, _}, &1))
+
+      # Five of them: the guards and the tower see to that. Sixty: not a fight for all of ours either.
+      {strategy, _, _} = plan([units: guards ++ army ++ raid.(5, 17, 16), buildings: buildings], held())
+      assert strategy.rally == {31, 31}
+      {strategy, _, _} = plan([units: guards ++ army ++ raid.(60, 17, 16), buildings: buildings], held())
+      assert strategy.rally == {31, 31}
+      # Thirty by the middle base, nearer to it than to home: that is the army's fight where it is.
+      {strategy, _, _} = plan([units: guards ++ army ++ raid.(30, 24, 24), buildings: buildings], held())
+      assert strategy.rally == {31, 31}
+
+      # Called, it stays while they are there, though the army at home now meets them...
+      at_home = for i <- 1..30, do: unit(200 + i, "Soldier", 10, 10)
+      {strategy, _, memory} = plan([units: guards ++ at_home ++ raid.(30, 14, 14), buildings: buildings, tick: 130], memory)
+      assert strategy.rally == {10, 10} and memory.home_call == 130
+      # ...and twenty ticks after the last of them; then back to the middle.
+      {strategy, _, memory} = plan([units: guards ++ at_home, buildings: buildings, tick: 145], memory)
+      assert strategy.rally == {10, 10}
+      {strategy, _, memory} = plan([units: guards ++ at_home, buildings: buildings, tick: 151], memory)
+      assert strategy.rally == {31, 31} and memory.home_call == nil
+    end
+
     test "a quarter of the army stays to guard home, never fewer than seven; the rest are the army in the middle" do
       roles = fn n ->
         v = %{View.new(state(units: soldiers(n), buildings: [@barracks, @depot, @middle])) | bases: [{28, 28}]}

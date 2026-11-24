@@ -594,7 +594,11 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    base of ours there the army lives at it: the rally point is three tiles from it, toward the
    nearest enemy start, and it gets four towers. A quarter of the fighters at home (never
    fewer than the usual seven) stay as guards at the main base, behind its tower nearest the
-   enemy: it must hold a raid until the army is back.
+   enemy: it must hold a raid until the army is back. The army is called back (the rally point
+   is the main base's again) while enemy fighters come at the main base, within 15 tiles of its
+   Command Center and nearer to it than to the forward base, more than those at home and its
+   towers can meet, and all of ours with those towers are at least as strong as they are; it
+   stays while they are there and for 20 ticks after.
    **An eliminated player's start** comes before all of them, and nothing of theirs the server
    still remembers counts (their buildings go with them). But only once a scout has seen it clear
    in the last 45 ticks: the survey scout goes there, and back every 20 ticks, while that field is
