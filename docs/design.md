@@ -537,13 +537,21 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    for 90 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
+   **A siege party:** with their army gone (the attackers at the rally point are 1.5 times the
+   fighters of theirs we know of, none included), the Trebuchets at the rally point go out
+   without a wave's worth of attackers, one of them or more, with whoever is there. Their towers
+   don't count against a party (it outranges them), and it isn't called back for being few; their
+   fighters call it back as ever. The end-of-match push takes the Trebuchets too.
    **The opening** (two to five players): depot, Barracks, TechLab, a second and third Barracks,
    then the first tower, a fourth Barracks and the second tower. The depot by the home ore is the
    first thing built, at tick 0, by three
    workers (it used to wait for 9 workers, then for the army floor and the reserve: up at tick 199
    once). No Guard Tower before tick 100; then towers build up to 8 as we can pay (the bots that
    tower up first mostly lose, the ones that win end with 7 to 10). Another Barracks goes up
-   whenever every one is busy and we can pay for it, rich or not, up to 14. Workers: one for every
+   whenever every one is busy and we can pay for it, rich or not, up to 14, on its own order
+   (apart from the one building at a time of the rest, which a run of depots and towers once kept
+   busy for 300 ticks with 5,258 ore in the bank); by a base Command Center when there is no room
+   left by the main one. Workers: one for every
    150 ore we can get at, up to 80. Home counts as short of ore under 150 for each worker.
    **Base Command Centers:** one more Command Center than we have at 16, 30 and 50 workers
    (with a Barracks up, 12 fighters or more and their army as last counted not bigger than ours;
@@ -568,6 +576,14 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    **Upgrades:** every tier of Weapons (units and towers), Armor (units) and Fortify (buildings,
    towers too), Weapons and Armor 1 and 2 before the second Harvesting; a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.
+   **No wave without a look:** an ordinary wave only leaves within 60 ticks of a scout having got
+   to its look at the target (within 3 tiles of the spot, or a Scout with it well inside its sight).
+   A scout near the spot with their fighters standing at it has been turned back: that is a look,
+   and their army then counts for at least what their score says (the ore value of everything they
+   have alive, less their buildings we know of and as many workers as we have): it only saw the
+   nearest few. A look no scout got to in time is no look (it is asked for again);
+   with no scout at all the wave waits for one. A counterattack right after a beaten raid, a
+   siege party and the end-of-match push go without.
    **Their army as last counted:** the most we have known of a player's army in the last 150
    ticks (less what we kill of it) counts wherever their strength is weighed, whatever is in sight
    now: a wave doesn't leave on "0 known" after a scout looked at the wrong spot, and home only

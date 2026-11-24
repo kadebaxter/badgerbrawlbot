@@ -373,9 +373,13 @@ defmodule Swarm.BrainTest do
     # No look yet. The spot: six tiles short of their start at (56, 56), toward us.
     defp fresh(opts, memory \\ Brain.new_memory()), do: Brain.plan(View.new(state(opts)), memory, terrain())
 
+    # A scout of ours, at home.
+    @scout unit(300, "Scout", 9, 9)
+
     test "once five attackers wait, a scout is sent to look, and the wave waits for it" do
-      {s, _, memory} = fresh(units: soldiers(22))
-      assert %{wave: nil, look: {49, 49}, why: [{:scout_sent, "scout looking at player 1 by (49,49)"}]} = s
+      {s, _, memory} = fresh(units: [@scout | soldiers(22)])
+      assert %{wave: nil, look: {49, 49}} = s
+      assert {:scout_sent, "scout looking at player 1 by (49,49)"} in s.why
       assert s.hold =~ "scout looking at player 1"
       assert %{look: %{owner: 1, pos: {49, 49}, at: 100, done: nil}} = memory
     end
@@ -385,25 +389,29 @@ defmodule Swarm.BrainTest do
     end
 
     test "when a scout gets there, it reports what it sees and the wave goes" do
-      {_, _, memory} = fresh(units: soldiers(22))
+      {_, _, memory} = fresh(units: [@scout | soldiers(22)])
       scout = unit(300, "Scout", 50, 51)
       enemies = for i <- 1..2, do: unit(900 + i, "Soldier", 55, 55, owner: 1)
 
-      assert {%{wave: %{id: 1}, look: nil, why: [{:scouted, "scouted player 1: 2 fighters, strength 1980"} | _]}, _, %{look: %{done: 110}}} =
+      assert {%{wave: %{id: 1}, look: nil, why: [{:scouted, "scouted player 1: 2 of their fighters in sight at the spot" <> _} | _]}, _, %{look: %{done: 110}}} =
                fresh([units: [scout | soldiers(22) ++ enemies], tick: 110], memory)
     end
 
-    test "if no scout gets there in 40 ticks, the wave goes on what we know" do
+    test "if no scout gets there in 40 ticks, that is no look: no wave leaves on it, and a scout is sent again" do
       {_, _, memory} = fresh(units: [unit(300, "Scout", 20, 20) | soldiers(22)])
       assert {%{wave: nil}, _, memory} = fresh([units: [unit(300, "Scout", 25, 25) | soldiers(22)], tick: 120], memory)
 
-      assert {%{wave: %{id: 1}, why: [{:scouted, "no look at player 1" <> _} | _]}, _, _} =
-               fresh([units: [unit(300, "Scout", 25, 25) | soldiers(22)], tick: 140], memory)
+      {s, _, memory} = fresh([units: [unit(300, "Scout", 25, 25) | soldiers(22)], tick: 140], memory)
+      assert %{wave: nil, look: {49, 49}} = s
+      assert [{:scouted, "no look at player 1" <> _}, {:scout_sent, _}] = s.why
+      assert %{look: %{at: 140, done: nil}} = memory
     end
 
-    test "with no scout at all, it doesn't wait" do
-      {_, _, memory} = fresh(units: soldiers(22))
-      assert {%{wave: %{id: 1}}, _, _} = fresh([units: soldiers(22), tick: 101], memory)
+    test "with no scout at all, no wave leaves: it waits for one to look" do
+      {s, _, memory} = fresh(units: soldiers(22))
+      assert %{wave: nil, look: nil} = s
+      assert s.hold =~ "no look at player 1 lately"
+      assert {%{wave: nil}, _, _} = fresh([units: soldiers(22), tick: 101], memory)
     end
 
     test "a counterattack doesn't wait for one" do
@@ -1258,7 +1266,7 @@ defmodule Swarm.BrainTest do
       assert hold =~ "tower square first (0 of 10)"
 
       # With the square up: a scout looks first, then the wave of 18 goes.
-      {_, _, memory} = big_plan(units: soldiers(25), buildings: square())
+      {_, _, memory} = big_plan(units: [unit(300, "Scout", 9, 9) | soldiers(25)], buildings: square())
       memory = %{memory | look: %{memory.look | done: 100}}
       assert {%{wave: %{members: members}}, _, _} = big_plan([units: soldiers(25), buildings: square()], memory)
       assert length(members) == 18

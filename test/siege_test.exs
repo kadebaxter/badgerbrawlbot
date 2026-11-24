@@ -86,6 +86,53 @@ defmodule Swarm.SiegeTest do
     end
   end
 
+  describe "a siege party: their army is gone" do
+    # Two Trebuchets at the rally point (10, 10), four Archers left (all guards), and their base
+    # with two towers by it. No wave's worth of attackers will ever gather.
+    @their_base [building(720, "CommandCenter", 40, 40, 1), building(721, "CommandCenter", 56, 56, 1), building(710, "GuardTower", 36, 36, 1), building(711, "GuardTower", 38, 35, 1)]
+    defp trebs, do: for(i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10))
+    defp archers, do: for(i <- 1..4, do: unit(250 + i, "Archer", 9, 9))
+
+    test "the Trebuchets go out without a wave, with whoever is there, against no fighters we know of" do
+      {strategy, _, _} = plan([units: trebs() ++ archers(), buildings: @their_base], Brain.new_memory())
+      assert %{wave: %{party: true, members: [301, 302], released: false}} = strategy
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_launched and text =~ "siege party" and text =~ "2 trebuchets" end)
+    end
+
+    test "one Trebuchet is enough; none is no party" do
+      {strategy, _, _} = plan([units: [hd(trebs()) | archers()], buildings: @their_base], Brain.new_memory())
+      assert %{wave: %{party: true, members: [301]}} = strategy
+      assert {%{wave: nil}, _, _} = plan([units: archers(), buildings: @their_base], Brain.new_memory())
+    end
+
+    test "not while they have an army we know of that the escort couldn't meet" do
+      counted = %{Brain.new_memory() | army_seen: %{1 => {10 * 990.0, 90}}}
+      assert {%{wave: nil}, _, _} = plan([units: trebs() ++ archers(), buildings: @their_base], counted)
+    end
+
+    test "out there it isn't called back for being two, nor for their towers; their fighters still call it back" do
+      wave = %{id: 1, members: [301, 302], owner: 1, staging: {30, 30}, released: false, at: 90, party: true, sieging: 95}
+      out = for i <- 1..2, do: unit(300 + i, "Trebuchet", 30, 33)
+      memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
+      assert {%{wave: %{party: true}}, _, _} = plan([units: out ++ archers(), buildings: @their_base], memory)
+
+      # The same two as an ordinary wave: too few, called home.
+      assert {%{wave: nil}, _, _} = plan([units: out ++ archers(), buildings: @their_base], %{memory | wave: %{wave | party: false}})
+
+      raiders = for i <- 1..8, do: unit(900 + i, "Soldier", 33, 34, owner: 1)
+      assert {%{wave: nil}, _, _} = plan([units: out ++ archers() ++ raiders, buildings: @their_base], memory)
+    end
+
+    test "the end-of-match push takes the Trebuchets too" do
+      behind = fn state -> Map.update!(state, "players", fn [me, them] -> [Map.put(me, "score", %{"total" => 100}), Map.put(them, "score", %{"total" => 900})] end) end
+      v = View.new(behind.(state(units: trebs() ++ archers(), buildings: @their_base, tick: 1600)))
+      {strategy, _, _} = Brain.plan(v, looked(nil, 1, 1600), terrain())
+      assert %{wave: %{all_in: true, members: members}} = strategy
+      assert 301 in members and 302 in members and 251 in members
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :all_in and text =~ "2 trebuchet(s)" end)
+    end
+  end
+
   describe "how many Trebuchets" do
     defp trains(towers) do
       built = [

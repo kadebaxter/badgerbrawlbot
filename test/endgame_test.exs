@@ -25,6 +25,59 @@ defmodule Swarm.EndgameTest do
       assert elem(memory.army_seen[1], 0) == 12 * 990.0
     end
 
+    test "turned back by their fighters at the spot: that is a look, and their army counts by their score if that is more" do
+      # The scout is six tiles short of the spot, eight of theirs in its sight there. Their score says
+      # 9,000 ore alive; we know of their Command Center (400) and have 20 workers ourselves (1,000).
+      scout = unit(300, "Scout", 44, 44)
+      seen = for i <- 1..8, do: unit(900 + i, "Soldier", 49, 49, owner: 1)
+      their_cc = building(900, "CommandCenter", 56, 56, 1)
+
+      state =
+        state(units: [scout | workers(20) ++ soldiers(22)] ++ seen, buildings: [their_cc], tick: 130)
+        |> Map.update!("players", fn [me, them] -> [me, Map.put(them, "score", %{"survival" => 9000, "total" => 9000})] end)
+
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
+      {strategy, _, memory} = Brain.plan(View.new(state), memory, terrain())
+
+      assert %{look: %{done: 130}} = memory
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :scouted and text =~ "8 of their fighters in sight at the spot" end)
+      # (9000 - 400 - 1000) ore of army, at a Soldier's 990 a hundred: 75,240. Not the eight it saw.
+      assert elem(memory.army_seen[1], 0) == 75_240.0
+      # Fifteen attackers against that: no wave.
+      assert strategy.wave == nil
+    end
+
+    test "a few of theirs at the spot and a small score: the wave is weighed against that, and goes" do
+      scout = unit(300, "Scout", 44, 44)
+      seen = for i <- 1..2, do: unit(900 + i, "Soldier", 49, 49, owner: 1)
+
+      state =
+        state(units: [scout | workers(20) ++ soldiers(22)] ++ seen, buildings: [building(900, "CommandCenter", 56, 56, 1)], tick: 130)
+        |> Map.update!("players", fn [me, them] -> [me, Map.put(them, "score", %{"survival" => 1600, "total" => 1600})] end)
+
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
+      assert {%{wave: %{members: [_ | _]}}, _, _} = Brain.plan(View.new(state), memory, terrain())
+    end
+
+    test "a Scout sees the spot from a distance: that is a look too" do
+      state = state(units: [unit(300, "Scout", 44, 46) | soldiers(22)], tick: 130)
+      memory = %{Brain.new_memory() | look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
+      assert {_, _, %{look: %{done: 130}}} = Brain.plan(View.new(state), memory, terrain())
+      # Farther off than it sees: still looking.
+      state = state(units: [unit(300, "Scout", 40, 40) | soldiers(22)], tick: 130)
+      assert {_, _, %{look: %{done: nil}}} = Brain.plan(View.new(state), memory, terrain())
+    end
+
+    test "enemies out of sight only diagonally aren't forgotten: sight is a circle" do
+      # A scout at (43, 43); one of theirs remembered at (49, 49): six tiles each way, 8.5 in a straight line.
+      memory = %{Brain.new_memory() | enemies: %{901 => %{"id" => 901, "owner" => 1, "type" => "Soldier", "hp" => 110, "x" => 49, "y" => 49, "seen" => 125}}}
+      {_, _, memory} = Brain.plan(View.new(state(units: [unit(300, "Scout", 43, 43)], tick: 130)), memory, terrain())
+      assert Map.has_key?(memory.enemies, 901)
+      # Straight along a row, six tiles is in sight: it should be there and isn't. Forgotten.
+      {_, _, memory} = Brain.plan(View.new(state(units: [unit(300, "Scout", 43, 49)], tick: 131)), memory, terrain())
+      refute Map.has_key?(memory.enemies, 901)
+    end
+
     test "no look, no change" do
       {_, _, memory} = plan([units: [unit(300, "Scout", 20, 20) | soldiers(10)], tick: 130], counted())
       assert memory.army_seen[1] == {20 * 990.0, 100}

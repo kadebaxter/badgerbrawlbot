@@ -109,6 +109,28 @@ defmodule Swarm.TurnaroundTest do
       assert builds(commands) == ["Barracks"]
     end
 
+    test "on its own order: it goes up while another building is on its way, and only one at a time" do
+      # A tower was ordered ten ticks ago and its builder is still walking.
+      walking = %{type: "GuardTower", builder: 101, at: 90, had: 8, site: {20, 20}}
+      memory = %{Brain.new_memory() | pending: walking}
+      {_, commands, memory} = plan([units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 1500], memory)
+      assert builds(commands) == ["Barracks"]
+      assert %{type: "Barracks", site: site} = memory.barracks_order
+      assert memory.pending == walking
+
+      # Its own builder walking: no second one ordered, and its builder isn't given another job.
+      {_, commands, memory2} = plan([units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 1500, tick: 105], memory)
+      assert builds(commands) == []
+      assert memory2.barracks_order == memory.barracks_order
+
+      # It has broken ground: the slot is free again.
+      up = %{building(40, "Barracks", elem(site, 0), elem(site, 1)) | "completed" => false}
+      builder = unit(memory.barracks_order.builder, "Worker", elem(site, 0) + 1, elem(site, 1), activity: "Building", target_id: 40)
+      others = Enum.reject(workers(20), &(&1["id"] == builder["id"]))
+      {_, _, memory3} = plan([units: [builder | others] ++ soldiers(12), buildings: [up | busy(@built)], ore: 100, tick: 110], memory)
+      assert memory3.barracks_order == nil
+    end
+
     test "before the build order is done too" do
       early = busy([building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)])
       {_, commands, _} = plan(units: workers(10) ++ soldiers(8), buildings: early, ore: 300, tick: 60)
