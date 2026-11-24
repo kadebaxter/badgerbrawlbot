@@ -746,7 +746,11 @@ the base and what is built come before the fighters and the Barracks; once the C
 go up (16 workers, 12 fighters, a scout has seen the field) the ore is kept for it and nothing
 else is bought; its towers are ordered while it is still going up, ahead of the build order; and
 no depot goes to a field in the middle before the base, since a field with a depot by it gets no
-base and a depot has no towers.
+base and a depot has no towers. That base goes by the field in the middle nearest our own
+Command Center and no other: it waits until a scout has seen that field (with no scout alive, any
+field seen lately, as in other games).
+Its towers come ahead of the fighters for 120 ticks from when it goes up at most, four towers or
+not.
 
 **Help under our towers only.** With two or more opponents in, the army only goes out to help
 at a spot within reach of a finished Guard Tower of ours (its range plus one) or within 5 tiles of

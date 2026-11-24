@@ -64,6 +64,19 @@ defmodule Swarm.MiddleTest do
       assert View.dist({x, y}, {27, 26}) <= 4
     end
 
+    test "it goes by the field in the middle nearest us, and waits for a scout to have seen that one" do
+      # Two fields in the middle: (20, 24), 17 tiles from home, and (44, 40) across the map.
+      ore = [@home_ore | field(30, 20, 24) ++ field(40, 44, 40)]
+      army = workers(16) ++ soldiers(12)
+      # A scout has only seen the far one: no base yet.
+      {_, commands, _} = three(units: [unit(300, "Scout", 44, 38) | army], buildings: [@barracks, @depot], deposits: ore, ore: 1200)
+      assert ccs(commands) == []
+      # The near one seen: it goes there.
+      {_, commands, _} = three(units: [unit(300, "Scout", 44, 38), unit(301, "Scout", 20, 22) | army], buildings: [@barracks, @depot], deposits: ore, ore: 1200)
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
+      assert View.dist({x, y}, {21, 24}) <= 4
+    end
+
     test "its towers start while it is going up, before the Barracks get the ore" do
       going_up = %{building(60, "CommandCenter", 28, 28) | "completed" => false}
       opts = Keyword.merge(opts(), buildings: [@barracks, @depot, going_up], ore: 600)
@@ -74,6 +87,21 @@ defmodule Swarm.MiddleTest do
       # With one opponent they wait for it to be up.
       {_, commands, _} = plan(opts, memory)
       assert towers(commands) == []
+    end
+
+    test "the base and its towers come first for 120 ticks at most: then the fighters do again" do
+      base = building(60, "CommandCenter", 28, 28)
+      barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
+      opts = Keyword.merge(opts(), buildings: barracks ++ [@depot, base], ore: 300, units: @seeing ++ workers(16) ++ soldiers(2))
+      memory = fn at -> %{Brain.new_memory() | bases: [{28, 28}], middle_at: at} end
+
+      # Up for twenty ticks and short of its towers: a tower gets the ore.
+      {_, commands, _} = three(opts, memory.(80))
+      assert [_] = towers(commands)
+      # A hundred and thirty ticks on and still short: the Barracks get it first again, and none is left.
+      {_, commands, _} = three(Keyword.put(opts, :tick, 210), memory.(80))
+      assert towers(commands) == []
+      assert Enum.any?(commands, &(&1["type"] == "Produce"))
     end
   end
 

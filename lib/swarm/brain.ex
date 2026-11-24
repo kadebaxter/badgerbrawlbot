@@ -271,6 +271,7 @@ defmodule Swarm.Brain do
   # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
   @flood_floor 40
   @help_chase 3
+  @claim_ticks 120
   # An opponent with this much ore or less alive outside the buildings we know of has no army.
   @no_army_ore 1500
   @help_cover 5
@@ -650,6 +651,8 @@ defmodule Swarm.Brain do
       help_off_pos: nil,
       # The tick the army living at a forward base was last called home (`home_call/3`), or nil.
       home_call: nil,
+      # The tick we first had a base Command Center in the middle (`claiming_middle?/2`), or nil.
+      middle_at: nil,
       # The last opponent's Command Center we leave standing ({its id, farm}, for logging each once),
       # and whether that was given up for this match (their army came back; see `spare/3`).
       spared: nil,
@@ -1031,6 +1034,7 @@ defmodule Swarm.Brain do
     catch_up? = Roles.strength(Roles.fighters(v)) < flood_floor(v, memory)
     # With three or four players, the base in the middle and its towers come before all that
     # (`claiming_middle?/2`).
+    memory = if memory.middle_at == nil and v.cc != nil and middle_base(v) != nil, do: %{memory | middle_at: v.tick}, else: memory
     claiming? = claiming_middle?(v, memory)
 
     {commands, memory, _ore} =
@@ -3113,7 +3117,7 @@ defmodule Swarm.Brain do
   #
   # Claiming it: we have no base Command Center there yet (finished or going up) and a field there
   # is worth one and clear of them (`base_candidates/2`), or we have one and it is short of its
-  # `@forward_towers` towers. While that holds, the base and what is built (its towers first,
+  # `@forward_towers` towers, for `@claim_ticks` at most. While that holds, the base and what is built (its towers first,
   # `next_build/3`) come before the fighters and the Barracks, the ore is kept for its Command
   # Center once it may go up (`hold_for_middle/3`), and no depot goes to a field there
   # (`remote_depot/3`): a depot there has no towers, and a field with a depot by it gets no base.
@@ -3123,7 +3127,12 @@ defmodule Swarm.Brain do
     contested?(v) and
       case middle_base(v) do
         nil -> Enum.any?(base_candidates(v, mem), &middle?(v, View.pos(hd(&1))))
-        pos -> Enum.count(View.buildings_of(v, "GuardTower"), &(View.dist(View.pos(&1), pos) <= @outpost_tower_reach)) < @forward_towers
+        pos ->
+          # ...for `@claim_ticks` from when it went up at most: a base that never got its fourth
+          # tower kept the buildings ahead of the fighters for a whole game, 30 Soldiers' worth
+          # at tick 414.
+          v.tick - (mem.middle_at || v.tick) < @claim_ticks and
+            Enum.count(View.buildings_of(v, "GuardTower"), &(View.dist(View.pos(&1), pos) <= @outpost_tower_reach)) < @forward_towers
       end
   end
 
@@ -3367,7 +3376,7 @@ defmodule Swarm.Brain do
          true <- may_expand?(v, mem),
          true <- Enum.all?(ccs, & &1["completed"]),
          true <- Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"]),
-         [field | _] <- base_fields(v, mem) do
+         [_ | _] = field <- next_base_field(v, mem) do
       # The site is chosen with the ore we infer there counted as ore: nothing goes up on a pile.
       with_inferred = %{v | deposits: v.deposits ++ inferred_ore(mem, v)}
 
@@ -3390,6 +3399,25 @@ defmodule Swarm.Brain do
       at = mem.checked[View.pos(hd(field))]
       at != nil and v.tick - at <= @clear_for
     end)
+  end
+
+  # The field the next base goes by: the best one a unit of ours has seen lately (`base_fields/2`).
+  # But with three or four players the base in the middle goes by the field there nearest us and
+  # no other: until a scout has seen that one (it is sent there, `survey/3`), none goes up. A
+  # scout on its way to look at an opponent had seen a field across the map, between the other
+  # two players, and the base went there, 50 tiles from home, with the one 18 tiles away unseen.
+  # (With no scout alive, any seen field as before.)
+  defp next_base_field(v, mem) do
+    seen = base_fields(v, mem)
+
+    case base_candidates(v, mem) do
+      [best | _] ->
+        nearest_only? = contested?(v) and middle_base(v) == nil and middle?(v, View.pos(hd(best))) and View.units_of(v, "Scout") != []
+        if nearest_only?, do: Enum.find(seen, &(&1 == best)), else: List.first(seen)
+
+      [] ->
+        nil
+    end
   end
 
   # Whether we are short of a Command Center for our workers (`@cc_at_workers`), with none on its way.
