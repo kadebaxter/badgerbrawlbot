@@ -728,6 +728,9 @@ the bigger of our neighbors' armies going by the scoreboard (the same count a lo
 too high if anything, as their buildings we haven't seen count as army), up to the same 40
 Soldiers' worth. No look or read is needed and one such neighbor is enough: the read of a flood
 came a tick after 37 Soldiers were at our towers. With one opponent left, the floor is as it was.
+While our army is under that floor, another Barracks comes right after the fighters and ahead
+of every other building, base and research, as soon as every Barracks we have is training at all,
+up to six; the ore for the next one is kept until it is there.
 
 **Inside our base, everyone fights.** A raid that would beat us is stayed out of only while it
 is outside the base. Once one of them is within reach of a finished Guard Tower of ours (its range

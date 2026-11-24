@@ -141,6 +141,25 @@ defmodule Swarm.ReadsTest do
       refute army_first?(commands)
     end
 
+    test "catching up, another Barracks as soon as every one is training at all, up to six of them" do
+      # Each with one in its queue: not "busy" enough for another by the usual rule (two queued).
+      training = fn i -> building(10 + i, "Barracks", 11, 3 + 3 * i) |> Map.put("production", [%{"unitType" => "Soldier"}]) end
+      built = fn commands -> for %{"type" => "Build", "buildingType" => type} <- commands, do: type end
+      opts = fn n, fighters -> [units: workers(20) ++ soldiers(fighters), buildings: Enum.map(0..(n - 1), training), ore: 1500] end
+
+      # Three Barracks, twelve of ours against thirty by their score: a fourth.
+      {_, commands, _} = Brain.plan(three(opts.(3, 12), 4000), Brain.new_memory(), terrain())
+      assert "Barracks" in built.(commands)
+
+      # Six of them: no seventh on that.
+      {_, commands, _} = Brain.plan(three(opts.(6, 12), 4000), Brain.new_memory(), terrain())
+      refute "Barracks" in built.(commands)
+
+      # Thirty of ours: no longer catching up, and the usual rule has it.
+      {_, commands, _} = Brain.plan(three(opts.(3, 30), 4000), Brain.new_memory(), terrain())
+      refute "Barracks" in built.(commands)
+    end
+
     test "never more than forty Soldiers' worth, whatever we count of them" do
       barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
       soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])

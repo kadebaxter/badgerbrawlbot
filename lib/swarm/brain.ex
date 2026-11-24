@@ -296,6 +296,7 @@ defmodule Swarm.Brain do
   # 300 ticks, with five Barracks full, 5,258 ore in the bank and 49 Soldiers on their way.
   @max_barracks 14
   @barracks_bank 750
+  @catch_up_barracks 6
   # Base Command Centers (`base_cc/3`): a Command Center of our own by a field worth one, to mine
   # it, train workers there too and have somewhere else to stand. One more at each of these worker
   # counts (the second at 16, and so on), once the first Barracks is up. A field is worth one with
@@ -1008,15 +1009,20 @@ defmodule Swarm.Brain do
     # A base on its way: its 400 stays in the bank until its builders break ground.
     held = if memory.base_order, do: @costs["CommandCenter"], else: 0
 
+    # Under the flood floor (`flood_floor/2`), the next Barracks comes right after the fighters,
+    # ahead of everything else that is built (`more_barracks/4`).
+    catch_up? = Roles.strength(Roles.fighters(v)) < flood_floor(v, memory)
+
     {commands, memory, _ore} =
       {[], memory, v.ore - reserve - held}
       |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
       |> army_floor(v, memory)
+      |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
       |> found_base(v, terrain)
       |> build(v, terrain)
-      |> more_barracks(v, terrain)
+      |> then(&if(catch_up?, do: &1, else: more_barracks(&1, v, terrain, false)))
       |> with_reserve(home_reserve, &train_workers(&1, v))
       |> research(v)
       |> train_scout(v)
@@ -3594,10 +3600,18 @@ defmodule Swarm.Brain do
   # built or saved for, rich or not, build order done or not, up to `@max_barracks`. On its own
   # order (`barracks_order`): it doesn't wait for the building in `pending`, nor hold it up. Never
   # saved up for. By the main Command Center, or by a base one when there is no room left there.
-  defp more_barracks({cmds, %{barracks_order: nil} = mem, ore} = acc, v, terrain) do
+  #
+  # Catching up (`catch_up?`: our army under the flood floor, `flood_floor/2`): up to
+  # `@catch_up_barracks` of them come first, right after the fighters and ahead of every other
+  # building, base and research, whenever every one we have is training at all, and the ore for
+  # the next is kept until it is there. Among five house bots with five or six Barracks each and
+  # 100 to 130 Soldiers trained, we had three until tick 273 and five in all, and seven towers,
+  # six depots, two Tech Labs and a base: 67 fighters.
+  defp more_barracks({cmds, %{barracks_order: nil} = mem, ore} = acc, v, terrain, catch_up?) do
     barracks = View.buildings_of(v, "Barracks")
     {done, going_up} = Enum.split_with(barracks, & &1["completed"])
-    busy? = Enum.all?(done, &(length(&1["production"] || []) >= 2))
+    catch_up? = catch_up? and length(barracks) < @catch_up_barracks
+    busy? = Enum.all?(done, &(length(&1["production"] || []) >= if(catch_up?, do: 1, else: 2)))
     cost = @costs["Barracks"]
     # One going up at a time, and one more for every `@barracks_bank` ore in the bank: with seven
     # of them full and 2,300 to 3,800 banked for 75 ticks, each new one waited for the last to finish.
@@ -3611,12 +3625,13 @@ defmodule Swarm.Brain do
       order = %{type: "Barracks", builder: hd(builders)["id"], at: v.tick, had: length(barracks), site: site}
       {[build_cmd(builders, "Barracks", site) | cmds], %{mem | barracks_order: order}, ore - cost}
     else
-      _ -> acc
+      # Catching up, the ore for the next one isn't spent on anything else meanwhile.
+      _ -> if catch_up? and done != [] and busy? and going_up == [], do: {cmds, mem, max(ore - cost, 0)}, else: acc
     end
   end
 
   # One on its way already: its ore stays set aside until it has broken ground.
-  defp more_barracks({cmds, mem, ore}, _v, _terrain), do: {cmds, mem, ore - @costs["Barracks"]}
+  defp more_barracks({cmds, mem, ore}, _v, _terrain, _catch_up?), do: {cmds, mem, ore - @costs["Barracks"]}
 
   # The extra Barracks on its way, kept or forgotten like any pending building (`still_pending/2`);
   # one that didn't come is a strike against its site.
