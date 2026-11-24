@@ -36,6 +36,31 @@ defmodule Swarm.StickyFightTest do
     assert Roles.call(group(0.2, 0.1, false)) == :go
   end
 
+  test "a fight we were staying out of is gathered for again only once we are clearly ahead" do
+    out = fn all -> Map.put(group(all, -0.5, false), :was_out, true) end
+    # The swings of the fight in the middle, 37 against 72: +0.14, +0.09, -0.29, +0.11, +0.28.
+    for all <- [0.14, 0.09, -0.29, 0.11, 0.28] do
+      assert Roles.call(out.(all)) == :away
+      assert Roles.verdict(out.(all), @far) == :away
+    end
+
+    assert Roles.call(out.(0.3)) == :gather
+    # Those ready winning it is still a fight to go into, stayed out of or not.
+    assert Roles.call(Map.put(group(0.1, 0.05, false), :was_out, true)) == :go
+    # And one we weren't staying out of is gathered for at even, as before.
+    assert Roles.call(group(0.14, -0.5, false)) == :gather
+  end
+
+  test "the leader remembers which fights we stay out of, and every unit's view says so next tick" do
+    ours = for i <- 1..4, do: unit(200 + i, "Soldier", 12, 12)
+    theirs = for i <- 1..20, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+    {_, _, memory} = Brain.plan(View.new(state(units: ours ++ theirs)), looked(nil), terrain())
+    assert length(memory.staying_out) == 20 and memory.going_in == []
+
+    {v, _} = Brain.see(View.new(state(units: ours ++ theirs, tick: 101)), memory)
+    assert Enum.all?(Map.values(Roles.groups(v, nil).groups), &(&1.was_out and not &1.was_in))
+  end
+
   test "the leader remembers which fights we went into, and every unit's view says so next tick" do
     # Twelve of ours right by five of theirs in our base: we go in.
     ours = for i <- 1..12, do: unit(200 + i, "Soldier", 12, 12)

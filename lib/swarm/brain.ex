@@ -286,6 +286,7 @@ defmodule Swarm.Brain do
   # the rest: 22 depots and towers in a row (some ordered four times over) kept that one slot for
   # 300 ticks, with five Barracks full, 5,258 ore in the bank and 49 Soldiers on their way.
   @max_barracks 14
+  @barracks_bank 750
   # Base Command Centers (`base_cc/3`): a Command Center of our own by a field worth one, to mine
   # it, train workers there too and have somewhere else to stand. One more at each of these worker
   # counts (the second at 16, and so on), once the first Barracks is up. A field is worth one with
@@ -603,6 +604,8 @@ defmodule Swarm.Brain do
       # ids of the enemy fighters in the fights we were going into (`View.going_in`).
       fights: %{},
       going_in: [],
+      # ...and in the fights we were staying out of (`View.staying_out`).
+      staying_out: [],
       # Regrouping at the backup Command Center while the main base is overrun: %{pos, at: the last
       # tick it was}, or nil (see `regroup/2`).
       regroup: nil,
@@ -650,7 +653,7 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
     {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
@@ -1241,6 +1244,7 @@ defmodule Swarm.Brain do
     {fights, fight_why} = fight_notes(v, wave, Map.get(memory, :fights, %{}))
     # The fights we are going into, by their fighters, for next tick (`Roles.verdict/2`).
     going_in = for {_id, g} <- Roles.groups(v, wave).groups, g.size > 0, Roles.call(g) == :go, id <- g.ids, do: id
+    staying_out = for {_id, g} <- Roles.groups(v, wave).groups, g.size > 0, Roles.call(g) == :away, id <- g.ids, do: id
     why = why ++ fight_why
 
     mode =
@@ -1296,7 +1300,8 @@ defmodule Swarm.Brain do
          fall_back: fall_back,
          fall_back_at: fall_back_at,
          fights: fights,
-         going_in: going_in
+         going_in: going_in,
+         staying_out: staying_out
      }}
   end
 
@@ -2209,12 +2214,17 @@ defmodule Swarm.Brain do
 
     overrun? = if near?, do: raid > home + Roles.strength(out), else: raid >= @serum_margin * home
 
-    # And it has to turn the fight: the serum doubles our Soldiers, so they alone, counted twice
-    # (the ones at home, and the wave's if it is near), must at least match the raid. Taken
-    # against 76 Soldiers with 30 fighters, it was spent on a fight nobody went into.
-    # Soldiers only: Archers keep to the fight's estimate and stay out of one it calls lost.
-    soldiers = Enum.filter(Roles.home(v, wave) ++ if(near?, do: out, else: []), &(&1["type"] == "Soldier"))
-    turns_it? = 2 * Roles.strength(soldiers) >= raid
+    # And it has to turn the fight: the fight's own estimate, worked out again with our Soldiers
+    # on the serum (`View.serum_on`), has all of ours coming out ahead of some raid they are in.
+    # ("Our Soldiers counted twice at least match the raid" said yes to 40 Soldiers against 71:
+    # the estimate with it was -0.3, nobody went in, and it got 12 kills.)
+    raider_ids = MapSet.new(raiders, & &1["id"])
+    on = %{v | serum_on: true, shared: v.shared && Map.delete(v.shared, :groups)}
+
+    turns_it? =
+      Enum.any?(Roles.groups(on, wave).groups, fn {_id, g} ->
+        g.size > 0 and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
+      end)
 
     # Or they have taken theirs: raiders on the serum (the server marks each, `Roles.serum?/1`,
     # and they count double in `raid` above) are answered with ours, whatever the odds.
@@ -3380,10 +3390,14 @@ defmodule Swarm.Brain do
   # saved up for. By the main Command Center, or by a base one when there is no room left there.
   defp more_barracks({cmds, %{barracks_order: nil} = mem, ore} = acc, v, terrain) do
     barracks = View.buildings_of(v, "Barracks")
-    busy? = Enum.all?(barracks, &(&1["completed"] and length(&1["production"] || []) >= 2))
+    {done, going_up} = Enum.split_with(barracks, & &1["completed"])
+    busy? = Enum.all?(done, &(length(&1["production"] || []) >= 2))
     cost = @costs["Barracks"]
+    # One going up at a time, and one more for every `@barracks_bank` ore in the bank: with seven
+    # of them full and 2,300 to 3,800 banked for 75 ticks, each new one waited for the last to finish.
+    at_once = 1 + div(v.ore, @barracks_bank)
 
-    with true <- barracks != [] and busy? and length(barracks) < @max_barracks,
+    with true <- done != [] and busy? and length(going_up) < at_once and length(barracks) < @max_barracks,
          true <- ore >= cost and v.ore >= cost + @worker_reserve,
          {_, _} = site <- site(terrain, v, :base) || Enum.find_value(View.base_ccs(v), &site(terrain, v, {:outpost, &1})),
          [_ | _] = free <- free_workers(v, mem) do

@@ -80,6 +80,10 @@ defmodule Swarm.Roles do
   # that swung with it (go in, stay out, gather: seven times in twelve ticks) had twenty-five of
   # ours lose to twenty, a few fighting at a time while the rest walked in and out.
   @stick 0.5
+  # A fight we were staying out of last tick is gathered for again only once all of ours would come
+  # out this far ahead. The estimate swings every tick: at 0 the call went gather, stay out, gather
+  # ten times in twenty ticks, 37 of ours walking to and fro in front of 72 with the serum on.
+  @back_in 0.3
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
   # Trebuchet can't hit anything closer than `min_range`.
@@ -936,8 +940,8 @@ defmodule Swarm.Roles do
       g.ready >= 0 -> :go
       still_on?(g) -> :go
       committed?(g, unit) and g.ready >= -@edge -> :go
-      g.all >= 0 -> :gather
-      gathering?(g, unit) and g.all >= -@edge -> :gather
+      g.all >= gather_at(g) -> :gather
+      gathering?(g, unit) and not was_out?(g) and g.all >= -@edge -> :gather
       true -> :away
     end
   end
@@ -951,10 +955,15 @@ defmodule Swarm.Roles do
     cond do
       g.ready >= 0 -> :go
       still_on?(g) -> :go
-      g.all >= 0 -> :gather
+      g.all >= gather_at(g) -> :gather
       true -> :away
     end
   end
+
+  # What `all` has to reach for the fight to be gathered for: even, or `@back_in` for one we were
+  # staying out of last tick.
+  defp gather_at(g), do: if(was_out?(g), do: @back_in, else: 0)
+  defp was_out?(g), do: Map.get(g, :was_out, false)
 
   # We were going into this fight last tick and it hasn't clearly turned against all of ours in it
   # (`@stick`): everyone carries on, together.
@@ -1089,11 +1098,13 @@ defmodule Swarm.Roles do
 
     # Whether we were going into this fight last tick: any of its fighters was in a group we were.
     was_in = Enum.any?(g.ids, &MapSet.member?(v.going_in, &1))
+    # ...or staying out of it: all of them were in groups we were (one we were going into wins).
+    was_out = not was_in and Enum.any?(g.ids, &MapSet.member?(v.staying_out, &1))
 
     # The members themselves stay out: this goes to every unit, and the view carries them already.
     g
     |> Map.delete(:members)
-    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge), was_in: was_in})
+    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge), was_in: was_in, was_out: was_out})
   end
 
   # By our tower nearest the gather spot on our side, if it is out of the group's reach; else nil.

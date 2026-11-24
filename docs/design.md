@@ -263,6 +263,9 @@ A fight we were going into last tick is seen through: it stays "go" for everyone
 no worse than -0.5 (the leader remembers which, `View.going_in`). The estimate swings every tick
 with who happens to be near; a call that swung with it (go in, stay out, gather: seven times in
 twelve ticks) had 25 of ours lose to 20, a few fighting at a time while the rest walked in and out.
+The same the other way: a fight we were staying out of last tick (`View.staying_out`) is gathered
+for again only once `all` reaches +0.3, not at even (37 of ours went gather, stay out, gather ten
+times in twenty ticks in front of 72); those ready winning it is still "go".
 
 Each fighter then decides for itself, by the same rule on the same numbers (`Swarm.Roles.verdict/2`):
 go in once those ready come out at least even; while all of us would but those ready wouldn't,
@@ -386,8 +389,9 @@ and not just because home's fighters are across the base). Never for the wave's 
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
 It is taken at even odds or worse (the raid at least as strong as home; it was 1.25 times, by
-when too few Soldiers were left for it to matter), and only when it turns the fight: our Soldiers
-alone, counted twice (the serum doubles them), must at least match the raid. A Soldier on the
+when too few Soldiers were left for it to matter), and only when it turns the fight: the fight's own
+estimate, worked out with our Soldiers on it, has all of ours ahead (twice our Soldiers matching
+the raid said yes to 40 against 71, where the estimate with it was about -0.3). A Soldier on the
 serum, theirs or ours (the server marks each, `Swarm.Roles.serum?/1`), counts for two in every
 strength comparison and hits twice as hard in the fight's estimate. Raiders on theirs in our
 base are answered with ours, whatever the odds. Ours counts from the tick after it is taken,
@@ -558,7 +562,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    workers (it used to wait for 9 workers, then for the army floor and the reserve: up at tick 199
    once). No Guard Tower before tick 100; then towers build up to 8 as we can pay (the bots that
    tower up first mostly lose, the ones that win end with 7 to 10). Another Barracks goes up
-   whenever every one is busy and we can pay for it, rich or not, up to 14, on its own order
+   whenever every finished one is busy and we can pay for it, rich or not, up to 14 (one going up
+   at a time, and one more for every 750 ore in the bank), on its own order
    (apart from the one building at a time of the rest, which a run of depots and towers once kept
    busy for 300 ticks with 5,258 ore in the bank); by a base Command Center when there is no room
    left by the main one. Workers: one for every

@@ -38,9 +38,12 @@ defmodule Swarm.TurnaroundTest do
   describe "the serum" do
     defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 9, 9, owner: 1))
 
-    test "taken when doubling our Soldiers turns the fight; not against a raid it can't beat" do
-      # Ten Soldiers at home: with the serum they are worth twenty.
-      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(16))
+    test "taken when the fight's estimate with it has us ahead; not against a raid it can't beat" do
+      # Ten Soldiers at home against fourteen: lost plain (-0.66), ours with the serum (+0.24).
+      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(14))
+      # Against sixteen the estimate with it is still -0.33, though twice ten is more than sixteen:
+      # hitting twice as hard isn't being twice as many. Not taken.
+      assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(16))
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(30))
     end
 
@@ -137,6 +140,26 @@ defmodule Swarm.TurnaroundTest do
 
       {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 300)
       assert builds(commands) == ["Barracks"]
+    end
+
+    test "one going up at a time, and one more for every 750 ore in the bank" do
+      going_up = %{building(30, "Barracks", 1, 9) | "completed" => false}
+      opts = fn ore -> [units: workers(20) ++ soldiers(12), buildings: busy(@built) ++ [going_up], ore: ore] end
+
+      # (Workers are sent back to the unfinished ones too: those aren't new.)
+      new = fn commands -> for %{"type" => "Build", "buildingType" => t, "x" => x} <- commands, x != 1, do: t end
+
+      {_, commands, _} = plan(opts.(600))
+      assert new.(commands) == []
+      {_, commands, _} = plan(opts.(900))
+      assert new.(commands) == ["Barracks"]
+
+      # Two going up and 900 in the bank: not a third; with 1,600, a third.
+      second = %{building(31, "Barracks", 1, 5) | "completed" => false}
+      {_, commands, _} = plan(Keyword.update!(opts.(900), :buildings, &(&1 ++ [second])))
+      assert new.(commands) == []
+      {_, commands, _} = plan(Keyword.update!(opts.(1600), :buildings, &(&1 ++ [second])))
+      assert new.(commands) == ["Barracks"]
     end
 
     test "on its own order: it goes up while another building is on its way, and only one at a time" do

@@ -73,6 +73,8 @@ defmodule Swarm.View do
     # The enemy fighters whose group's fight we were going into last tick (set by
     # `Swarm.Brain.see/2`): a fight we are in is seen through (`Swarm.Roles.verdict/2`).
     going_in: MapSet.new(),
+    # ...and in the fights we were staying out of (`Swarm.Roles.call/1` was `:away`).
+    staying_out: MapSet.new(),
     # Our serum is on (set by `Swarm.Brain.see/2` from the tick after we take it until it wears
     # off): our Soldiers hit twice as hard, whether the server has marked each one yet or not.
     serum_on: false
