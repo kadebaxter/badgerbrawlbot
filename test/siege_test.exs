@@ -31,11 +31,20 @@ defmodule Swarm.SiegeTest do
       assert %{"type" => "Attack", "x" => 42, "y" => 42} = decide(unit(201, "Soldier", 36, 36), siege_view([], {36, 36}), @siege)
     end
 
-    test "a tower in the fog: they walk to seven tiles from it, never into its reach" do
+    test "a tower in the fog: they walk to a tile they see it from themselves, outside every tower's reach, exactly" do
       fogged = for t <- @towers, do: t |> Map.take(["id", "owner", "type", "x", "y", "completed"]) |> Map.put("hp", 500)
-      v = %{View.new(state(units: [unit(301, "Trebuchet", 40, 40)])) | remembered: fogged}
-      assert %{"type" => "Move", "x" => x, "y" => y} = decide(unit(301, "Trebuchet", 40, 40), v, @siege)
-      assert View.dist({x, y}, {52, 50}) == 7
+      fog_view = fn x, y -> %{View.new(state(units: [unit(301, "Trebuchet", x, y)])) | remembered: fogged} end
+
+      assert %{"type" => "Move", "x" => x, "y" => y} = decide(unit(301, "Trebuchet", 40, 40), fog_view.(40, 40), @siege)
+      # Six off the nearest tower (52, 50), inside a Trebuchet's sight of 7 (a circle) and its reach.
+      assert View.dist({x, y}, {52, 50}) == 6
+      assert (x - 52) ** 2 + (y - 50) ** 2 <= 45
+      assert Enum.all?(@towers, &(View.dist({x, y}, {&1["x"], &1["y"]}) > 5))
+
+      # Two tiles short of that tile is not there: it keeps walking (they stood idle 200 ticks once).
+      assert %{"type" => "Move", "x" => ^x, "y" => ^y} = decide(unit(301, "Trebuchet", x - 2, y), fog_view.(x - 2, y), @siege)
+      # On it and the tower still unseen (it can't be, from there): it stays put.
+      assert :no_change = decide(unit(301, "Trebuchet", x, y), fog_view.(x, y), @siege)
     end
 
     test "still walking to the staging point, they keep walking" do
@@ -57,6 +66,23 @@ defmodule Swarm.SiegeTest do
       {strategy, _, _} = plan([units: units, buildings: [cc], tick: 160], memory)
       assert %{wave: %{released: true}} = strategy
       assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_released and text =~ "are down" end)
+    end
+
+    test "no tower down in 90 ticks: everyone goes in; one down starts the count again" do
+      wave = %{id: 1, members: Enum.to_list(201..206) ++ [301], owner: 1, staging: {42, 42}, released: false, at: 100, sieging: 120}
+      units = [unit(301, "Trebuchet", 42, 42) | for(i <- 1..6, do: unit(200 + i, "Soldier", 42, 42))]
+      memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
+      other = building(720, "Barracks", 50, 50, 1)
+
+      {%{wave: %{released: false}}, _, held} = plan([units: units, buildings: [other | @towers], tick: 200], memory)
+      {strategy, _, _} = plan([units: units, buildings: [other | @towers], tick: 210], held)
+      assert %{wave: %{released: true}} = strategy
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_released and text =~ "no tower down in 90 ticks" end)
+
+      # One of the two fell at tick 200: still shelling at 210, and until 290.
+      {%{wave: %{released: false}}, _, held} = plan([units: units, buildings: [other, hd(@towers)], tick: 200], held)
+      assert {%{wave: %{released: false}}, _, _} = plan([units: units, buildings: [other, hd(@towers)], tick: 289], held)
+      assert {%{wave: %{released: true}}, _, _} = plan([units: units, buildings: [other, hd(@towers)], tick: 290], held)
     end
   end
 

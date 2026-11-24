@@ -207,7 +207,7 @@ defmodule Swarm.UnitBrain do
        when activity in ["Idle", "Gathering", "Returning", "Moving", "Building"] and rally != nil do
     case worker_danger(unit, v, s) do
       nil ->
-        worker(unit, v)
+        stand_in(unit, s) || search(unit, s) || worker(unit, v)
 
       enemy ->
         {x, y} = spot = refuge(unit, v, enemy) || rally
@@ -223,6 +223,34 @@ defmodule Swarm.UnitBrain do
   end
 
   defp worker(unit, v, _strategy), do: worker(unit, v)
+
+  # A worker sent to look for ore (`strategy.search`, see `Swarm.Brain`): to its place, and it
+  # waits there until the leader has seen it (a tick) and gives it the next. Out of danger only.
+  defp search(unit, s) do
+    case Map.get(Map.get(s, :search, %{}), unit["id"]) do
+      nil -> nil
+      {x, y} = spot ->
+        cond do
+          View.pos(unit) == spot -> :no_change
+          unit["activity"] == "Moving" and heading?(unit, spot) -> :no_change
+          true -> %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+        end
+    end
+  end
+
+  # The worker standing in for our scouts (`strategy.worker_scout`: none of them alive, no ore left
+  # to mine): to the spot the leader wants looked at, then home again. Out of danger only: this
+  # comes after `worker_danger/3`.
+  defp stand_in(unit, s) do
+    spot = Map.get(s, :look)
+
+    cond do
+      Map.get(s, :worker_scout) != unit["id"] or spot == nil -> nil
+      View.dist(View.pos(unit), spot) <= 2 -> :no_change
+      heading?(unit, spot) -> :no_change
+      true -> %{"type" => "Move", "unitIds" => [unit["id"]], "x" => elem(spot, 0), "y" => elem(spot, 1)}
+    end
+  end
 
   # Moving to (within a tile of) `spot` already.
   defp heading?(%{"activity" => "Moving", "destination" => %{"x" => x, "y" => y}}, spot), do: View.dist({x, y}, spot) <= 1
@@ -695,19 +723,33 @@ defmodule Swarm.UnitBrain do
 
   # Shell `tower` by name: attack-moving, a Trebuchet fires at the nearest unit, and a building only
   # with no unit in reach. In sight, the game walks it to its own reach (7; a tower's is 5) and it
-  # fires from there. Out of sight (we can only attack what we see) it walks to 7 tiles off, then
-  # 6; still unseen there, on with the wave as before.
+  # fires from there. Out of sight (we can only attack what we see, and the wave holds too far
+  # back to see it) it walks to a tile it sees the tower from itself (`stand/3`), exactly: the
+  # usual "close enough" for a move left two of them idle nine tiles off for 200 ticks. With no
+  # such tile, on with the wave as before.
   defp shell(unit, v, s, tower) do
     here = View.pos(unit)
-    there = View.pos(tower)
-    d = View.dist(here, there)
 
     cond do
       Enum.any?(v.enemy_buildings, &(&1["id"] == tower["id"])) -> {:attack, tower["id"]}
-      d > 7 -> {:move, toward(there, here, 7)}
-      d > 6 -> {:move, toward(there, here, 6)}
+      spot = stand(v, here, tower) -> {:move_to, spot}
       true -> onward(unit, s, :siege_camp)
     end
+  end
+
+  # Where a Trebuchet stands to see and shell `tower`: 6 tiles off it one way and no more than 3
+  # the other (inside its own sight of 7, which is a circle, and its reach; outside the tower's 5),
+  # on the map, out of every other known tower's reach; the nearest such tile to it.
+  defp stand(v, here, tower) do
+    {tx, ty} = View.pos(tower)
+    others = Enum.reject(Roles.enemy_towers(v), &(&1["id"] == tower["id"]))
+
+    for(a <- [-6, 6], b <- -3..3, {dx, dy} <- [{a, b}, {b, a}], do: {tx + dx, ty + dy})
+    |> Enum.filter(fn {x, y} = spot ->
+      x in 0..(v.map_width - 1)//1 and y in 0..(v.map_height - 1)//1 and
+        not Enum.any?(others, &(View.dist(View.pos(&1), spot) <= Roles.range(&1)))
+    end)
+    |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
   end
 
   # The wave waits at its staging point for its Trebuchets.
@@ -997,6 +1039,8 @@ defmodule Swarm.UnitBrain do
   end
 
   defp arrived?(unit, {:move, pos}), do: View.dist(View.pos(unit), pos) <= 2
+  # An exact move: there only on the tile itself.
+  defp arrived?(unit, {:move_to, pos}), do: View.pos(unit) == pos
   defp arrived?(unit, {:attack_move, pos}), do: View.dist(View.pos(unit), pos) <= 1
   defp arrived?(_unit, {:attack, _id}), do: false
 
@@ -1006,4 +1050,5 @@ defmodule Swarm.UnitBrain do
   defp command(unit, {:attack, id}), do: %{"type" => "Attack", "unitIds" => [unit["id"]], "targetId" => id}
   defp command(unit, {:attack_move, {x, y}}), do: %{"type" => "Attack", "unitIds" => [unit["id"]], "x" => x, "y" => y}
   defp command(unit, {:move, {x, y}}), do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+  defp command(unit, {:move_to, {x, y}}), do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
 end

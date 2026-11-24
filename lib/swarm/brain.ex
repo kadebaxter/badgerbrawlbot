@@ -168,6 +168,30 @@ defmodule Swarm.Brain do
   # again (the same measure, with a margin, so it doesn't flip). And home only goes out to help
   # where it can take that whole count, not just the raiders in sight (`may_help?/4`).
   @together_until 0.8
+  # A scout's look at a player (`look/5`) that finds less than that count brings it down, but to
+  # no less than this share of it: a scout sees one spot, and the army may be standing at another.
+  @look_trust 0.5
+  # With no ore left that we can get at and no Scout alive, from this tick on, an idle worker does
+  # the looking before a wave (`stand_in/1`).
+  @stand_in_from 300
+  # Nothing left to mine (`nothing_to_mine/2`), two ways, neither going by what we happen to see:
+  # - for certain: the ore the map started with, less what every player has banked (the server
+  #   reports it for all), is under `@ore_dregs` of it. The map's ore is the same every game
+  #   (`map_ore/2`): four corners of 18,000 with two to four players, 14,100 a player on a ring,
+  #   scaled by our own home piles (1,000 each as a rule). That count only errs one way: ore mined
+  #   and never banked (lost over a storage cap, or with the worker carrying it) still counts as
+  #   left, up to a sixth of the map in the games on record, so much may look left with none there.
+  # - so also: we have banked nothing for `@ore_stall` ticks with `@rebuild_workers` workers or more
+  #   and none of them mining. Whatever is left, we aren't getting it.
+  @ore_dregs 0.02
+  @ore_stall 100
+  # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
+  # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
+  # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
+  @searchers 4
+  @search_timeout 90
+  @corner_ore 18_000
+  @ring_ore 14_100
   # After a wave is called home to defend, no new one leaves for this long: raiders often come
   # back, and a wave that leaves the moment they step out of sight gets called home again.
   @calm_ticks 20
@@ -287,7 +311,10 @@ defmodule Swarm.Brain do
   # A wave with Trebuchets shells the towers by its target before the rest goes in (`release/4`):
   # towers within `@siege_clear` of the target, for at most `@siege_ticks`.
   @siege_clear 10
-  @siege_ticks 200
+  # ...for as long as they keep bringing towers down: `@siege_idle` ticks without one falling and
+  # everyone goes in (two Trebuchets need about 55 ticks a tower). Two stood idle 9 tiles from a
+  # tower for 200 ticks once, with the wave waiting behind them and no enemy fighter left.
+  @siege_idle 90
   # Trebuchets needed at the rally point to go out with a wave.
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
@@ -471,6 +498,17 @@ defmodule Swarm.Brain do
       lost: %{},
       # spot => the ticks building failed there lately (see `@site_strikes`).
       strikes: %{},
+      # The ore the map started with (`map_ore/2`), once we have seen our home piles; our banked
+      # ore the last time it grew and when, {ore, tick}; and whether there was nothing left to mine
+      # last tick, for logging the change.
+      map_ore: nil,
+      income_at: {0, 0},
+      mined_out: false,
+      # The search for ore while stalled (`ore_search/3`): worker id => %{pos, at}; the places
+      # looked at (or given up on); and whether there is nowhere left to look.
+      search: %{},
+      searched: [],
+      search_done: false,
       # Where we have ordered base Command Centers (`base_cc/3`), and the one on its way:
       # %{site, builders, at} until it breaks ground (or fails), or nil. It has its own slot:
       # `pending` and the rest of the building carry on while its builders walk.
@@ -835,6 +873,11 @@ defmodule Swarm.Brain do
   def plan(%View{} = v, memory, terrain) do
     # Memory from an older version may have other keys: keep only the ones we know.
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
+    memory = %{memory | map_ore: memory.map_ore || map_ore(v, memory), income_at: income_at(memory, v)}
+    {no_ore, ore_note} = nothing_to_mine(v, memory)
+    memory = %{memory | mined_out: no_ore != false}
+    # Stalled with nowhere left to look (as of last tick's search): `:nowhere`.
+    v = %{v | no_ore: if(no_ore == :stalled and memory.search_done, do: :nowhere, else: no_ore)}
     before = memory.enemies
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     memory = %{memory | army_seen: army_seen(memory, v, before)}
@@ -852,7 +895,11 @@ defmodule Swarm.Brain do
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
-    strategy = %{strategy | survey: survey, regroup: regroup, help: help, why: strategy.why ++ surveyed ++ regrouped ++ helped}
+    {search, memory, searching} = ore_search(v, memory, terrain, Map.get(strategy, :worker_scout))
+
+    strategy =
+      %{strategy | survey: survey, regroup: regroup, help: help, why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
+      |> Map.put(:search, search)
     memory = settle_pending(memory, v)
     memory = settle_base(memory, v)
     memory = %{memory | ore_short_since: short_since(memory, v)}
@@ -900,6 +947,135 @@ defmodule Swarm.Brain do
 
     {strategy, Enum.reverse(commands), memory}
   end
+
+  # The ore the map started with: by its layout (`@corner_ore` in each of four corners with two to
+  # four players, `@ring_ore` a player on a ring), scaled by the biggest pile by our Command Center
+  # (1,000 as a rule; a match can ask for more or less grubs). Nil until we see one.
+  defp map_ore(%View{cc: nil}, _memory), do: nil
+
+  defp map_ore(v, _memory) do
+    home = View.pos(v.cc)
+    piles = for d <- v.deposits, not Map.has_key?(d, "seen"), View.dist(View.pos(d), home) <= 8, do: d["remaining"] || 0
+
+    case piles do
+      [] -> nil
+      _ -> round(if(v.players <= @mirror_players, do: 4 * @corner_ore, else: v.players * @ring_ore) * Enum.max(piles) / 1000)
+    end
+  end
+
+  # Our banked ore the last time it grew, and when.
+  defp income_at(%{income_at: {ore, _at}}, v) when v.my_mined > ore, do: {v.my_mined, v.tick}
+  defp income_at(%{income_at: at}, _v), do: at
+
+  # Whether there is nothing left for us to mine (see `@ore_dregs`), as {`:mined_out` (the map, for
+  # certain), `:stalled` (we aren't getting any, whatever is left: we go and look for it,
+  # `ore_search/3`) or false, what to log when it changes}. Never before `@stand_in_from`.
+  defp nothing_to_mine(v, memory) do
+    left = memory.map_ore && max(memory.map_ore - v.mined_all, 0)
+    {_ore, grew_at} = memory.income_at
+    workers = View.units_of(v, "Worker")
+    mining? = Enum.any?(workers, &(&1["activity"] in ["Gathering", "Returning"]))
+
+    {state, why} =
+      cond do
+        v.tick < @stand_in_from ->
+          {false, nil}
+
+        left != nil and left <= @ore_dregs * memory.map_ore ->
+          {:mined_out, "the map is mined out: #{memory.map_ore} ore on it, #{v.mined_all} banked by everyone"}
+
+        length(workers) >= @rebuild_workers and not mining? and v.tick - grew_at >= @ore_stall ->
+          {:stalled,
+           "we have banked nothing for #{v.tick - grew_at} ticks and nobody is mining" <>
+             if(left, do: " (at most #{left} left on the map)", else: "")}
+
+        true ->
+          {false, nil}
+      end
+
+    note =
+      cond do
+        state == :mined_out and not memory.mined_out -> [{:economy, "nothing left to mine: #{why}. No more workers"}]
+        state == :stalled and not memory.mined_out -> [{:economy, "#{why}: no more workers until we bank again, and we go looking for ore"}]
+        state == false and memory.mined_out -> [{:economy, "mining again: workers are trained as usual"}]
+        true -> []
+      end
+
+    {state, note}
+  end
+
+  # Stalled (`nothing_to_mine/2`), we go and find the ore: idle workers, up to `@searchers`, each
+  # to the nearest place we haven't looked at that nobody else is going to. The places: where the
+  # mirrored map says there is ore we haven't seen (`inferred_ore/2`), and a grid over the whole
+  # map `@far_grid` apart (a worker sees 5 tiles), on open ground, where we may go: clear of every
+  # living enemy's base (`View.claimable?/2`; all of it once the last one is down to the Command
+  # Center we spare) and of their towers. A place is done once anything of ours sees it, or its
+  # worker has had `@search_timeout` ticks. Ore found is ore known: the workers mine it and a
+  # depot follows, as ever. Over when we bank again (the map mined out for certain needs no search).
+  # Not the worker standing in for our scouts (`stand_in/1`): it has its own errand.
+  # Returns {worker id => where to look, memory, what to log}.
+  defp ore_search(%View{no_ore: no_ore} = v, memory, terrain, stand_in) when no_ore in [:stalled, :nowhere] do
+    rows = List.to_tuple(terrain)
+
+    open? = fn {x, y} ->
+      y in 0..(tuple_size(rows) - 1)//1 and x in 0..(byte_size(elem(rows, y)) - 1)//1 and :binary.at(elem(rows, y), x) == ?.
+    end
+
+    half = div(@far_grid, 2)
+    grid = for x <- half..(v.map_width - 1)//@far_grid, y <- half..(v.map_height - 1)//@far_grid, do: {x, y}
+    inferred = memory |> inferred_ore(v) |> Enum.map(&View.pos/1)
+
+    places =
+      for {x, y} <- inferred ++ grid,
+          View.claimable?(v, {x, y}) and not Roles.under_tower?(v, {x, y}),
+          spot = Enum.find(for(d <- 0..3, dx <- -d..d, dy <- -d..d, do: {x + dx, y + dy}), open?),
+          spot != nil,
+          uniq: true,
+          do: spot
+
+    alive = MapSet.new(View.units_of(v, "Worker"), & &1["id"])
+    timed_out = for {id, %{pos: pos, at: at}} <- memory.search, MapSet.member?(alive, id), v.tick - at > @search_timeout, do: pos
+    seen = for p <- places, p not in memory.searched, View.in_sight?(v, p), do: p
+    searched = Enum.uniq(memory.searched ++ seen ++ timed_out)
+    left = Enum.reject(places, &(&1 in searched))
+
+    # Workers keep the place they were given while it still wants looking at.
+    kept = for {id, %{pos: pos} = job} <- memory.search, MapSet.member?(alive, id), id != stand_in, pos in left, into: %{}, do: {id, job}
+    taken = MapSet.new(Map.values(kept), & &1.pos)
+
+    free =
+      v
+      |> View.units_of("Worker")
+      |> Enum.filter(&(&1["activity"] == "Idle" and &1["id"] != stand_in and not is_map_key(kept, &1["id"])))
+      |> Enum.sort_by(& &1["id"])
+
+    {jobs, _taken} =
+      Enum.reduce(Enum.take(free, max(@searchers - map_size(kept), 0)), {kept, taken}, fn w, {jobs, taken} ->
+        case left |> Enum.reject(&MapSet.member?(taken, &1)) |> Enum.min_by(&{View.dist(&1, View.pos(w)), &1}, fn -> nil end) do
+          nil -> {jobs, taken}
+          spot -> {Map.put(jobs, w["id"], %{pos: spot, at: v.tick}), MapSet.put(taken, spot)}
+        end
+      end)
+
+    done? = left == []
+
+    notes =
+      cond do
+        done? and not memory.search_done ->
+          [{:economy, "looked for ore everywhere we may go (#{length(searched)} places): none to be had"}]
+
+        memory.search == %{} and jobs != %{} ->
+          [{:economy, "stalled: #{map_size(jobs)} worker(s) go looking for ore, #{length(left)} places we haven't seen"}]
+
+        true ->
+          []
+      end
+
+    {Map.new(jobs, fn {id, job} -> {id, job.pos} end), %{memory | search: jobs, searched: searched, search_done: done?}, notes}
+  end
+
+  # Banking (or the map mined out for certain): no search. What we looked at stays looked at.
+  defp ore_search(_v, memory, _terrain, _stand_in), do: {%{}, %{memory | search: %{}, search_done: false}, []}
 
   # Every deposit we have ever seen, with the most ore we saw in it; when eliminated players'
   # starts were last in sight; and the spots where the mirrored map should have ore and we see none.
@@ -971,7 +1147,9 @@ defmodule Swarm.Brain do
     army_recall? = memory.wave != nil and not all_in?(v) and not killing? and army_near_home(v, memory, memory.wave) != nil
     memory = if army_recall?, do: %{memory | army_recalled_at: v.tick}, else: memory
     calm? = recalled_at == nil or v.tick - recalled_at >= @calm_ticks
-    {look, looked} = look(memory, v, rally, owner, target)
+    stand_in = stand_in(v)
+    {look, looked, counted} = look(memory, v, rally, owner, target, stand_in)
+    memory = %{memory | army_seen: lower_count(memory.army_seen, counted, v)}
     {check, checked, died_at} = siege_watch(memory, v)
     {peek, peeked} = peek(memory, v, died_at)
     check_rest = if died_at, do: v.tick + @check_rest, else: memory.check_rest
@@ -1040,6 +1218,8 @@ defmodule Swarm.Brain do
       spare: spare,
       # Safe mode: the Command Center id every wave member goes for (`Swarm.UnitBrain`), or nil.
       kill: memory.kill && Map.take(memory.kill, [:id, :pos]),
+      # The worker standing in for our scouts (`stand_in/1`), or nil.
+      worker_scout: stand_in && stand_in["id"],
       survey: nil,
       regroup: nil,
       help: nil
@@ -1133,8 +1313,8 @@ defmodule Swarm.Brain do
   # we give up on it), and sends a new one once `@look_at` attackers wait and we haven't looked at
   # that player lately. Not while a wave is out: then a scout works in front of it.
   # Returns the look and what to log.
-  defp look(memory, v, rally, owner, target) do
-    {look, why} = settle_look(memory.look, v, memory)
+  defp look(memory, v, rally, owner, target, stand_in) do
+    {look, why, counted} = settle_look(memory.look, v, memory, stand_in)
 
     want? =
       cond do
@@ -1147,31 +1327,57 @@ defmodule Swarm.Brain do
 
     if want? do
       spot = toward(target, View.pos(v.cc), @look_from)
-      {%{owner: owner, pos: spot, at: v.tick, done: nil}, why ++ [{:scout_sent, "scout looking at player #{owner} by #{fmt(spot)}"}]}
+      who = if stand_in, do: "worker #{stand_in["id"]} (no scout, no ore left to mine)", else: "scout"
+      {%{owner: owner, pos: spot, at: v.tick, done: nil}, why ++ [{:scout_sent, "#{who} looking at player #{owner} by #{fmt(spot)}"}], counted}
     else
-      {look, why}
+      {look, why, counted}
     end
   end
 
-  defp settle_look(%{done: nil} = look, v, memory) do
-    there? = Enum.any?(View.units_of(v, "Scout"), &(View.dist(View.pos(&1), look.pos) <= @look_sight))
+  # Returns {the look, what to log, {player, the strength counted there} or nil}.
+  defp settle_look(%{done: nil} = look, v, memory, stand_in) do
+    lookers = View.units_of(v, "Scout") ++ List.wrap(stand_in)
+    there? = Enum.any?(lookers, &(View.dist(View.pos(&1), look.pos) <= @look_sight))
+    # A worker walks a tile a tick where a Scout runs two: it gets twice as long.
+    timeout = if stand_in, do: 2 * @look_timeout, else: @look_timeout
 
     cond do
       there? ->
         seen = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] == look.owner))
         why = "scouted player #{look.owner}: #{length(seen)} fighters, strength #{round(Roles.strength(seen))}"
-        {%{look | done: v.tick}, [{:scouted, why}]}
+        {%{look | done: v.tick}, [{:scouted, why}], {look.owner, Roles.strength(seen)}}
 
-      View.units_of(v, "Scout") == [] or v.tick - look.at >= @look_timeout ->
+      lookers == [] or v.tick - look.at >= timeout ->
         why = "no look at player #{look.owner} (no scout got there in #{v.tick - look.at} ticks): going on what we know"
-        {%{look | done: v.tick}, [{:scouted, why}]}
+        {%{look | done: v.tick}, [{:scouted, why}], nil}
 
       true ->
-        {look, []}
+        {look, [], nil}
     end
   end
 
-  defp settle_look(look, _v, _memory), do: {look, []}
+  defp settle_look(look, _v, _memory, _stand_in), do: {look, [], nil}
+
+  # A look that counted less of a player's army than we have known lately (`army_seen/3`) brings
+  # that count down: to what the look counted, but no lower than `@look_trust` of the old count.
+  # The 49 that died at our towers were still "known" 150 ticks on, with scouts counting 9, then 3.
+  defp lower_count(army_seen, nil, _v), do: army_seen
+
+  defp lower_count(army_seen, {owner, counted}, v) do
+    case Map.get(army_seen, owner) do
+      {most, _at} when counted < most -> Map.put(army_seen, owner, {max(counted, @look_trust * most), v.tick})
+      _ -> army_seen
+    end
+  end
+
+  # With no Scout alive and nothing left to mine (`nothing_to_mine/2`), the idle
+  # worker with the lowest id stands in for them: it goes to look at a target before a wave
+  # (`Swarm.UnitBrain`). Nil otherwise.
+  defp stand_in(v) do
+    if v.no_ore != false and View.units_of(v, "Scout") == [] do
+      v |> View.units_of("Worker") |> Enum.filter(&(&1["activity"] in ["Idle", "Moving"])) |> Enum.min_by(& &1["id"], fn -> nil end)
+    end
+  end
 
   defp looking?(look, owner), do: look != nil and look.owner == owner and look.done == nil
   defp fresh?(look, owner, v), do: look != nil and look.owner == owner and look.done != nil and v.tick - look.done <= @look_fresh
@@ -1757,7 +1963,8 @@ defmodule Swarm.Brain do
   # Then, with towers by the target (`@siege_clear`), the Trebuchets shell them from outside their
   # reach while the rest holds at the staging point (`sieging`, the tick it began): attack-moving
   # in, a Trebuchet fires at the nearest unit and the soldiers die under the towers it was built
-  # for. Everyone goes in once those towers are down, the Trebuchets are gone, or `@siege_ticks` on.
+  # for. Everyone goes in once those towers are down, the Trebuchets are gone, or no tower has
+  # fallen for `@siege_idle` ticks.
   defp release(v, %{released: false} = wave, next_wave, target) do
     siege = Enum.filter(v.my_units, &(&1["type"] == "Trebuchet" and &1["id"] in wave.members))
     there? = Enum.all?(siege, &(View.dist(View.pos(&1), wave.staging) <= @staged_radius))
@@ -1776,17 +1983,21 @@ defmodule Swarm.Brain do
         {wave, next_wave, []}
 
       since ->
+        # {towers standing, the tick one last fell (or the shelling began)}.
+        {standing, fell_at} = Map.get(wave, :siege_mark, {towers, since})
+        {standing, fell_at} = if towers < standing, do: {towers, v.tick}, else: {standing, fell_at}
+
         done =
           cond do
             siege == [] -> "its trebuchets are gone"
             towers == 0 -> "the towers by #{fmt(target)} are down"
-            v.tick - since >= @siege_ticks -> "#{towers} tower(s) still up after #{@siege_ticks} ticks"
+            v.tick - fell_at >= @siege_idle -> "no tower down in #{@siege_idle} ticks, #{towers} still up"
             true -> nil
           end
 
         if done,
           do: {%{wave | released: true}, next_wave, [{:wave_released, "wave #{wave.id}: #{done}, going in"}]},
-          else: {wave, next_wave, []}
+          else: {Map.put(wave, :siege_mark, {standing, fell_at}), next_wave, []}
     end
   end
 
@@ -2115,6 +2326,14 @@ defmodule Swarm.Brain do
       {owner, cc, _farm} when v.tick >= v.max_ticks - @spare_until ->
         why = "#{v.max_ticks - v.tick} ticks left: player #{owner}'s last Command Center comes down"
         {nil, [{:spare_lifted, why}], kill(memory, owner, cc)}
+
+      # It is spared so we can go on mining. With the map mined out for certain
+      # (`nothing_to_mine/2`), or with them down to it (`farm`: nobody left to keep our workers
+      # from the ore), us banking nothing all the same and our workers having looked everywhere for
+      # more (`ore_search/3`), there is nothing to wait for: 70 workers stood idle for 220 ticks by
+      # a base we could have finished.
+      {owner, cc, farm} when v.no_ore == :mined_out or (v.no_ore == :nowhere and farm) ->
+        {nil, [{:spare_lifted, "nothing left to mine: player #{owner}'s last Command Center comes down"}], kill(memory, owner, cc)}
 
       {owner, cc, farm} ->
         alive = if wave, do: Enum.filter(v.my_units, &(&1["id"] in wave.members)), else: []
@@ -2579,6 +2798,9 @@ defmodule Swarm.Brain do
   end
 
   # The usual number, and more while there is ore for them (`@ore_per_worker`).
+  # None with nothing left to mine (`View.no_ore`, see `nothing_to_mine/2`): the ore goes to the army.
+  defp target_workers(%View{no_ore: no_ore}) when no_ore != false, do: 0
+
   defp target_workers(v) do
     usual = if big?(v), do: @big_target_workers, else: @target_workers
     v |> minable_ore() |> div(@ore_per_worker) |> min(@max_workers) |> max(usual)
@@ -2950,7 +3172,7 @@ defmodule Swarm.Brain do
 
   # Down to a few workers: workers come before anything else, out of the reserve too.
   defp rebuild_workers(acc, v, reserve) do
-    if length(View.units_of(v, "Worker")) < @rebuild_workers,
+    if length(View.units_of(v, "Worker")) < @rebuild_workers and target_workers(v) > 0,
       do: with_reserve(acc, reserve, &train_workers(&1, v)),
       else: acc
   end

@@ -522,8 +522,10 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    target, the Trebuchets then shell them while the rest keeps holding: each attacks the known
    tower nearest it by name (attack-moving, the game fires a Trebuchet at the nearest unit, and at
    a building only with no unit in reach), which walks it to 7 tiles off, outside the tower's 5;
-   one in the fog it walks toward until someone sees it. Everyone goes in once those towers are
-   down, the Trebuchets are gone, or after 200 ticks. Trebuchets step
+   one in the fog it walks to a tile it sees the tower from itself (6 off one way, no more than 3
+   the other: inside its round sight of 7, outside every known tower's reach), exactly that tile.
+   Everyone goes in once those towers are down, the Trebuchets are gone, or no tower has fallen
+   for 90 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
    **The opening:** the depot by the home ore is the first thing built, at tick 0, by three
@@ -557,6 +559,22 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    now: a wave doesn't leave on "0 known" after a scout looked at the wrong spot, and home only
    goes out to help where it can take that whole count. While it is more than all our fighters,
    nobody escorts an outpost (until it is under 0.8 of ours): the army keeps together at home.
+   A scout's look that counts less brings the count down, to no less than half of it (a scout sees
+   one spot).
+   **Nothing left to mine** (from tick 300), two ways, neither going by what we happen to see.
+   *Mined out*, for certain: the ore the map started with (72,000 with two to four players, 14,100
+   a player on a ring, scaled by our home piles), less what every player has banked (the server
+   reports it for all), is under 2% of it. That count only errs one way: ore mined and never
+   banked (lost over a storage cap, or with the worker carrying it) still counts as left, up to a
+   sixth of the map in the games on record. So also *stalled*: we have banked nothing for 100
+   ticks with 5 workers or more and none mining. Stalled, we go and find the ore: up to 4 idle
+   workers walk each to its own place we haven't looked at (where the mirrored map says there is
+   ore we haven't seen, and a grid over the map 12 apart; only where we may go: clear of every
+   living enemy's base and towers), until we bank again or there is nowhere left to look. Ore
+   found is mined, and gets its depot, as ever. Either way no more workers are trained until we
+   bank again, and with no Scout alive the idle worker with the lowest id does the look before a
+   wave. The last opponent's Command Center isn't spared once the map is mined out, or once we are
+   stalled with them down to it and our workers have looked everywhere and found none.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
    point (18 for the first in a big game; 10, before the tower square, for an early strike on a
    neighbor within 30 tiles that a scout has just looked at and that we outmatch 2 to 1), and never with fewer than 12 (15 in a big game),

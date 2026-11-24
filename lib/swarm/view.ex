@@ -61,7 +61,15 @@ defmodule Swarm.View do
     # Where our Command Centers that are bases of their own stand (set by `Swarm.Brain.see/2`):
     # built by a field to mine it, a drop-off like the main one, with their own workers and towers.
     # Any other second Command Center is a hidden backup (`backups/1`).
-    bases: []
+    bases: [],
+    # Ore banked so far (the `economy` score the server reports for everyone): by us, and by all
+    # players together, eliminated ones too.
+    my_mined: 0,
+    mined_all: 0,
+    # Nothing left for us to mine (set by `Swarm.Brain.plan/3`, see `nothing_to_mine/2` there):
+    # `:mined_out` (the map, for certain), `:stalled` (we aren't getting any: workers go looking),
+    # `:nowhere` (stalled, and they have looked everywhere we may go) or false.
+    no_ore: false
   ]
 
   @type t :: %__MODULE__{}
@@ -100,6 +108,8 @@ defmodule Swarm.View do
       players: length(state["players"]),
       map_height: state["mapHeight"],
       max_ticks: state["maxTicks"] || 1800,
+      my_mined: mine |> Enum.map(&(get_in(&1, ["score", "economy"]) || 0)) |> Enum.max(fn -> 0 end),
+      mined_all: Enum.sum_by(state["players"], &(get_in(&1, ["score", "economy"]) || 0)),
       my_score: mine |> Enum.map(score) |> Enum.max(fn -> 0 end),
       # The best opponent's: that is who we have to beat on time.
       enemy_score: others |> Enum.map(score) |> Enum.max(fn -> 0 end),
