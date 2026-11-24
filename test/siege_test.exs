@@ -7,7 +7,7 @@ defmodule Swarm.SiegeTest do
   import Swarm.Test.GameState
   alias Swarm.{Brain, UnitBrain, View}
 
-  defp plan(opts, memory \\ Brain.new_memory()),
+  defp plan(opts, memory),
     do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
 
   defp decide(unit, v, strategy), do: elem(UnitBrain.decide(unit["id"], v, strategy), 0)
