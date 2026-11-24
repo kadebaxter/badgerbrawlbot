@@ -316,6 +316,10 @@ otherwise. No wave leaves meanwhile. It ends 40 ticks after the base was last ov
 | Guard | Stand at the post (behind the front tower, else the rally point) |
 | Attacker | Wait at the rally point |
 
+The fight's estimate plays the fight out with our upgrades, and takes theirs to be the same: an
+opponent's research is hidden from us (only spectators see it), and taken to have none they came
+out far weaker than they were (24 against 25 was +0.52, "go in", where it was -0.34).
+
 Every strength comparison (launching, recalling, strikes, sorties, the serum, home's defense) uses
 one measure, `Swarm.Roles.strength/2`, so they always agree: a unit is worth its cost in Soldiers
 (a full Soldier is 990, an Archer 1.25 Soldiers, a Trebuchet 3.5), less as it is hurt. HP × damage

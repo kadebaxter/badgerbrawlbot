@@ -1122,7 +1122,12 @@ defmodule Swarm.Roles do
   defp advantage(v, g, ours, ours_towers, their_towers) do
     weapons = 2 * Enum.count(v.upgrades, &(&1 in ["Weapons1", "Weapons2"]))
     armor = Enum.count(v.upgrades, &(&1 in ["Armor1", "Armor2", "Armor3"]))
-    their_armor = if enemy_tech_lab?(v), do: 1, else: 0
+    # Their research is hidden from us: they are taken to have what we have, in weapons and in
+    # armor (one armor at least once we have seen a TechLab of theirs). Taken to have no weapons
+    # upgrade and one armor at most, 24 of ours against 25 with Weapons2 and Armor2 came out +0.52
+    # ("go in") where it was -0.34, and 40 against 50 late +0.52 where it was -0.56.
+    their_weapons = weapons
+    their_armor = max(armor, if(enemy_tech_lab?(v), do: 1, else: 0))
 
     starts = Enum.map(ours, fn {o, d} -> {o, min(d, g.reach + 2)} end)
     sep = starts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> g.reach + 2 end)
@@ -1139,8 +1144,8 @@ defmodule Swarm.Roles do
     their_side =
       Enum.map(g.members, fn e ->
         closing = if range(e) == 1, do: 2, else: 1
-        fighter(e, ceil(max(0, sep - range(e)) / closing), 0, their_armor, nil)
-      end) ++ Enum.map(their_towers, &fighter(&1, max(0, sep - range(&1)), 0, 0, nil))
+        fighter(e, ceil(max(0, sep - range(e)) / closing), their_weapons, their_armor, nil)
+      end) ++ Enum.map(their_towers, &fighter(&1, max(0, sep - range(&1)), their_weapons, 0, nil))
 
     Swarm.Fight.advantage(our_side, their_side)
   end

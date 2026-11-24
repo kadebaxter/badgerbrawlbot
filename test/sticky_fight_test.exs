@@ -36,6 +36,20 @@ defmodule Swarm.StickyFightTest do
     assert Roles.call(group(0.2, 0.1, false)) == :go
   end
 
+  test "their research is hidden: the estimate takes them to have the weapons and armor we have" do
+    ours = for i <- 1..10, do: unit(200 + i, "Soldier", 12, 12)
+    theirs = for i <- 1..10, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+    estimate = fn upgrades ->
+      v = %{View.new(state(units: ours ++ theirs)) | upgrades: upgrades}
+      Roles.groups(v, nil).groups |> Map.values() |> hd() |> Map.fetch!(:all)
+    end
+
+    # Ten against ten is even with no research on either side, and stays even with ours done:
+    # they will have done theirs. (It came out well ahead, and we went into fights we then lost.)
+    assert_in_delta estimate.([]), 0.0, 0.01
+    assert_in_delta estimate.(["Weapons1", "Weapons2", "Armor1", "Armor2", "Armor3"]), 0.0, 0.01
+  end
+
   test "a fight we were staying out of is gathered for again only once we are clearly ahead" do
     out = fn all -> Map.put(group(all, -0.5, false), :was_out, true) end
     # The swings of the fight in the middle, 37 against 72: +0.14, +0.09, -0.29, +0.11, +0.28.
