@@ -525,6 +525,14 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    down, the Trebuchets are gone, or after 200 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
+   **Upgrades:** every tier of Weapons (units and towers), Armor (units) and Fortify (buildings,
+   towers too), Weapons and Armor 1 and 2 before the second Harvesting; a second TechLab at 25
+   workers, ahead of the rest of the build order, so two are researched at a time.
+   **Their army as last counted:** the most we have known of a player's army in the last 150
+   ticks (less what we kill of it) counts wherever their strength is weighed, whatever is in sight
+   now: a wave doesn't leave on "0 known" after a scout looked at the wrong spot, and home only
+   goes out to help where it can take that whole count. While it is more than all our fighters,
+   nobody escorts an outpost (until it is under 0.8 of ours): the army keeps together at home.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
    point (18 for the first in a big game; 10, before the tower square, for an early strike on a
    neighbor within 30 tiles that a scout has just looked at and that we outmatch 2 to 1), and never with fewer than 12 (15 in a big game),

@@ -80,3 +80,99 @@ defmodule Swarm.TurnaroundTest do
     end
   end
 end
+
+defmodule Swarm.RecentCountTest do
+  @moduledoc """
+  The most we have known of an opponent's army lately counts, whatever is in sight now: for
+  launching a wave, for going out to help, and for keeping the army together (no escorts) while
+  theirs is the bigger one. And a second TechLab, so the upgrades get done.
+  """
+  use ExUnit.Case, async: true
+  import Swarm.Test.GameState
+  alias Swarm.{Brain, Roles, View}
+
+  defp plan(opts, memory),
+    do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
+
+  defp army(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 40, 40, owner: 1))
+
+  describe "their army as last counted" do
+    test "a wave doesn't leave against an army seen a while ago and out of sight now" do
+      # 22 soldiers: 15 attackers (14850). Twenty of theirs seen at tick 100.
+      {_, _, memory} = plan([units: soldiers(22) ++ army(20), tick: 100], Brain.new_memory())
+      assert {20 * 990.0, 100} == memory.army_seen[1]
+
+      # A scout stands where they were and sees nobody: forgotten as units, not as a count.
+      scout = unit(300, "Scout", 40, 40)
+      {strategy, _, memory} = plan([units: [scout | soldiers(22)], tick: 140], memory)
+      assert memory.enemies == %{}
+      assert strategy.wave == nil
+      assert Brain.enemy_strength(View.new(state(units: soldiers(22))), memory, 1) == 20 * 990.0
+
+      # 150 ticks after the count, it no longer holds.
+      {_, _, memory} = plan([units: [scout | soldiers(22)], tick: 251], memory)
+      assert Brain.enemy_strength(View.new(state(units: soldiers(22))), memory, 1) == 0
+    end
+
+    test "what we kill of it comes off the count" do
+      {_, _, memory} = plan([units: soldiers(22) ++ army(20), tick: 100], Brain.new_memory())
+      killed = for i <- 1..15, do: %{"tick" => 101, "kind" => "UnitKilled", "entityId" => 900 + i}
+      v = View.new(Map.put(state(units: soldiers(22) ++ Enum.drop(army(20), 15), tick: 101), "events", killed))
+      {_, _, memory} = Brain.plan(v, memory, terrain())
+      assert elem(memory.army_seen[1], 0) == 5 * 990.0
+    end
+
+    test "home doesn't go out to two raiders with forty counted behind them" do
+      miners = for i <- 1..4, do: unit(100 + i, "Worker", 25, 7, activity: "Gathering")
+      pair = for i <- 1..2, do: unit(900 + i, "Soldier", 27, 7, owner: 1)
+      {%{help: {27, 7}}, _, _} = plan([units: miners ++ pair ++ soldiers(10)], Brain.new_memory())
+
+      memory = %{Brain.new_memory() | army_seen: %{1 => {40 * 990.0, 80}}}
+      assert {%{help: nil}, _, _} = plan([units: miners ++ pair ++ soldiers(10)], memory)
+    end
+  end
+
+  describe "keeping together" do
+    # An outpost at (30, 30) with miners, and three of our fighters by it.
+    @outpost building(20, "ResourceDepot", 30, 30)
+    defp miners, do: for(i <- 1..4, do: unit(100 + i, "Worker", 31, 31, activity: "Gathering"))
+    defp ours, do: for(i <- 1..3, do: unit(250 + i, "Soldier", 31, 30)) ++ soldiers(12)
+
+    test "with their army the bigger one, nobody escorts an outpost; with ours bigger again, they do" do
+      v = View.new(state(units: miners() ++ ours(), buildings: [@outpost]))
+      assert {:escort, {30, 30}} == Roles.role(v, nil, 251)
+      refute match?({:escort, _}, Roles.role(%{v | together: true}, nil, 251))
+
+      # Twenty of theirs known against our fifteen: together, and the view the units get says so.
+      memory = %{Brain.new_memory() | army_seen: %{1 => {20 * 990.0, 90}}}
+      {_, _, memory} = plan([units: miners() ++ ours(), buildings: [@outpost]], memory)
+      assert memory.together
+      assert {%View{together: true}, _} = Brain.see(View.new(state(units: ours())), memory)
+
+      # Down to thirteen (under 0.8 of ours, not just under it): back to normal.
+      {_, _, memory} = plan([units: miners() ++ ours(), buildings: [@outpost]], %{memory | army_seen: %{1 => {13 * 990.0, 90}}})
+      assert memory.together
+      {_, _, memory} = plan([units: miners() ++ ours(), buildings: [@outpost]], %{memory | army_seen: %{1 => {11 * 990.0, 90}}})
+      refute memory.together
+    end
+  end
+
+  describe "upgrades" do
+    test "a second TechLab at 25 workers, once the first is up, so two are researched at a time" do
+      built = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(6, "TechLab", 7, 12)]
+      builds = fn commands -> for %{"type" => "Build", "buildingType" => t} <- commands, do: t end
+
+      {_, commands, _} = plan([units: workers(24) ++ soldiers(8), buildings: built, ore: 400], Brain.new_memory())
+      refute "TechLab" in builds.(commands)
+      {_, commands, _} = plan([units: workers(25) ++ soldiers(8), buildings: built, ore: 400], Brain.new_memory())
+      assert builds.(commands) == ["TechLab"]
+
+      labs = [building(9, "TechLab", 3, 12) | built]
+      state = put_in(state(units: workers(25) ++ soldiers(8), buildings: labs, ore: 1000), ["you", "upgrades"], ["Harvesting1"])
+      state = put_in(state, ["you", "researching"], [%{"upgrade" => "Weapons1"}])
+      lab_busy = for b <- state["buildings"], do: if(b["id"] == 6, do: Map.put(b, "research", "Weapons1"), else: b)
+      {_, commands, _} = Brain.plan(View.new(%{state | "buildings" => lab_busy}), looked(nil), terrain())
+      assert [%{"buildingId" => 9, "upgrade" => "Armor1"}] = for(%{"type" => "Research"} = c <- commands, do: c)
+    end
+  end
+end

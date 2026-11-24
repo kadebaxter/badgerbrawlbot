@@ -37,7 +37,7 @@ defmodule Swarm.MediumGameTest do
   test "four towers in all, and the backup Command Center only at twenty fighters" do
     done =
       [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(6, "Barracks", 12, 3),
-       building(7, "TechLab", 7, 12), building(8, "Barracks", 3, 3)] ++
+       building(7, "TechLab", 7, 12), building(9, "TechLab", 3, 12), building(8, "Barracks", 3, 3)] ++
         for({id, x, y} <- [{10, 12, 12}, {11, 12, 4}, {12, 4, 12}, {13, 14, 8}], do: building(id, "GuardTower", x, y))
 
     refute "GuardTower" in builds(elem(plan(units: workers(30) ++ soldiers(19), buildings: done, ore: 1000), 1))

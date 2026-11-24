@@ -54,7 +54,10 @@ defmodule Swarm.View do
     enemy_survival: %{},
     # Spots away from home where building keeps failing (set by `Swarm.Brain.plan/3`): nothing
     # goes up by one for a while.
-    blocked: []
+    blocked: [],
+    # Their army is bigger than ours (set by `Swarm.Brain.see/2`): no escorts at the outposts, the
+    # army keeps together at home.
+    together: false
   ]
 
   @type t :: %__MODULE__{}

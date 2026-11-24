@@ -1386,7 +1386,8 @@ defmodule Swarm.BrainTest do
     end
 
     test "SiegeEngineering is skipped in the research order until then" do
-      done = ["Harvesting1", "Weapons1", "Armor1"]
+      # The fighting upgrades come first: both tiers of Weapons and Armor before it.
+      done = ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Armor2"]
       v = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], done)) end
       research = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
 

@@ -160,7 +160,9 @@ defmodule Swarm.CallOffTest do
       big = for i <- 1..16, do: unit(940 + i, "Soldier", 27, 7, owner: 1)
       {%{help: nil}, _, memory} = plan([units: edge_miners() ++ big ++ soldiers(10), tick: 101], memory)
 
-      # The big raid moves off, two raiders again: still no help until 20 ticks have passed.
+      # The big raid moves off, two raiders again: still no help until 20 ticks have passed. (The
+      # sixteen forgotten: what we knew of their army lately is its own rule, tested below.)
+      memory = %{memory | army_seen: %{}}
       assert {%{help: nil}, _, _} = plan([units: edge_miners() ++ pair ++ soldiers(10), tick: 110], memory)
       assert {%{help: {27, 7}}, _, _} = plan([units: edge_miners() ++ pair ++ soldiers(10), tick: 122], memory)
     end
@@ -174,6 +176,8 @@ defmodule Swarm.CallOffTest do
     {%{help: nil}, _, memory} = plan([units: miners ++ raid.(16) ++ home.(10), tick: 101], memory)
 
     # 25 ticks on, past the rest: nine raiders there against home's ten (even, not 1.3x): not yet.
+    # (The sixteen forgotten: what we knew of their army lately is its own rule.)
+    memory = %{memory | army_seen: %{}}
     assert {%{help: nil}, _, _} = plan([units: miners ++ raid.(9) ++ home.(10), tick: 126], memory)
     # Seven (10 is over 1.3 x 7): it goes.
     assert {%{help: {27, 7}}, _, _} = plan([units: miners ++ raid.(7) ++ home.(10), tick: 126], memory)

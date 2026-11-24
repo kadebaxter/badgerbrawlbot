@@ -132,7 +132,8 @@ defmodule Swarm.Roles do
 
   def home_roles(%View{} = v, wave) do
     newest_first = &Enum.sort_by(&1, fn u -> u["id"] end, :desc)
-    manned = Enum.filter(outposts(v), &(miners(v, &1) > 0))
+    # Keeping together (`View.together`: their army is the bigger one), nobody escorts an outpost.
+    manned = if v.together, do: [], else: Enum.filter(outposts(v), &(miners(v, &1) > 0))
 
     # 1. Fighters already at an outpost (with miners) stay, up to a full group.
     {groups, pool} =

@@ -159,6 +159,15 @@ defmodule Swarm.Brain do
   @vision %{"Scout" => 8, "Archer" => 6, "Trebuchet" => 7, "GuardTower" => 7}
   @default_vision 6
   @all_in_ticks 300
+  # The most we have known of a player's army counts for this long (`army_seen/3`), whatever we
+  # can see of it now: a scout that looks at the wrong spot sees no army, not that there is none.
+  # A wave of 16 left against "9,900 known" 37 ticks after a scout had counted 22,770.
+  @army_memory 150
+  # Their army (that count) bigger than all our fighters: the army stays in one group at home
+  # (`together`): no escorts at the outposts. Until theirs is under `@together_until` of ours
+  # again (the same measure, with a margin, so it doesn't flip). And home only goes out to help
+  # where it can take that whole count, not just the raiders in sight (`may_help?/4`).
+  @together_until 0.8
   # After a wave is called home to defend, no new one leaves for this long: raiders often come
   # back, and a wave that leaves the moment they step out of sight gets called home again.
   @calm_ticks 20
@@ -241,6 +250,9 @@ defmodule Swarm.Brain do
   # more in its queue, none going up), up to `@max_barracks`: 60 workers earned more than four
   # Barracks could spend, and 2,500 ore sat in the bank while the base fell.
   @max_barracks 10
+  # A second TechLab once we have this many workers and the first is up, ahead of the rest of the
+  # build order: two upgrades at a time.
+  @second_lab_workers 25
   @siege_after_fighters 25
   @trebuchets 2
   # More against a wall of towers: one for every `@towers_per_trebuchet` finished towers of the
@@ -367,7 +379,11 @@ defmodule Swarm.Brain do
 
   # Each tier comes after the one before it (`@research_needs`), and a TechLab researches one at a
   # time. Fortify: +1 armor for every finished building (towers, outposts) each tier.
-  @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2", "Fortify1", "Armor3", "Fortify2"]
+  # Every tier of Weapons (units and towers), Armor (units) and Fortify (buildings, towers too),
+  # the fighting ones before the second Harvesting. One TechLab got through five of these in a
+  # 630-tick game (each takes 30 to 80 ticks, one at a time): a second one (`@second_lab_workers`)
+  # researches alongside it.
+  @research ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Armor2", "SiegeEngineering", "Harvesting2", "Fortify1", "Armor3", "Fortify2"]
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -426,6 +442,10 @@ defmodule Swarm.Brain do
       lost: %{},
       # spot => the ticks building failed there lately (see `@site_strikes`).
       strikes: %{},
+      # player => {the most of their army we have known lately (`Roles.strength/1`), the tick}.
+      army_seen: %{},
+      # Whether the army keeps together at home (`@together_until`).
+      together: false,
       # Opponents' starts we have seen with no Command Center of theirs on them (see `last_cc/2`).
       empty_starts: [],
       # The spots blocked last tick, for logging each once.
@@ -502,7 +522,7 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies)}
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
     {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
@@ -691,6 +711,12 @@ defmodule Swarm.Brain do
         View.dist(spot, memory.help_off_pos) <= @help_follow
 
     {ours, theirs} = Roles.help_odds(v, s.wave, spot)
+    # To commit, what is there counts for at least the most we have known lately of the army of
+    # whoever is there (`army_seen/3`): two raiders in sight had home walk out into the forty
+    # behind them. Staying is still judged on what is there (`help/3`), so it doesn't flip.
+    owners = for e <- v.enemy_units, e["type"] != "Worker", View.dist(View.pos(e), spot) <= @help_follow, uniq: true, do: e["owner"]
+    lately = owners |> Enum.map(&elem(Map.get(memory.army_seen, &1, {0, 0}), 0)) |> Enum.max(fn -> 0 end)
+    theirs = max(theirs, lately)
     if near_last?, do: ours >= @help_give_up * theirs, else: ours >= theirs
   end
 
@@ -754,7 +780,11 @@ defmodule Swarm.Brain do
   def plan(%View{} = v, memory, terrain) do
     # Memory from an older version may have other keys: keep only the ones we know.
     memory = new_memory() |> Map.merge(memory || %{}) |> Map.take(Map.keys(new_memory()))
+    before = memory.enemies
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
+    memory = %{memory | army_seen: army_seen(memory, v, before)}
+    memory = %{memory | together: together?(memory, v)}
+    v = %{v | together: memory.together}
     {strategy, memory} = strategy(v, memory)
     # With the last opponent down to the Command Center we spare, their side of the map is ours
     # too: its ore is looked for and taken like ours. Their start counted as enemy ground left 30
@@ -1046,6 +1076,40 @@ defmodule Swarm.Brain do
   end
 
   defp fmt({x, y}), do: "(#{x},#{y})"
+
+  # The most we have known of each player's army in the last `@army_memory` ticks: what we
+  # remember of it now if that is more (or the old count is too old), else the old count less what
+  # we have killed of it since (so beating a raid still opens the counterattack).
+  defp army_seen(memory, v, before) do
+    killed = MapSet.new(for e <- v.events, e["kind"] == "UnitKilled", do: e["entityId"])
+    dead = before |> Map.values() |> Enum.filter(&MapSet.member?(killed, &1["id"])) |> Enum.group_by(& &1["owner"])
+    now = memory.enemies |> Map.values() |> Enum.group_by(& &1["owner"])
+
+    for owner <- Enum.uniq(Map.keys(now) ++ Map.keys(memory.army_seen)), owner != nil, into: %{} do
+      known = Roles.strength(Map.get(now, owner, []))
+
+      case Map.get(memory.army_seen, owner) do
+        {most, at} when v.tick - at <= @army_memory ->
+          most = max(most - Roles.strength(Map.get(dead, owner, [])), 0)
+          if known >= most, do: {owner, {known, v.tick}}, else: {owner, {most, at}}
+
+        _ ->
+          {owner, {known, v.tick}}
+      end
+    end
+  end
+
+  # The strongest army we have known lately against all our fighters (`@together_until`).
+  defp together?(memory, v) do
+    theirs = memory.army_seen |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> 0 end)
+    ours = Roles.strength(Roles.fighters(v))
+
+    cond do
+      theirs > ours -> true
+      theirs < @together_until * ours -> false
+      true -> memory.together
+    end
+  end
 
   # Enemy fighters as last seen. Ones we killed, haven't seen in a while, or should see where we
   # last saw them and don't (they died out of our sight, or moved on) are dropped.
@@ -1699,11 +1763,12 @@ defmodule Swarm.Brain do
 
     overrun? = if near?, do: raid > home + Roles.strength(out), else: raid >= @serum_margin * home
 
-    # And it has to turn the fight: the serum doubles our Soldiers, so with theirs counted twice
-    # (the ones at home, and the wave's if it is near) we must at least match the raid. Taken
+    # And it has to turn the fight: the serum doubles our Soldiers, so they alone, counted twice
+    # (the ones at home, and the wave's if it is near), must at least match the raid. Taken
     # against 76 Soldiers with 30 fighters, it was spent on a fight nobody went into.
+    # Soldiers only: Archers keep to the fight's estimate and stay out of one it calls lost.
     soldiers = Enum.filter(Roles.home(v, wave) ++ if(near?, do: out, else: []), &(&1["type"] == "Soldier"))
-    turns_it? = home + if(near?, do: Roles.strength(out), else: 0) + Roles.strength(soldiers) >= raid
+    turns_it? = 2 * Roles.strength(soldiers) >= raid
 
     raiders != [] and raid >= @serum_raid and overrun? and turns_it? and length(View.units_of(v, "Soldier")) >= @serum_soldiers
   end
@@ -1749,10 +1814,10 @@ defmodule Swarm.Brain do
 
     siege = if length(siege) >= @siege_group, do: siege, else: []
 
-    scouted? = memory.enemies != %{} or v.enemy_buildings != [] or v.remembered != []
-
     ours = Roles.strength(staged ++ siege)
     theirs = enemy_strength(v, memory, owner)
+    # An army counted lately (`army_seen/3`) is something known, in sight now or not.
+    scouted? = memory.enemies != %{} or v.enemy_buildings != [] or v.remembered != [] or theirs > 0
 
     early? = early_strike?(v, memory, owner, staged, ours, theirs)
     want = if early?, do: @early_min, else: wave_min(v, memory)
@@ -1856,8 +1921,9 @@ defmodule Swarm.Brain do
   defp counter?(_memory, _v), do: false
 
   @doc """
-  The army we remember of player `owner` (all opponents if nil), plus their finished towers we
-  know of. An enemy remembered without an owner counts against everyone.
+  The army we remember of player `owner` (all opponents if nil), or the most we have known of it
+  in the last #{@army_memory} ticks if that is more, plus their finished towers we know of. An enemy
+  remembered without an owner counts against everyone.
   """
   def enemy_strength(%View{} = v, memory, owner \\ nil) do
     theirs? = &(owner == nil or &1["owner"] in [owner, nil])
@@ -1867,8 +1933,16 @@ defmodule Swarm.Brain do
       |> Enum.filter(&(&1["type"] == "GuardTower" and &1["completed"] != false and theirs?.(&1)))
       |> Enum.uniq_by(& &1["id"])
 
-    army = memory.enemies |> Map.values() |> Enum.filter(theirs?)
-    Roles.strength(army) + Roles.strength(towers)
+    army = memory.enemies |> Map.values() |> Enum.filter(theirs?) |> Roles.strength()
+
+    # Not less than the most we have known of their army lately (`army_seen/3`).
+    lately =
+      case owner && Map.get(Map.get(memory, :army_seen, %{}), owner) do
+        {most, _at} -> most
+        _ -> 0
+      end
+
+    max(army, lately) + Roles.strength(towers)
   end
 
   # Who we go after: the opponent the wave out is after, while they are still in; otherwise the
@@ -2304,13 +2378,14 @@ defmodule Swarm.Brain do
     case depot do
       nil ->
         # In a big game a co-op's tower comes before the rest: outposts are where raiders go.
-        if big?(v),
-          do:
-            outpost_tower(v, terrain) || from_build_order(v, terrain, avoid(v, mem)) ||
-              siege_workshop(v, terrain) || extra(v, terrain),
-          else:
-            from_build_order(v, terrain, avoid(v, mem)) || outpost_tower(v, terrain) ||
-              siege_workshop(v, terrain) || extra(v, terrain)
+        second_lab(v, terrain) ||
+          if big?(v),
+            do:
+              outpost_tower(v, terrain) || from_build_order(v, terrain, avoid(v, mem)) ||
+                siege_workshop(v, terrain) || extra(v, terrain),
+            else:
+              from_build_order(v, terrain, avoid(v, mem)) || outpost_tower(v, terrain) ||
+                siege_workshop(v, terrain) || extra(v, terrain)
 
       site ->
         {"ResourceDepot", site}
@@ -2582,6 +2657,15 @@ defmodule Swarm.Brain do
           site && {type, site}
         end
       end) || more_barracks(v, terrain)
+    end
+  end
+
+  defp second_lab(v, terrain) do
+    labs = View.buildings_of(v, "TechLab")
+
+    if length(labs) == 1 and hd(labs)["completed"] and length(View.units_of(v, "Worker")) >= @second_lab_workers do
+      site = site(terrain, v, :base)
+      site && {"TechLab", site}
     end
   end
 
