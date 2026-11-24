@@ -206,6 +206,14 @@ defmodule Swarm.UnitBrain do
   # Every worker, whatever it is doing: one walking to its ore (it used to skip this, and 56 of 59
   # workers we lost in one game walked straight into the archers that killed them) or building
   # (a site under fire waits; the builder doesn't stand there and die) runs just like a miner.
+  #
+  # Except inside our base with the fight there lost (`stand?/3`): then there is no cover to run
+  # to, and it hits back (a worker does 4 damage a tick) for as long as that holds.
+  defp worker(%{"activity" => "Attacking"} = unit, v, %{rally: rally} = s) when rally != nil do
+    enemy = worker_danger(unit, v, s)
+    if enemy && stand?(v, s, enemy), do: :no_change, else: worker(%{unit | "activity" => "Idle"}, v, s)
+  end
+
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning", "Moving", "Building"] and rally != nil do
     case worker_danger(unit, v, s) do
@@ -216,6 +224,7 @@ defmodule Swarm.UnitBrain do
         {x, y} = spot = refuge(unit, v, enemy) || rally
 
         cond do
+          stand?(v, s, enemy) -> command(unit, {:attack, enemy["id"]})
           # Already there: it may mine ore safe from here (`unsafe?/2`), or stays.
           View.dist(View.pos(unit), spot) <= 1 -> worker(unit, v)
           # Already on its way there.
@@ -274,6 +283,17 @@ defmodule Swarm.UnitBrain do
       Roles.sheltered?(v, here) -> nil
       Map.get(s, :fall_back, false) or not winning?(v, s, closest) -> closest
       true -> nil
+    end
+  end
+
+  # Whether a worker stands and fights `enemy`: its group is inside our base (`Roles.inside?/2`) and
+  # would beat us (`Roles.away?/1`). Our fighters are all fighting it by then, and losing; the
+  # workers die there either way. 45 fighters and five towers fell with some forty workers
+  # running between them.
+  defp stand?(v, s, enemy) do
+    case Roles.group_of_enemy(v, s.wave, enemy["id"]) do
+      nil -> false
+      g -> Roles.inside?(v, g) and Roles.away?(g)
     end
   end
 

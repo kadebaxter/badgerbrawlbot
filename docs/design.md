@@ -732,7 +732,9 @@ came a tick after 37 Soldiers were at our towers. With one opponent left, the fl
 **Inside our base, everyone fights.** A raid that would beat us is stayed out of only while it
 is outside the base. Once one of them is within reach of a finished Guard Tower of ours (its range
 plus one) or within 3 tiles of our Command Center, there is nowhere left to stay out of its way:
-every fighter attacks, whatever the estimate (`Roles.inside?/2`).
+every fighter attacks, whatever the estimate (`Roles.inside?/2`). A worker in danger from that raid
+hits back too (4 damage a tick) instead of running for cover that isn't there, for as long as the
+raid is inside the base and the fight is lost.
 
 **Help past the towers.** With two or more opponents in, home only commits to help at an outpost
 or by our workers if it can also take the army, by the scoreboard, of whoever is raiding there,
