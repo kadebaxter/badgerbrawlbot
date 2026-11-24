@@ -95,6 +95,9 @@ defmodule Swarm.ReadsTest do
       View.new(%{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ [other.(1, 56, 7), other.(2, 7, 56)]})
     end
 
+    # The same with five players in the game: the limits outside three- and four-player games.
+    defp five(opts, alive \\ 1500), do: %{three(opts, alive) | players: 5}
+
     # Whether the first thing the ore goes to is a fighter.
     defp army_first?([%{"type" => "Produce", "unitType" => type} | _]), do: type in ["Soldier", "Archer"]
     defp army_first?(_commands), do: false
@@ -148,15 +151,34 @@ defmodule Swarm.ReadsTest do
       opts = fn n, fighters -> [units: workers(20) ++ soldiers(fighters), buildings: Enum.map(0..(n - 1), training), ore: 1500] end
 
       # Three Barracks, twelve of ours against thirty by their score: a fourth.
-      {_, commands, _} = Brain.plan(three(opts.(3, 12), 4000), Brain.new_memory(), terrain())
+      {_, commands, _} = Brain.plan(five(opts.(3, 12), 4000), Brain.new_memory(), terrain())
       assert "Barracks" in built.(commands)
 
       # Six of them: no seventh on that.
-      {_, commands, _} = Brain.plan(three(opts.(6, 12), 4000), Brain.new_memory(), terrain())
+      {_, commands, _} = Brain.plan(five(opts.(6, 12), 4000), Brain.new_memory(), terrain())
       refute "Barracks" in built.(commands)
 
       # Thirty of ours: no longer catching up, and the usual rule has it.
-      {_, commands, _} = Brain.plan(three(opts.(3, 30), 4000), Brain.new_memory(), terrain())
+      {_, commands, _} = Brain.plan(five(opts.(3, 30), 4000), Brain.new_memory(), terrain())
+      refute "Barracks" in built.(commands)
+    end
+
+    test "with three or four players, up to ten Barracks and eighty Soldiers' worth" do
+      training = fn i -> building(10 + i, "Barracks", 11 + 3 * div(i, 4), 3 + 3 * rem(i, 4)) |> Map.put("production", [%{"unitType" => "Soldier"}]) end
+      built = fn commands -> for %{"type" => "Build", "buildingType" => type} <- commands, do: type end
+      # Us and the two of `three/2`, and with a fourth player: 9,000 ore alive each, eighty Soldiers' worth.
+      four = fn opts ->
+        v = three(opts, 9000)
+        %{v | players: 4}
+      end
+
+      opts = fn n, fighters -> [units: workers(20) ++ soldiers(fighters), buildings: Enum.map(0..(n - 1), training), ore: 1500] end
+
+      # Seven Barracks and fifty fighters: still catching up, an eighth.
+      {_, commands, _} = Brain.plan(four.(opts.(7, 50)), Brain.new_memory(), terrain())
+      assert "Barracks" in built.(commands)
+      # Ten: no more on that.
+      {_, commands, _} = Brain.plan(four.(opts.(10, 50)), Brain.new_memory(), terrain())
       refute "Barracks" in built.(commands)
     end
 
@@ -165,7 +187,7 @@ defmodule Swarm.ReadsTest do
       soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])
       floods = %{Brain.new_memory() | reads: %{1 => @flood, 2 => @flood}, army_seen: %{1 => {90 * soldier, 240}, 2 => {80 * soldier, 240}}}
       opts = [units: workers(20) ++ soldiers(40), buildings: barracks ++ [building(20, "TechLab", 10, 12)], ore: 450]
-      {_, commands, _} = Brain.plan(three(opts), looked(floods, 1, 250), terrain())
+      {_, commands, _} = Brain.plan(five(opts), looked(floods, 1, 250), terrain())
       refute army_first?(commands)
     end
   end

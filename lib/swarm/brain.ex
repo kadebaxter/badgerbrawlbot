@@ -271,7 +271,9 @@ defmodule Swarm.Brain do
   # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
   @flood_floor 40
   @help_chase 3
-  @help_cover 8
+  # An opponent with this much ore or less alive outside the buildings we know of has no army.
+  @no_army_ore 1500
+  @help_cover 5
   @score_floor_from 120
 
   # Built once the build order is done and only while rich, one at a time, in this order.
@@ -298,6 +300,9 @@ defmodule Swarm.Brain do
   @max_barracks 14
   @barracks_bank 750
   @catch_up_barracks 6
+  # With three or four players: more of them, and a higher floor (`flood_floor/2`).
+  @contested_barracks 10
+  @contested_floor 80
   # Base Command Centers (`base_cc/3`): a Command Center of our own by a field worth one, to mine
   # it, train workers there too and have somewhere else to stand. One more at each of these worker
   # counts (the second at 16, and so on), once the first Barracks is up. A field is worth one with
@@ -872,12 +877,15 @@ defmodule Swarm.Brain do
     end
   end
 
-  # With two or more opponents in, the army only goes out to where there is something to hold: a
-  # finished Guard Tower or a Command Center of ours within `@help_cover`. A depot with no tower is
-  # the price of a Soldier; 38 went out for one in the middle, met 40, and led them home.
+  # With two or more opponents in, the army only goes out to fight under our towers: a spot within
+  # reach of a finished Guard Tower of ours (its range plus one), or within `@help_cover` of a
+  # Command Center of ours. A depot with no tower is the price of a Soldier; 38 went out for one in
+  # the middle, met 40, and led them home. And six tiles from a tower is the open: 32 fighters and
+  # 62 workers died at a field between two of our bases, in reach of neither's towers.
   defp worth_help?(v, spot) do
     map_size(v.start_owner) < 2 or
-      Enum.any?(Roles.our_towers(v) ++ View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
+      Enum.any?(Roles.our_towers(v), &(View.dist(View.pos(&1), spot) <= Roles.range(&1) + 1)) or
+      Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
   end
 
   # Whether home may commit to help at `spot`: it can take what is there (`Roles.can_take?/3`);
@@ -1508,6 +1516,26 @@ defmodule Swarm.Brain do
 
     workers = @costs["Worker"] * length(View.units_of(v, "Worker"))
     max(alive - buildings - workers, 0) * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
+  end
+
+  # The ore value of everything player `owner` has alive (the scoreboard) less their finished
+  # buildings we know of: their army, their workers and the buildings we haven't seen, together.
+  # Nil for a player the scoreboard has nothing for.
+  defp unknown_alive(v, owner) do
+    case Map.fetch(v.enemy_survival, owner) do
+      # (A score of nothing alive is no score: a player still in has a Command Center.)
+      {:ok, alive} when alive > 0 ->
+        known =
+          (v.enemy_buildings ++ v.remembered)
+          |> Enum.filter(&(&1["owner"] == owner and &1["completed"] != false))
+          |> Enum.uniq_by(& &1["id"])
+          |> Enum.sum_by(&Map.get(@costs, &1["type"], 0))
+
+        max(alive - known, 0)
+
+      _ ->
+        nil
+    end
   end
 
   # A look that counted less of a player's army than we have known lately (`army_seen/3`) brings
@@ -2344,8 +2372,24 @@ defmodule Swarm.Brain do
     # An army counted lately (`army_seen/3`) is something known, in sight now or not.
     scouted? = memory.enemies != %{} or v.enemy_buildings != [] or v.remembered != [] or theirs > 0
 
+    # All they have alive that we don't know to be a building is worth next to nothing
+    # (`unknown_alive/2`): they have no army, whatever we counted of it last and with or without a
+    # look. One sat for a hundred ticks with 3 Soldiers, 5 workers, three Command Centers and
+    # seven Barracks while no wave of ours left: both scouts sent to look died at its towers
+    # having seen no fighter, which was no look.
+    alive = owner && unknown_alive(v, owner)
+    no_army? = alive != nil and alive <= @no_army_ore
+    left = if no_army?, do: alive * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
+    theirs = if no_army?, do: theirs - enemy_army(memory, owner) + min(enemy_army(memory, owner), left), else: theirs
+
     early? = early_strike?(v, memory, owner, staged, ours, theirs)
-    want = if early?, do: @early_min, else: wave_min(v, memory)
+
+    want =
+      cond do
+        early? -> @early_min
+        no_army? -> min(@open_min, wave_min(v, memory))
+        true -> wave_min(v, memory)
+      end
 
     # A siege party (`@siege_idle`): too few attackers for a wave, Trebuchets at the rally point,
     # and those attackers `@margin` times their army as we know it (towers aside).
@@ -2404,12 +2448,12 @@ defmodule Swarm.Brain do
         (towers = if(early? or party? or open != nil, do: nil, else: towers_short(v, memory))) != nil ->
           "#{waiting}, building the tower square first (#{towers} of #{@big_towers})"
 
-        not counter? and looking?(memory.look, owner) ->
+        not counter? and not no_army? and looking?(memory.look, owner) ->
           "#{waiting}, scout looking at player #{owner} (#{v.tick - memory.look.at} ticks)"
 
         # No wave without a look at them that got there, lately (`fresh?/3`). A counterattack right
         # after a beaten raid and a siege party against no army go without.
-        not counter? and not party? and not fresh?(memory.look, owner, v) ->
+        not counter? and not party? and not no_army? and not fresh?(memory.look, owner, v) ->
           "#{waiting}, no look at player #{owner} lately: none leaves on an old count"
 
         not ready? ->
@@ -3562,7 +3606,10 @@ defmodule Swarm.Brain do
         do: neighbors |> Enum.map(fn {_start, slot} -> army_by_score(v, slot) end) |> Enum.max(fn -> 0 end),
         else: 0
 
-    min(max(by_reads, by_score), @flood_floor * Roles.strength([%{"type" => "Soldier"}]))
+    # With three or four players the floor goes on up to `@contested_floor`: on the winner's income
+    # we trained 113 fighters to its 175, with the floor met at 40 and six Barracks from tick 345.
+    cap = if contested?(v), do: @contested_floor, else: @flood_floor
+    min(max(by_reads, by_score), cap * Roles.strength([%{"type" => "Soldier"}]))
   end
 
   defp from_build_order(v, terrain, avoid) do
@@ -3672,7 +3719,7 @@ defmodule Swarm.Brain do
   defp more_barracks({cmds, %{barracks_order: nil} = mem, ore} = acc, v, terrain, catch_up?) do
     barracks = View.buildings_of(v, "Barracks")
     {done, going_up} = Enum.split_with(barracks, & &1["completed"])
-    catch_up? = catch_up? and length(barracks) < @catch_up_barracks
+    catch_up? = catch_up? and length(barracks) < if(contested?(v), do: @contested_barracks, else: @catch_up_barracks)
     busy? = Enum.all?(done, &(length(&1["production"] || []) >= if(catch_up?, do: 1, else: 2)))
     cost = @costs["Barracks"]
     # One going up at a time, and one more for every `@barracks_bank` ore in the bank: with seven

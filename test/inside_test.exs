@@ -45,4 +45,26 @@ defmodule Swarm.InsideTest do
       assert {%{"type" => "Move"}, _} = UnitBrain.decide(101, v, @defend)
     end
   end
+
+  describe "with three or four players, ore is mined under cover" do
+    # A field by a depot of ours with no tower, and one by a depot with a tower over it.
+    @bare %{"id" => 30, "x" => 22, "y" => 20, "remaining" => 1000}
+    @covered %{"id" => 40, "x" => 30, "y" => 8, "remaining" => 1000}
+    @miner unit(101, "Worker", 21, 20, activity: "Gathering", target_id: 30)
+
+    defp field_state(players) do
+      s = state(units: [@miner], deposits: [@bare, @covered],
+                buildings: [building(60, "ResourceDepot", 20, 20), building(61, "ResourceDepot", 30, 10), building(62, "GuardTower", 31, 9)])
+      third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
+      View.new(if(players == 3, do: %{s | "players" => s["players"] ++ [third]}, else: s))
+    end
+
+    test "a miner at a field no tower of ours reaches goes to one under cover" do
+      assert {%{"type" => "Gather", "targetId" => 40}, _} = UnitBrain.decide(101, field_state(3), @defend)
+    end
+
+    test "with one opponent it mines on where it is" do
+      assert {:no_change, _} = UnitBrain.decide(101, field_state(2), @defend)
+    end
+  end
 end

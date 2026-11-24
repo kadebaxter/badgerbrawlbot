@@ -63,6 +63,21 @@ defmodule Swarm.EndgameTest do
       assert {%{wave: nil}, _, %{look: %{done: 130, failed: true}}} = Brain.plan(View.new(state(units: soldiers(22), tick: 130)), memory, terrain())
     end
 
+    test "an opponent the scoreboard shows has no army is gone for without a look, whatever we last counted" do
+      # No scout, 28 of theirs counted ten ticks ago; their Command Center is all we know of them.
+      soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])
+      memory = %{Brain.new_memory() | army_seen: %{1 => {28 * soldier, 120}}}
+      scored = fn alive ->
+        state(units: soldiers(22), buildings: [building(900, "CommandCenter", 56, 56, 1)], tick: 130)
+        |> Map.update!("players", fn [me, them] -> [me, Map.put(them, "score", %{"survival" => alive, "total" => alive})] end)
+      end
+
+      # 1,000 ore alive, 400 of it that Command Center: nothing left to be an army.
+      assert {%{wave: %{members: [_ | _]}}, _, _} = Brain.plan(View.new(scored.(1000)), memory, terrain())
+      # 5,000 alive: they may well have one, and no wave leaves without a look.
+      assert {%{wave: nil}, _, _} = Brain.plan(View.new(scored.(5000)), memory, terrain())
+    end
+
     test "passing short of their base without seeing it is no look yet" do
       # Thirteen tiles from their start at (56, 56): where the old spot, seven short of it, counted.
       memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}}

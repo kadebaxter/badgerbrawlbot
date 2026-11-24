@@ -91,6 +91,7 @@ defmodule Swarm.UnitBrain do
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
+  @cc_cover 6
   # An enemy fighter that could hit a worker with this many steps sends it to cover, whatever else.
   @worker_margin 2
   # A scout runs from an enemy (or tower) once it is within the enemy's range plus this. The
@@ -376,6 +377,7 @@ defmodule Swarm.UnitBrain do
         [] -> View.soon_near_deposits(v)
         near -> near
       end
+      |> under_cover(v)
 
     current = Enum.find(v.deposits, &(&1["id"] == unit["targetId"]))
     mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
@@ -416,6 +418,29 @@ defmodule Swarm.UnitBrain do
   end
 
   defp worker(unit, v), do: take_cover(unit, v)
+
+  # With three or four players, ore is mined under cover only: our home ore, ore within reach of
+  # a finished Guard Tower of ours (its range plus one), or within `@cc_cover` of a Command Center
+  # of ours. A field between two of our bases, ten tiles from either and on the way between the
+  # other two players, had 62 workers on it when 81 Soldiers came through. With no ore under cover
+  # at all, any of `deposits` as before: an idle economy is worse.
+  defp under_cover(deposits, %View{players: players} = v) when players in 3..4 do
+    home = View.home_deposits(v)
+    towers = Roles.our_towers(v)
+    ccs = View.buildings_of(v, "CommandCenter")
+
+    covered =
+      Enum.filter(deposits, fn d ->
+        pos = View.pos(d)
+
+        d in home or Enum.any?(towers, &(View.dist(View.pos(&1), pos) <= Roles.range(&1) + 1)) or
+          Enum.any?(ccs, &(View.dist(View.pos(&1), pos) <= @cc_cover))
+      end)
+
+    if covered == [], do: deposits, else: covered
+  end
+
+  defp under_cover(deposits, _v), do: deposits
 
   # The ore by the base Command Center this worker is at (within `@base_home` of it), of `near`.
   defp base_deposits(unit, v, near) do

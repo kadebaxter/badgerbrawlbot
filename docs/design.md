@@ -748,8 +748,18 @@ else is bought; its towers are ordered while it is still going up, ahead of the 
 no depot goes to a field in the middle before the base, since a field with a depot by it gets no
 base and a depot has no towers.
 
-**Nothing to hold, no help.** With two or more opponents in, the army only goes out to help where
-a finished Guard Tower or a Command Center of ours stands within 8 tiles.
+**Help under our towers only.** With two or more opponents in, the army only goes out to help
+at a spot within reach of a finished Guard Tower of ours (its range plus one) or within 5 tiles of
+a Command Center of ours.
+
+**Three or four players: mining under cover, more Barracks.** Workers mine our home ore, ore
+within reach of a finished Guard Tower of ours, or within 6 tiles of a Command Center of ours;
+with none of that left, any ore as before. The army floor goes up to 80 Soldiers' worth there and
+the Barracks that come first to ten.
+
+**No army by the scoreboard.** An opponent whose score shows 1,500 ore or less alive outside the
+buildings we know of has no army: a wave of eight or more may leave at them without a look, and
+their army counts for that much at most, whatever we counted last.
 
 **Help past the towers.** With two or more opponents in, home only commits to help at an outpost
 or by our workers if it can also take the army, by the scoreboard, of whoever is raiding there,

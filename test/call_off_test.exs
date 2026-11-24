@@ -119,6 +119,9 @@ defmodule Swarm.CallOffTest do
       # A tower of ours by them: it goes.
       tower = building(70, "GuardTower", 24, 9)
       assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(third.(state(units: units, buildings: [tower]))), memory, terrain())
+      # A tower seven tiles off doesn't reach them: that is the open.
+      far = building(70, "GuardTower", 20, 9)
+      assert {%{help: nil}, _, _} = Brain.plan(View.new(third.(state(units: units, buildings: [far]))), memory, terrain())
     end
 
     test "it follows the fight no more than three tiles farther from home than where it committed" do
