@@ -295,9 +295,10 @@ defmodule Swarm.Brain do
   # (`inferred_ore/2`). An eliminated player's start comes first, but only once a scout has seen it
   # clear in the last `@clear_for` ticks; the scout goes back to look every `@recheck` ticks.
   @cc_at_workers [16, 30, 50]
-  # ...and only with an army to hold it: `@base_army` fighters or more, and not while their army
-  # (the most we have known of it lately) is bigger than ours (`together`). Two bases and their
-  # towers were bought with 8 to 14 fighters alive; 23 Soldiers took the first, then the army.
+  # ...and only with an army to hold it: `@base_army` fighters or more. Two bases and their towers
+  # were bought with 8 to 14 fighters alive; 23 Soldiers took the first, then the army. (Not
+  # "only while their army isn't the bigger one": the strongest opponent's always is, early, and
+  # with their army counted by the scoreboard no base went up in a whole game.)
   # Saving for one never holds soldiers back: while we are short of its 400, every Barracks goes
   # on training one at a time, as fast as ever; only the second place in each queue (paid for
   # ahead, no sooner trained) waits for it.
@@ -649,7 +650,7 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in)}
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
     {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
@@ -3068,7 +3069,7 @@ defmodule Swarm.Brain do
     ccs = View.buildings_of(v, "CommandCenter")
 
     with true <- length(ccs) < wanted,
-         true <- length(Roles.fighters(v)) >= @base_army and not v.together,
+         true <- length(Roles.fighters(v)) >= @base_army,
          true <- mem.base_order == nil,
          true <- may_expand?(v, mem),
          true <- Enum.all?(ccs, & &1["completed"]),

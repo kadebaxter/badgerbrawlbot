@@ -71,22 +71,52 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil}, _, _} = plan(units: soldiers(7) ++ juiced)
     end
 
-    test "while it lasts, every Soldier at home goes at the raid, whatever the estimates say; Archers don't" do
-      # Eight raiders in the base, four tiles from our Soldiers at (10, 10); one more of ours far off at the post.
-      raid = for i <- 1..8, do: unit(900 + i, "Soldier", 14, 14, owner: 1)
-      units = soldiers(4) ++ [unit(250, "Soldier", 2, 2), unit(260, "Archer", 10, 10)] ++ raid
+    test "while it lasts our Soldiers hit twice as hard in the estimate: one call, Archers go in with them" do
+      # Eight raiders in the base by five Soldiers and three Archers of ours: not a fight to take, plain.
+      raid = for i <- 1..8, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+      archers = for i <- 1..3, do: unit(260 + i, "Archer", 11, 12)
+      ours = for i <- 1..5, do: unit(200 + i, "Soldier", 12, 12)
       strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
-      v = View.new(state(units: units))
+      v = View.new(state(units: ours ++ archers ++ raid))
+      attacks? = fn id, v, s -> match?({%{"type" => "Attack"}, _}, UnitBrain.decide(id, v, s)) end
 
-      {before, _} = UnitBrain.decide(201, v, strategy)
-      refute match?(%{"type" => "Attack"}, before)
+      # (The Archers shoot what is in their reach either way; the Soldiers would have to walk in.)
+      refute attacks?.(201, v, strategy)
+      assert v |> Swarm.Roles.groups(nil) |> Map.fetch!(:groups) |> Map.values() |> hd() |> Swarm.Roles.call() == :away
 
-      on = Map.put(strategy, :serum_on, true)
-      assert {%{"type" => "Attack", "x" => 14, "y" => 14}, _} = UnitBrain.decide(201, v, on)
-      # The one standing far from the fight too: juiced up at home is the serum wasted.
-      assert {%{"type" => "Attack", "x" => 14, "y" => 14}, _} = UnitBrain.decide(250, v, on)
-      {archer, _} = UnitBrain.decide(260, v, on)
-      refute match?(%{"type" => "Attack", "x" => 14}, archer)
+      # The serum on (the view says so from the tick after it is taken): the same fight is ours,
+      # and the Archers are in it with the Soldiers.
+      on = %{v | serum_on: true}
+      assert on |> Swarm.Roles.groups(nil) |> Map.fetch!(:groups) |> Map.values() |> hd() |> Swarm.Roles.call() == :go
+      assert attacks?.(201, on, Map.put(strategy, :serum_on, true))
+      assert attacks?.(261, on, Map.put(strategy, :serum_on, true))
+    end
+
+    test "the view has our serum on from the tick after it is taken until it wears off" do
+      v = View.new(state(units: soldiers(10), tick: 101))
+      assert {%{serum_on: true}, _} = Brain.see(v, %{Brain.new_memory() | serum: {:until, 130}})
+      assert {%{serum_on: false}, _} = Brain.see(v, %{Brain.new_memory() | serum: {:until, 100}})
+      assert {%{serum_on: false}, _} = Brain.see(v, Brain.new_memory())
+    end
+
+    test "the tick it is taken, a fight we were going into stays on, for Soldiers and Archers alike" do
+      # Twelve raiders: more than five Soldiers and three Archers take on, plain.
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+      archers = for i <- 1..3, do: unit(260 + i, "Archer", 8, 12)
+      ours = for i <- 1..5, do: unit(200 + i, "Soldier", 12, 12)
+      strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
+      was_in = %{View.new(state(units: ours ++ archers ++ raid)) | going_in: MapSet.new([901])}
+      attacks? = fn id, v, s -> match?({%{"type" => "Attack"}, _}, UnitBrain.decide(id, v, s)) end
+
+      # Clearly against us, the sticky call lets go of it...
+      refute attacks?.(201, was_in, strategy)
+      refute attacks?.(261, was_in, strategy)
+      # ...but not on the tick the serum is taken: it isn't in the estimate until the next one.
+      take = Map.put(strategy, :serum, :take)
+      assert attacks?.(201, was_in, take)
+      assert attacks?.(261, was_in, take)
+      # A fight we weren't in isn't started by it.
+      refute attacks?.(261, %{was_in | going_in: MapSet.new()}, take)
     end
   end
 

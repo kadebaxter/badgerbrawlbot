@@ -1119,8 +1119,9 @@ defmodule Swarm.Roles do
     # Their melee come to meet ours.
     meet = if Enum.any?(g.members, &(range(&1) == 1)), do: 1, else: 0
 
+    # Our serum on (`View.serum_on`): every Soldier of ours hits twice as hard, marked yet or not.
     our_side =
-      Enum.map(starts, fn {o, d} -> fighter(o, ceil(max(0, d - range(o)) / (stats(o).speed + meet)), weapons, armor, v.me) end) ++
+      Enum.map(starts, fn {o, d} -> fighter(o, ceil(max(0, d - range(o)) / (stats(o).speed + meet)), weapons, armor, v.me, v.serum_on) end) ++
         Enum.map(ours_towers, &fighter(&1, 0, weapons, 0, v.me))
 
     # Ours walk in at a tile a tick; their melee come to meet them.
@@ -1133,7 +1134,7 @@ defmodule Swarm.Roles do
     Swarm.Fight.advantage(our_side, their_side)
   end
 
-  defp fighter(u, delay, weapons, armor, me) do
+  defp fighter(u, delay, weapons, armor, me, boosted? \\ false) do
     s = stats(u)
 
     order =
@@ -1144,7 +1145,7 @@ defmodule Swarm.Roles do
       end
 
     # On the serum it hits twice as hard (`serum?/1`): the fight is played out with that.
-    damage = (s.damage + weapons) * if(serum?(u), do: 2, else: 1)
+    damage = (s.damage + weapons) * if(serum?(u) or (boosted? and u["type"] == "Soldier"), do: 2, else: 1)
     %{hp: hp(u), armor: s.armor + armor, damage: damage, cooldown: s.cooldown, delay: delay, order: order, value: strength_of(u, me) / max(1, hp(u))}
   end
 

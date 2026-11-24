@@ -390,9 +390,12 @@ when too few Soldiers were left for it to matter), and only when it turns the fi
 alone, counted twice (the serum doubles them), must at least match the raid. A Soldier on the
 serum, theirs or ours (the server marks each, `Swarm.Roles.serum?/1`), counts for two in every
 strength comparison and hits twice as hard in the fight's estimate. Raiders on theirs in our
-base are answered with ours, whatever the odds. And while it lasts, every Soldier at home attack-moves at the nearest raider,
-near the fight or not, whatever the estimates say (`strategy.serum_on`): they don't know it hits
-twice as hard, and juiced up at the rally point is the serum wasted.
+base are answered with ours, whatever the odds. Ours counts from the tick after it is taken,
+before the server has marked anyone (`View.serum_on`, set by `Swarm.Brain.see/2`): every Soldier
+of ours hits twice as hard in the fight's estimate, and the one call that comes out of it is for
+Soldiers and Archers alike. On the tick it is taken, a fight we were going into stays on. (There
+was a rule that sent every Soldier at the raid whatever the estimates said; with the estimate one
+tick behind the serum, 34 Soldiers charged 49 while 19 Archers were called away and never fired.)
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
@@ -561,7 +564,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    left by the main one. Workers: one for every
    150 ore we can get at, up to 80. Home counts as short of ore under 150 for each worker.
    **Base Command Centers:** one more Command Center than we have at 16, 30 and 50 workers
-   (with a Barracks up, 12 fighters or more and their army as last counted not bigger than ours;
+   (with a Barracks up, 12 fighters or more, whatever the size of their army;
    one going up at a time, three builders; it has its own order, so the rest of the building
    carries on while they walk, its 400 held in the bank until they break ground; short of the 400
    every Barracks goes on training one at a time, only the second place in each queue waits), by

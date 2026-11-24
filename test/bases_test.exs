@@ -54,15 +54,16 @@ defmodule Swarm.BasesTest do
       assert strategy.survey == {20, 7}
     end
 
-    test "not without an army to hold it: twelve fighters, and theirs not the bigger one" do
+    test "not without an army to hold it: twelve fighters, theirs the bigger one or not" do
       opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field], ore: 1200]
       assert {_, commands, _} = plan(state([units: [@seeing | workers(16) ++ soldiers(11)]] ++ opts))
       assert ccs(commands) == []
 
-      # Twelve of ours, twenty of theirs counted lately: no base into that.
+      # Twelve of ours, twenty of theirs counted lately: the base goes up all the same. Waiting for
+      # their army to be the smaller one was waiting all game against the strongest opponent.
       outnumbered = %{Brain.new_memory() | army_seen: %{1 => {20 * 990.0, 90}}}
       assert {_, commands, _} = plan(state([units: [@seeing | workers(16) ++ soldiers(12)]] ++ opts), outnumbered)
-      assert ccs(commands) == []
+      assert [_] = ccs(commands)
     end
 
     test "it has its own order: the rest of the building goes on while its builders walk, its 400 held" do
