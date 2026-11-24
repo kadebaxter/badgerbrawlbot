@@ -268,8 +268,6 @@ defmodule Swarm.Brain do
   # `@army_floor_ticks` ticks. Below it, the Barracks train first.
   @army_floor 6
   @army_floor_ticks 100
-  # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
-  @flood_floor 40
   @help_chase 3
   @claim_ticks 120
   # An opponent with this much ore or less alive outside the buildings we know of has no army.
@@ -300,10 +298,6 @@ defmodule Swarm.Brain do
   # 300 ticks, with five Barracks full, 5,258 ore in the bank and 49 Soldiers on their way.
   @max_barracks 14
   @barracks_bank 750
-  @catch_up_barracks 6
-  # With three or four players: more of them, and a higher floor (`flood_floor/2`).
-  @contested_barracks 10
-  @contested_floor 80
   # Base Command Centers (`base_cc/3`): a Command Center of our own by a field worth one, to mine
   # it, train workers there too and have somewhere else to stand. One more at each of these worker
   # counts (the second at 16, and so on), once the first Barracks is up. A field is worth one with
@@ -513,6 +507,7 @@ defmodule Swarm.Brain do
   # stopped at Armor1. On the game's engine, 30 Soldiers with Armor3 beat 30 with Armor1 (both
   # with Weapons2) four times in five, with 7 left.
   @research ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Harvesting2", "Fortify1", "Fortify2"]
+  @research_first ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -1045,6 +1040,7 @@ defmodule Swarm.Brain do
       |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
+      |> research_first(v)
       |> then(&if(claiming?, do: &1 |> found_base(v, terrain) |> hold_for_middle(v, terrain) |> build(v, terrain), else: &1))
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
@@ -3636,14 +3632,13 @@ defmodule Swarm.Brain do
   end
 
   # With two neighbors that read as floods (`Swarm.Reads`), the floor is the bigger army of the
-  # two as we know it, up to `@flood_floor` Soldiers' worth: until ours is that, the Barracks are
+  # two as we know it: until ours is that, the Barracks are
   # fed before anything else is built or researched. Among five of them we had 31 fighters at
   # tick 300 to their 48 to 56 each, on the same workers: the difference had gone into research,
   # depots, a second Tech Lab and a base, and the first raid took the Barracks and the workers.
   #
-  # With two or more opponents still in, the floor is also a neighbor's army going by the
-  # scoreboard (`army_by_score/2`), from tick `@score_floor_from`: no look or read needed, one
-  # such neighbor is enough. The read of a flood came at tick 300, a tick after 37 Soldiers were
+  # The floor is also the biggest army of any opponent still in going by the scoreboard
+  # (`army_by_score/2`), from tick `@score_floor_from`, in every game: no look or read needed. The read of a flood came at tick 300, a tick after 37 Soldiers were
   # at our towers with 25 of ours home.
   # As a strength; 0 otherwise.
   defp flood_floor(v, memory) do
@@ -3652,15 +3647,17 @@ defmodule Swarm.Brain do
     floods = for {_start, slot} <- neighbors, Reads.kind(reads, slot) == :flood, do: enemy_army(memory, slot)
     by_reads = if length(floods) >= 2, do: Enum.max(floods), else: 0
 
+    # Every opponent still in, whatever the number of players: one on one the floor was 10
+    # fighters at tick 400 and everything else came first; our four Barracks trained nothing for
+    # 25 ticks with 500 ore banked, and we had 12 Soldiers to 41.
     by_score =
-      if map_size(v.start_owner) >= 2 and v.tick >= @score_floor_from,
-        do: neighbors |> Enum.map(fn {_start, slot} -> army_by_score(v, slot) end) |> Enum.max(fn -> 0 end),
+      if v.tick >= @score_floor_from,
+        do: v.start_owner |> Map.values() |> Enum.map(&army_by_score(v, &1)) |> Enum.max(fn -> 0 end),
         else: 0
 
-    # With three or four players the floor goes on up to `@contested_floor`: on the winner's income
-    # we trained 113 fighters to its 175, with the floor met at 40 and six Barracks from tick 345.
-    cap = if contested?(v), do: @contested_floor, else: @flood_floor
-    min(max(by_reads, by_score), cap * Roles.strength([%{"type" => "Soldier"}]))
+    # No limit to it: capped at 40 and then 80 Soldiers' worth, we stopped keeping up just when
+    # their army got big.
+    max(by_reads, by_score)
   end
 
   defp from_build_order(v, terrain, avoid) do
@@ -3762,7 +3759,7 @@ defmodule Swarm.Brain do
   # saved up for. By the main Command Center, or by a base one when there is no room left there.
   #
   # Catching up (`catch_up?`: our army under the flood floor, `flood_floor/2`): up to
-  # `@catch_up_barracks` of them come first, right after the fighters and ahead of every other
+  # `@max_barracks` of them come first, right after the fighters and ahead of every other
   # building, base and research, whenever every one we have is training at all, and the ore for
   # the next is kept until it is there. Among five house bots with five or six Barracks each and
   # 100 to 130 Soldiers trained, we had three until tick 273 and five in all, and seven towers,
@@ -3770,7 +3767,7 @@ defmodule Swarm.Brain do
   defp more_barracks({cmds, %{barracks_order: nil} = mem, ore} = acc, v, terrain, catch_up?) do
     barracks = View.buildings_of(v, "Barracks")
     {done, going_up} = Enum.split_with(barracks, & &1["completed"])
-    catch_up? = catch_up? and length(barracks) < if(contested?(v), do: @contested_barracks, else: @catch_up_barracks)
+    catch_up? = catch_up? and length(barracks) < @max_barracks
     busy? = Enum.all?(done, &(length(&1["production"] || []) >= if(catch_up?, do: 1, else: 2)))
     cost = @costs["Barracks"]
     # One going up at a time, and one more for every `@barracks_bank` ore in the bank: with seven
@@ -3870,22 +3867,44 @@ defmodule Swarm.Brain do
   defp train_backup_workers(acc, _v), do: acc
 
   defp research({cmds, mem, ore} = acc, v) do
-    lab = Enum.find(View.buildings_of(v, "TechLab"), &(&1["completed"] and &1["research"] == nil))
+    case next_research(v, @research, cmds) do
+      {lab, upgrade, cost} when ore >= cost -> {[research_cmd(lab, upgrade) | cmds], mem, ore - cost}
+      _ -> acc
+    end
+  end
+
+  # The research our fighters fight with (`@research_first`: Harvesting1, then every Weapons and
+  # Armor) comes ahead of every building, base, worker and fighter, whenever a Tech Lab is free,
+  # and its ore is kept until it is there. One on one, a house bot had Weapons2 and Armor2 at ticks
+  # 385 and 391 and we at 441 and 431, behind two Command Centers and ten towers: 15 of its
+  # Soldiers killed 22 of ours and 12 workers at our base for 9, on an estimate of +0.5.
+  defp research_first({cmds, mem, ore} = acc, v) do
+    case next_research(v, @research_first, cmds) do
+      {lab, upgrade, cost} when ore >= cost -> {[research_cmd(lab, upgrade) | cmds], mem, ore - cost}
+      {_lab, _upgrade, cost} -> {cmds, mem, ore - cost}
+      nil -> acc
+    end
+  end
+
+  # A free Tech Lab, the first of `list` we may start in it and what it costs, or nil.
+  defp next_research(v, list, cmds) do
+    # What this tick has started already (`research_first/2` runs ahead of `research/2`).
+    started = for %{"type" => "Research"} = c <- cmds, do: {c["buildingId"], c["upgrade"]}
+    {labs, upgrades} = Enum.unzip(started)
+    lab = Enum.find(View.buildings_of(v, "TechLab"), &(&1["completed"] and &1["research"] == nil and &1["id"] not in labs))
+
     upgrade =
-      Enum.find(@research, fn u ->
+      Enum.find(list, fn u ->
         needs = @research_needs[u]
 
-        u not in v.upgrades and u not in v.researching and (needs == nil or needs in v.upgrades) and
+        u not in v.upgrades and u not in v.researching and u not in upgrades and (needs == nil or needs in v.upgrades) and
           (u != "SiegeEngineering" or siege_time?(v))
       end)
 
-    if lab && upgrade && ore >= @costs[upgrade] do
-      cmd = %{"type" => "Research", "buildingId" => lab["id"], "upgrade" => upgrade}
-      {[cmd | cmds], mem, ore - @costs[upgrade]}
-    else
-      acc
-    end
+    if lab && upgrade, do: {lab, upgrade, @costs[upgrade]}
   end
+
+  defp research_cmd(lab, upgrade), do: %{"type" => "Research", "buildingId" => lab["id"], "upgrade" => upgrade}
 
   # `@scouts` scouts while anyone is left to watch, counting ones being trained. From
   # the first free Barracks, one a tick.

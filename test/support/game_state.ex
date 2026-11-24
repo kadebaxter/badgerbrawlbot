@@ -22,6 +22,9 @@ defmodule Swarm.Test.GameState do
 
   def cc, do: building(1, "CommandCenter", 7, 7)
 
+  @doc "These buildings with every Tech Lab busy researching: research comes first for the ore otherwise."
+  def labs_busy(buildings), do: for(b <- buildings, do: if(b["type"] == "TechLab", do: Map.put(b, "research", %{"upgrade" => "Fortify1"}), else: b))
+
   def building(id, type, x, y, owner \\ 0) do
     %{"id" => id, "owner" => owner, "type" => type, "x" => x, "y" => y, "completed" => true, "production" => []}
   end

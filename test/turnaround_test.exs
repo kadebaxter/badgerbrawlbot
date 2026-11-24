@@ -144,10 +144,10 @@ defmodule Swarm.TurnaroundTest do
     defp builds(commands), do: for(%{"type" => "Build", "buildingType" => t} <- commands, do: t)
 
     test "a fifth when all four are busy and we can pay for it, rich or not" do
-      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 1500)
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: labs_busy(busy(@built)), ore: 1500)
       assert builds(commands) == ["Barracks"]
 
-      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 300)
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: labs_busy(busy(@built)), ore: 300)
       assert builds(commands) == ["Barracks"]
     end
 

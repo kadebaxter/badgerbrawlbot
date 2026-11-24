@@ -608,6 +608,11 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    SiegeEngineering, the second Harvesting and Fortify (all the Armor before SiegeEngineering:
    the house bots end with Armor3); a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.
+   **The first six come first:** Harvesting1 and every Weapons and Armor are started the tick a
+   Tech Lab is free, ahead of every building, base, worker and fighter, and their ore is kept
+   until it is there (`research_first/2`). One on one, a house bot had Weapons2 and Armor2 at
+   ticks 385 and 391 and we at 441 and 431, behind two Command Centers and ten towers: 15 of its
+   Soldiers killed 22 of ours and 12 workers at our base for 9, on an estimate of +0.5.
    **No wave without a look:** an ordinary wave only leaves within 60 ticks of a scout having got
    to its look at the target itself (within 3 tiles of it, or a Scout with it well inside its
    sight): their base, not a spot short of it. A scout that dies on the way in, or doesn't get
@@ -721,18 +726,20 @@ remember by it: no waiting for a full wave or for our own towers, and their towe
 count. The base gone (or towered up), it goes on to the next open one, and comes home when there
 is none. Everything that calls a wave home still does.
 
-**Floods on two sides.** With two neighbors that read as floods, the army floor (below which the
-Barracks train before anything is built or researched) is the bigger army of the two as we know
-it, up to 40 Soldiers' worth. What the Barracks can't take still goes to the rest.
-
-**Three or more players.** With two or more opponents still in, from tick 120 the floor is also
-the bigger of our neighbors' armies going by the scoreboard (the same count a look falls back on;
-too high if anything, as their buildings we haven't seen count as army), up to the same 40
-Soldiers' worth. No look or read is needed and one such neighbor is enough: the read of a flood
-came a tick after 37 Soldiers were at our towers. With one opponent left, the floor is as it was.
+**Never a smaller army than theirs.** The army floor (below which the Barracks train before
+anything is built, any base is founded and any worker is trained; only the first research comes
+ahead of it) is, in every game and from tick 120, the biggest army of any opponent still in going
+by the scoreboard (the same count a look falls back on; too high if anything, as their buildings
+we haven't seen count as army), with no limit to it. No look or read is needed. With two
+neighbors that read as floods it is also the bigger of the two as we know it. What the Barracks
+can't take still goes to the rest.
 While our army is under that floor, another Barracks comes right after the fighters and ahead
-of every other building, base and research, as soon as every Barracks we have is training at all,
-up to six; the ore for the next one is kept until it is there.
+of every other building and base, as soon as every Barracks we have is training at all, up to
+the fourteen there may be; the ore for the next one is kept until it is there.
+It used to hold only with two opponents or more, and up to 40 Soldiers and six Barracks (80 and
+ten with three or four players): we stopped keeping up just when their army got big. One on one the floor was then 10 fighters at tick 400, and everything else
+came first: our four Barracks trained nothing for 25 ticks with 500 ore in the bank, and we had 12
+Soldiers to their 41.
 
 **Inside our base, everyone fights.** A raid that would beat us is stayed out of only while it
 is outside the base. Once one of them is within reach of a finished Guard Tower of ours (its range
@@ -741,12 +748,13 @@ every fighter attacks, whatever the estimate (`Roles.inside?/2`). Workers never 
 does 4 damage a tick with 40 health against a Soldier's 9 and 110. They hit back for a while, and
 75 of them died in fifteen ticks at one base, and the match with them.
 
-**Three or four players: a lost base is left for the next one.** When that raid is inside a base
+**A lost base is left for the next one.** When that raid is inside a base
 of ours that isn't the main one, and another finished Command Center of ours is more than 10
 tiles from it, the fighters there and the workers go to the nearest such one (`Roles.retreat/2`,
 one place for both) and the fight is taken there, with the rest of ours and its towers. Nobody
 leaves the main base. 69 Soldiers stood by the towers of the base in the middle against 91 while
-14 more waited at home: 83 Soldiers and 75 workers died for 36 of theirs.
+14 more waited at home: 83 Soldiers and 75 workers died for 36 of theirs. One on one the same
+happened at a base of ours in the middle (61 workers and 38 Soldiers), so it goes for every game.
 
 **Three or four players: the middle first.** Whoever holds the middle with towers mines the
 most ore on the map and keeps the others off it. While we have no base Command Center there and a

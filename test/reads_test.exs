@@ -102,10 +102,10 @@ defmodule Swarm.ReadsTest do
     defp army_first?([%{"type" => "Produce", "unitType" => type} | _]), do: type in ["Soldier", "Archer"]
     defp army_first?(_commands), do: false
 
-    test "the Barracks are fed before anything is built or researched, until our army is the bigger of theirs" do
+    test "the Barracks are fed before anything is built, until our army is the bigger of theirs" do
       barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
       lab = building(20, "TechLab", 10, 12)
-      opts = [units: workers(20) ++ soldiers(12), buildings: barracks ++ [lab], ore: 450]
+      opts = [units: workers(20) ++ soldiers(12), buildings: labs_busy(barracks ++ [lab]), ore: 450]
       soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])
       floods = %{Brain.new_memory() | reads: %{1 => @flood, 2 => @flood}, army_seen: %{1 => {30 * soldier, 240}, 2 => {22 * soldier, 240}}}
 
@@ -123,9 +123,9 @@ defmodule Swarm.ReadsTest do
       refute army_first?(commands)
     end
 
-    test "with two or more opponents in, a neighbor's army by the scoreboard is a floor too: no read needed" do
+    test "an opponent's army by the scoreboard is a floor too, in every game: no read needed" do
       barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
-      opts = [units: workers(20) ++ soldiers(12), buildings: barracks ++ [building(20, "TechLab", 10, 12)], ore: 450]
+      opts = [units: workers(20) ++ soldiers(12), buildings: labs_busy(barracks ++ [building(20, "TechLab", 10, 12)]), ore: 450]
 
       # 4,000 ore alive each, less our 20 workers' worth: thirty Soldiers against our twelve.
       {_, commands, _} = Brain.plan(three(opts, 4000), Brain.new_memory(), terrain())
@@ -135,18 +135,18 @@ defmodule Swarm.ReadsTest do
       {_, commands, _} = Brain.plan(three(Keyword.put(opts, :units, workers(20) ++ soldiers(30)), 4000), Brain.new_memory(), terrain())
       refute army_first?(commands)
 
-      # Not before tick 120, and not with one opponent left: that game is as it was.
+      # Not before tick 120. With one opponent just the same: thirty Soldiers' worth against our twelve.
       {_, commands, _} = Brain.plan(three([tick: 100] ++ opts, 4000), Brain.new_memory(), terrain())
       refute army_first?(commands)
       s = state([tick: 250] ++ opts)
       one = %{s | "players" => Enum.map(s["players"], &if(&1["slot"] == 0, do: &1, else: Map.put(&1, "score", %{"survival" => 4000, "economy" => 3000, "total" => 7000})))}
       {_, commands, _} = Brain.plan(View.new(one), Brain.new_memory(), terrain())
-      refute army_first?(commands)
+      assert army_first?(commands)
     end
 
-    test "catching up, another Barracks as soon as every one is training at all, up to six of them" do
+    test "catching up, another Barracks as soon as every one is training at all, up to the fourteen there may be" do
       # Each with one in its queue: not "busy" enough for another by the usual rule (two queued).
-      training = fn i -> building(10 + i, "Barracks", 11, 3 + 3 * i) |> Map.put("production", [%{"unitType" => "Soldier"}]) end
+      training = fn i -> building(10 + i, "Barracks", 11 + 3 * div(i, 4), 3 + 3 * rem(i, 4)) |> Map.put("production", [%{"unitType" => "Soldier"}]) end
       built = fn commands -> for %{"type" => "Build", "buildingType" => type} <- commands, do: type end
       opts = fn n, fighters -> [units: workers(20) ++ soldiers(fighters), buildings: Enum.map(0..(n - 1), training), ore: 1500] end
 
@@ -154,31 +154,12 @@ defmodule Swarm.ReadsTest do
       {_, commands, _} = Brain.plan(five(opts.(3, 12), 4000), Brain.new_memory(), terrain())
       assert "Barracks" in built.(commands)
 
-      # Six of them: no seventh on that.
-      {_, commands, _} = Brain.plan(five(opts.(6, 12), 4000), Brain.new_memory(), terrain())
+      # Fourteen of them: the most there are.
+      {_, commands, _} = Brain.plan(five(opts.(14, 12), 4000), Brain.new_memory(), terrain())
       refute "Barracks" in built.(commands)
 
       # Thirty of ours: no longer catching up, and the usual rule has it.
       {_, commands, _} = Brain.plan(five(opts.(3, 30), 4000), Brain.new_memory(), terrain())
-      refute "Barracks" in built.(commands)
-    end
-
-    test "with three or four players, up to ten Barracks and eighty Soldiers' worth" do
-      training = fn i -> building(10 + i, "Barracks", 11 + 3 * div(i, 4), 3 + 3 * rem(i, 4)) |> Map.put("production", [%{"unitType" => "Soldier"}]) end
-      built = fn commands -> for %{"type" => "Build", "buildingType" => type} <- commands, do: type end
-      # Us and the two of `three/2`, and with a fourth player: 9,000 ore alive each, eighty Soldiers' worth.
-      four = fn opts ->
-        v = three(opts, 9000)
-        %{v | players: 4}
-      end
-
-      opts = fn n, fighters -> [units: workers(20) ++ soldiers(fighters), buildings: Enum.map(0..(n - 1), training), ore: 1500] end
-
-      # Seven Barracks and fifty fighters: still catching up, an eighth.
-      {_, commands, _} = Brain.plan(four.(opts.(7, 50)), Brain.new_memory(), terrain())
-      assert "Barracks" in built.(commands)
-      # Ten: no more on that.
-      {_, commands, _} = Brain.plan(four.(opts.(10, 50)), Brain.new_memory(), terrain())
       refute "Barracks" in built.(commands)
     end
 
@@ -191,12 +172,15 @@ defmodule Swarm.ReadsTest do
       assert {%{wave: %{members: [_ | _]}}, _, _} = Brain.plan(three([units: soldiers(22)], 600), memory, terrain())
     end
 
-    test "never more than forty Soldiers' worth, whatever we count of them" do
+    test "as high as their army is: no limit to it" do
       barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
       soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])
       floods = %{Brain.new_memory() | reads: %{1 => @flood, 2 => @flood}, army_seen: %{1 => {90 * soldier, 240}, 2 => {80 * soldier, 240}}}
-      opts = [units: workers(20) ++ soldiers(40), buildings: barracks ++ [building(20, "TechLab", 10, 12)], ore: 450]
-      {_, commands, _} = Brain.plan(five(opts), looked(floods, 1, 250), terrain())
+      opts = fn n -> [units: workers(20) ++ soldiers(n), buildings: labs_busy(barracks ++ [building(20, "TechLab", 10, 12)]), ore: 450] end
+      # Ninety and eighty of them known: eighty-nine of ours is short, ninety is not.
+      {_, commands, _} = Brain.plan(five(opts.(89)), looked(floods, 1, 250), terrain())
+      assert army_first?(commands)
+      {_, commands, _} = Brain.plan(five(opts.(90)), looked(floods, 1, 250), terrain())
       refute army_first?(commands)
     end
   end

@@ -98,7 +98,7 @@ defmodule Swarm.BrainTest do
       building(7, "Barracks", 12, 3), building(8, "Barracks", 1, 10)
     ]
 
-    {_, [cmd | _], _} = plan(units: workers(21) ++ soldiers(8), buildings: buildings, ore: 225)
+    {_, [cmd | _], _} = plan(units: workers(21) ++ soldiers(8), buildings: labs_busy(buildings), ore: 225)
     assert %{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {56, 56}) < View.dist({7, 7}, {56, 56})
   end
@@ -835,7 +835,7 @@ defmodule Swarm.BrainTest do
       tower = building(5, "GuardTower", 12, 12)
       lab = building(6, "TechLab", 7, 12)
       # Soldiers enough to be past the army floor, which would take the ore first.
-      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: [barracks, depot, tower, lab, backup_cc()], ore: 260)
+      {_, commands, _} = plan(units: workers(15) ++ soldiers(10), buildings: labs_busy([barracks, depot, tower, lab, backup_cc()]), ore: 260)
       assert %{"unitIds" => [_]} = build_of(commands, "Barracks")
     end
   end
@@ -1336,7 +1336,7 @@ defmodule Swarm.BrainTest do
       {_, commands, _} = big_plan(units: workers(20) ++ soldiers(14), buildings: [backup_cc() | early], ore: 300)
       assert builds.(commands) == []
 
-      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(15), buildings: [backup_cc() | early], ore: 300)
+      {_, commands, _} = big_plan(units: workers(20) ++ soldiers(15), buildings: labs_busy([backup_cc() | early]), ore: 300)
       assert builds.(commands) == ["GuardTower"]
     end
 
@@ -1466,7 +1466,7 @@ defmodule Swarm.BrainTest do
 
     test "an outpost gets a Guard Tower, without needing to be rich" do
       outpost = building(20, "ResourceDepot", 30, 30)
-      {_, commands, _} = plan(units: workers(20) ++ soldiers(30), buildings: [outpost | built()], ore: 300)
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(30), buildings: labs_busy([outpost | built()]), ore: 300)
       assert [%{"buildingType" => "GuardTower", "x" => x, "y" => y}] = builds(commands)
       assert View.dist({x, y}, {30, 30}) in 2..4
 

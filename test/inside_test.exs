@@ -1,5 +1,5 @@
 defmodule Swarm.InsideTest do
-  @moduledoc "A raid that would beat us is stayed out of only while it is outside our base; inside it the fighters fight (or go to our next base, with three or four players), and workers run."
+  @moduledoc "A raid that would beat us is stayed out of only while it is outside our base; inside it the fighters fight (or go to our next base, when there is one behind it), and workers run."
   use ExUnit.Case, async: true
   import Swarm.Test.GameState
   alias Swarm.{Roles, UnitBrain, View}
@@ -81,7 +81,7 @@ defmodule Swarm.InsideTest do
       %{View.new(if(players == 3, do: %{s | "players" => s["players"] ++ [third]}, else: s)) | bases: [{28, 40}, {20, 20}]}
     end
 
-    test "with three players the fighters there go to the nearest other base, and so do the workers" do
+    test "the fighters there go to the nearest other base, and so do the workers" do
       v = lost(3)
       g = Roles.group_for(v, nil, hd(View.units_of(v, "Soldier")))
       assert Roles.away?(g) and Roles.inside?(v, g)
@@ -90,10 +90,11 @@ defmodule Swarm.InsideTest do
       assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
     end
 
-    test "with one opponent everyone fights it there, as before" do
+    test "with one opponent just the same" do
       v = lost(2)
-      assert Roles.retreat(v, Roles.group_for(v, nil, hd(View.units_of(v, "Soldier")))) == nil
-      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @defend)
+      assert Roles.retreat(v, Roles.group_for(v, nil, hd(View.units_of(v, "Soldier")))) == {20, 20}
+      assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(201, v, @defend)
+      assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
     end
 
     test "nobody leaves the main base: a raid at it is fought there" do

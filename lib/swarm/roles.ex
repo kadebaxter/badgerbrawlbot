@@ -996,13 +996,12 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Where to go from group `g` once it is inside a base of ours (`inside?/2`) with three or four
-  players: the nearest other finished Command Center of ours it is more than `@retreat_clear`
-  from. Nil when there is none, and when it is that close to the main one: nobody leaves that.
+  Where to go from group `g` once it is inside a base of ours (`inside?/2`): the nearest other
+  finished Command Center of ours it is more than `@retreat_clear` from. Nil when there is none, and when it is that close to the main one: nobody leaves that.
   For a fight we would lose (the caller's check), workers and fighters both: one place, so they
   end up together under the next base's towers.
   """
-  def retreat(%View{players: players, cc: cc} = v, g) when players in 3..4 and cc != nil do
+  def retreat(%View{cc: cc} = v, g) when cc != nil do
     if inside?(v, g) and dist_to(g, View.pos(cc)) > @retreat_clear do
       spot = center(g.spots)
 

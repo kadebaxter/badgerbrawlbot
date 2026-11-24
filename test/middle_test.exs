@@ -181,7 +181,7 @@ defmodule Swarm.MiddleTest do
     test "it gets four towers, where another base gets two" do
       towers = for {id, x, y} <- [{70, 30, 30}, {71, 26, 30}], do: building(id, "GuardTower", x, y)
       home = [building(5, "GuardTower", 11, 11), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "Barracks", 1, 10)]
-      opts = [units: workers(12) ++ soldiers(8), buildings: [@barracks, @depot, @middle] ++ home ++ towers, ore: 300]
+      opts = [units: workers(12) ++ soldiers(8), buildings: labs_busy([@barracks, @depot, @middle] ++ home ++ towers), ore: 300]
       {_, commands, _} = plan(opts, held())
       assert [%{"x" => x, "y" => y}] = for(%{"type" => "Build", "buildingType" => "GuardTower"} = c <- commands, do: c)
       assert View.dist({x, y}, {28, 28}) <= 4
