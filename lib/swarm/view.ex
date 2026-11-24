@@ -57,7 +57,11 @@ defmodule Swarm.View do
     blocked: [],
     # Their army is bigger than ours (set by `Swarm.Brain.see/2`): no escorts at the outposts, the
     # army keeps together at home.
-    together: false
+    together: false,
+    # Where our Command Centers that are bases of their own stand (set by `Swarm.Brain.see/2`):
+    # built by a field to mine it, a drop-off like the main one, with their own workers and towers.
+    # Any other second Command Center is a hidden backup (`backups/1`).
+    bases: []
   ]
 
   @type t :: %__MODULE__{}
@@ -78,6 +82,7 @@ defmodule Swarm.View do
     {my_units, enemy_units} = Enum.split_with(state["units"], &(&1["owner"] == me))
     {my_buildings, enemy_buildings} = Enum.split_with(state["buildings"], &(&1["owner"] == me))
     {mine, others} = Enum.split_with(state["players"], &(&1["slot"] == me))
+    out = for p <- others, p["eliminated"], into: MapSet.new(), do: p["slot"]
     score = fn p -> get_in(p, ["score", "total"]) || 0 end
 
     %__MODULE__{
@@ -103,7 +108,9 @@ defmodule Swarm.View do
       my_buildings: my_buildings,
       enemy_units: enemy_units,
       enemy_buildings: enemy_buildings,
-      remembered: state["rememberedBuildings"] || [],
+      # An eliminated player's buildings go with them, but the server remembers each until we
+      # see its spot again: not for us. Their ground is free the moment they are out.
+      remembered: Enum.reject(state["rememberedBuildings"] || [], &MapSet.member?(out, &1["owner"])),
       deposits: state["resources"],
       enemy_starts:
         for(
@@ -148,13 +155,22 @@ defmodule Swarm.View do
 
   def military(%__MODULE__{my_units: units}), do: Enum.reject(units, &(&1["type"] == "Worker"))
 
-  @doc "Where ore can be dropped off: our finished Command Center and Resource Depots."
-  # Our Command Center and our depots; not a backup Command Center (another one, far from home),
-  # so workers never go mining by it and give it away. It becomes the Command Center if we lose ours.
+  @doc "Where ore can be dropped off: our finished Command Center, base Command Centers and Resource Depots."
+  # Our Command Center, the ones that are bases (`bases`) and our depots; not a backup Command
+  # Center (another one, hidden far from home), so workers never go mining by it and give it away.
+  # It becomes the Command Center if we lose ours.
   def drop_offs(%__MODULE__{my_buildings: buildings, cc: cc} = v) do
     cached(v, :drop_offs, fn ->
-      for b <- buildings, b["completed"], b["type"] == "ResourceDepot" or b == cc, do: pos(b)
+      for b <- buildings, b["completed"], b["type"] == "ResourceDepot" or b == cc or base?(v, b), do: pos(b)
     end)
+  end
+
+  @doc "Whether building `b` is one of our base Command Centers (`bases`), finished or not."
+  def base?(%__MODULE__{bases: bases}, b), do: b["type"] == "CommandCenter" and pos(b) in bases
+
+  @doc "Our finished base Command Centers other than the main one, where they stand."
+  def base_ccs(%__MODULE__{cc: cc} = v) do
+    for b <- buildings_of(v, "CommandCenter"), b["completed"], base?(v, b), cc == nil or b["id"] != cc["id"], do: pos(b)
   end
 
   @doc "How far a deposit is from the nearest drop-off: the walk a miner repeats. Nil with none."
@@ -267,7 +283,7 @@ defmodule Swarm.View do
   but its own workers while we regroup there.
   """
   def backups(%__MODULE__{cc: cc} = v) do
-    for b <- buildings_of(v, "CommandCenter"), b["completed"], cc == nil or b["id"] != cc["id"], do: pos(b)
+    for b <- buildings_of(v, "CommandCenter"), b["completed"], cc == nil or b["id"] != cc["id"], not base?(v, b), do: pos(b)
   end
 
   @doc "Deposits in sight right now (not remembered ones)."

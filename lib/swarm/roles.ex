@@ -243,11 +243,13 @@ defmodule Swarm.Roles do
     View.cached(v, :outposts, fn -> outposts(v, cc) end)
   end
 
+  # A base Command Center (`View.base_ccs/1`) is one too, with a tower, escorts and help like any.
   defp outposts(v, cc) do
-    for d <- View.buildings_of(v, "ResourceDepot"),
-        d["completed"],
-        View.dist(View.pos(d), View.pos(cc)) > @outpost_distance,
-        do: View.pos(d)
+    View.base_ccs(v) ++
+      for d <- View.buildings_of(v, "ResourceDepot"),
+          d["completed"],
+          View.dist(View.pos(d), View.pos(cc)) > @outpost_distance,
+          do: View.pos(d)
   end
 
   @doc """

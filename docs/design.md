@@ -525,6 +525,19 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    down, the Trebuchets are gone, or after 200 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
+   **Base Command Centers:** one more Command Center than we have at 16, 30 and 50 workers
+   (with a Barracks up, one going up at a time, three builders), by the best field worth one: 2,500
+   ore or more, no drop-off of ours by it, at least 14 tiles from every living enemy's start and
+   every building of theirs we know of, out of their towers' reach and 12 from their fighters we
+   remember. It is a base, not the hidden backup (`View.bases`): a drop-off, an outpost with two
+   towers, and it trains workers too (every base one a tick while we are short); a worker by it
+   mines by it. On two- to four-player maps the ore we haven't seen counts: the map is mirrored
+   left to right and top to bottom, so every deposit we have seen tells us three more (dropped
+   once we look and find none). Fields farther from every enemy start than from ours come first.
+   **An eliminated player's start** comes before all of them, and nothing of theirs the server
+   still remembers counts (their buildings go with them). But only once a scout has seen it clear
+   in the last 45 ticks: the survey scout goes there, and back every 20 ticks, while that field is
+   worth a base. With no field worth one, the build order's hidden backup goes up as before.
    **Upgrades:** every tier of Weapons (units and towers), Armor (units) and Fortify (buildings,
    towers too), Weapons and Armor 1 and 2 before the second Harvesting; a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.

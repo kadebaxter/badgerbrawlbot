@@ -16,7 +16,7 @@ defmodule Swarm.KeepMiningTest do
 
   # A six-player game: a big one.
   defp big(state) do
-    more = for {slot, {x, y}} <- Enum.with_index([{56, 7}, {7, 56}, {32, 60}, {60, 32}], 2),
+    more = for {{x, y}, slot} <- Enum.with_index([{56, 7}, {7, 56}, {32, 60}, {60, 32}], 2),
                do: %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}}
 
     Map.update!(state, "players", &(&1 ++ more))

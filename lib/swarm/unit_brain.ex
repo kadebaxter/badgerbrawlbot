@@ -60,6 +60,8 @@ defmodule Swarm.UnitBrain do
   @melee ["Soldier", "Scout"]
   # A Trebuchet can't hit anything this close: it steps back instead.
   @siege_blind_spot 3
+  # A worker this close to one of our base Command Centers mines by it (`base_deposits/3`).
+  @base_home 12
   # A Trebuchet out with a wave shells the known enemy tower nearest it, of those within this many
   # tiles of the wave's target or of itself.
   @siege_towers 14
@@ -328,7 +330,13 @@ defmodule Swarm.UnitBrain do
     mining? = unit["activity"] in ["Gathering", "Returning"] and current != nil
 
     # Home first: the whole workforce follows the newest far depot otherwise, away from the army.
-    home = Enum.filter(near, &(&1 in View.home_deposits(v)))
+    # A worker by one of our base Command Centers (trained there, or mining there) has that for its
+    # home: it doesn't walk across the map to the main one.
+    home =
+      case base_deposits(unit, v, near) do
+        [] -> Enum.filter(near, &(&1 in View.home_deposits(v)))
+        local -> local
+      end
 
     choices =
       case {Enum.reject(home, &unsafe?(&1, v)), Enum.reject(near, &unsafe?(&1, v))} do
@@ -357,6 +365,16 @@ defmodule Swarm.UnitBrain do
   end
 
   defp worker(unit, v), do: take_cover(unit, v)
+
+  # The ore by the base Command Center this worker is at (within `@base_home` of it), of `near`.
+  defp base_deposits(unit, v, near) do
+    here = View.pos(unit)
+
+    case v |> View.base_ccs() |> Enum.filter(&(View.dist(&1, here) <= @base_home)) |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end) do
+      nil -> []
+      base -> Enum.filter(near, &(View.dist(View.pos(&1), base) <= View.drop_off_reach()))
+    end
+  end
 
   # Safe ore away from our drop-offs (not by a backup Command Center): on our side of the map; with
   # none there, ore clear of every enemy base; with none of that and none by a drop-off at all, any

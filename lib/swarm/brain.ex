@@ -250,6 +250,23 @@ defmodule Swarm.Brain do
   # more in its queue, none going up), up to `@max_barracks`: 60 workers earned more than four
   # Barracks could spend, and 2,500 ore sat in the bank while the base fell.
   @max_barracks 10
+  # Base Command Centers (`base_cc/3`): a Command Center of our own by a field worth one, to mine
+  # it, train workers there too and have somewhere else to stand. One more at each of these worker
+  # counts (the second at 16, and so on), once the first Barracks is up. A field is worth one with
+  # `@base_ore` or more in it and nothing of a living enemy's near: `@base_clear` tiles from their
+  # starts and buildings we know of, `@base_watch` from their fighters we remember. On two- to
+  # four-player maps the fields we haven't seen count too: the map is mirrored both ways
+  # (`inferred_ore/2`). An eliminated player's start comes first, but only once a scout has seen it
+  # clear in the last `@clear_for` ticks; the scout goes back to look every `@recheck` ticks.
+  @cc_at_workers [16, 30, 50]
+  @base_ore 2500
+  @base_clear 14
+  @base_watch 12
+  @base_builders 3
+  @base_towers 2
+  @mirror_players 4
+  @recheck 20
+  @clear_for 45
   # A second TechLab once we have this many workers and the first is up, ahead of the rest of the
   # build order: two upgrades at a time.
   @second_lab_workers 25
@@ -442,6 +459,14 @@ defmodule Swarm.Brain do
       lost: %{},
       # spot => the ticks building failed there lately (see `@site_strikes`).
       strikes: %{},
+      # Where we have ordered base Command Centers (`base_cc/3`).
+      bases: [],
+      # Every deposit we have ever seen: where => the most ore we saw in it (for `inferred_ore/2`),
+      # and the mirrored spots we have seen with no ore on them.
+      layout: %{},
+      no_ore: [],
+      # Eliminated players' starts: where => the tick we last had it in sight.
+      checked: %{},
       # player => {the most of their army we have known lately (`Roles.strength/1`), the tick}.
       army_seen: %{},
       # Whether the army keeps together at home (`@together_until`).
@@ -522,7 +547,7 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together}
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
     {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
@@ -588,12 +613,24 @@ defmodule Swarm.Brain do
         nil -> nil
       end
 
-    surveyed = if memory.survey && current == nil, do: Enum.uniq([memory.survey.pos | surveyed]), else: surveyed
+    # (An eliminated player's start is looked at again and again: never done.)
+    surveyed = if memory.survey != nil and current == nil and memory.survey.pos not in v.fallen_starts, do: Enum.uniq([memory.survey.pos | surveyed]), else: surveyed
     left = Enum.reject(spots, &(&1 in surveyed))
     scout = surveyor(v)
 
+    # An eliminated player's start with a field worth a base (`base_cc/3`), not looked at in the
+    # last `@recheck` ticks: the scout goes (back) there first, to see whether it is clear.
+    due? = fn start -> memory.checked[start] == nil or v.tick - memory.checked[start] >= @recheck end
+    recheck = for start <- v.fallen_starts, due?.(start), worth_base?(v, memory, start), do: start
+
+    recheck = Enum.min_by(recheck, &{View.dist(&1, View.pos(v.cc)), &1}, fn -> nil end)
+    checking? = current != nil and current.pos in v.fallen_starts
+
     {current, notes} =
       cond do
+        scout != nil and recheck != nil and not checking? ->
+          {%{pos: recheck, at: v.tick}, [{:survey, "scout #{scout["id"]} looking at the eliminated player's start at #{fmt(recheck)}: is it clear?"}]}
+
         current != nil ->
           {current, []}
 
@@ -784,7 +821,7 @@ defmodule Swarm.Brain do
     memory = %{memory | raid: raid(memory, v), enemies: remember_enemies(memory.enemies, v)}
     memory = %{memory | army_seen: army_seen(memory, v, before)}
     memory = %{memory | together: together?(memory, v)}
-    v = %{v | together: memory.together}
+    v = %{v | together: memory.together, bases: memory.bases}
     {strategy, memory} = strategy(v, memory)
     # With the last opponent down to the Command Center we spare, their side of the map is ours
     # too: its ore is looked for and taken like ours. Their start counted as enemy ground left 30
@@ -793,6 +830,7 @@ defmodule Swarm.Brain do
     v = if match?(%{farm: true}, Map.get(strategy, :spare)), do: %{v | enemy_starts: []}, else: v
     # And no tower of ours goes up in its reach: towers shoot buildings too, once no unit is near.
     v = %{v | spared: Map.get(strategy, :spare) && strategy.spare.pos}
+    memory = remember_layout(memory, v)
     {survey, memory, surveyed} = survey(v, memory, terrain)
     {regroup, memory, regrouped} = regroup(v, memory)
     {help, memory, helped} = help(v, memory, strategy)
@@ -819,6 +857,8 @@ defmodule Swarm.Brain do
     # for the backup's own workers (first claim on it) or for the raid to be gone.
     home_reserve = if Roles.threat(v) != nil or memory.regroup, do: 0, else: reserve
 
+    bases_before = memory.bases
+
     {commands, memory, _ore} =
       {[], memory, v.ore - reserve}
       |> with_reserve(reserve, &train_backup_workers(&1, v))
@@ -832,7 +872,49 @@ defmodule Swarm.Brain do
       |> train_siege(v)
       |> train_army(v)
 
+    founded = for spot <- memory.bases -- bases_before, do: {:base, "a Command Center of our own at #{fmt(spot)}: a base by that field"}
+    strategy = %{strategy | why: strategy.why ++ founded}
+
     {strategy, Enum.reverse(commands), memory}
+  end
+
+  # Every deposit we have ever seen, with the most ore we saw in it; when eliminated players'
+  # starts were last in sight; and the spots where the mirrored map should have ore and we see none.
+  defp remember_layout(memory, v) do
+    layout =
+      Enum.reduce(v.deposits, memory.layout, fn d, layout ->
+        Map.update(layout, View.pos(d), d["remaining"] || 0, &max(&1, d["remaining"] || 0))
+      end)
+
+    checked = for start <- v.fallen_starts, into: %{}, do: {start, if(View.in_sight?(v, start), do: v.tick, else: Map.get(memory.checked, start))}
+    known = MapSet.new(v.deposits, &View.pos/1)
+    empty = for {pos, _ore} <- mirrored(layout, v), not MapSet.member?(known, pos), pos not in memory.no_ore, View.in_sight?(v, pos), do: pos
+
+    %{memory | layout: layout, checked: checked, no_ore: memory.no_ore ++ Enum.uniq(empty)}
+  end
+
+  # The deposits the map's mirror symmetry says there are (two to four players: mirrored left to
+  # right, top to bottom and both), as [{where, ore}], from every deposit we have seen.
+  defp mirrored(layout, %View{players: players} = v) when players <= @mirror_players do
+    {w, h} = {v.map_width - 1, v.map_height - 1}
+
+    for {{x, y}, ore} <- layout, pos <- [{w - x, y}, {x, h - y}, {w - x, h - y}], not is_map_key(layout, pos), uniq: true, do: {pos, ore}
+  end
+
+  defp mirrored(_layout, _v), do: []
+
+  # Deposits we haven't seen that the mirrored map should have (`mirrored/2`), as deposits without
+  # an id worth naming (negative, so nobody is sent to gather one): for choosing where a base
+  # goes. Not where we have looked and found none.
+  defp inferred_ore(memory, v) do
+    known = MapSet.new(v.deposits, &View.pos/1)
+
+    memory.layout
+    |> mirrored(v)
+    |> Enum.reject(fn {pos, _ore} -> MapSet.member?(known, pos) or pos in memory.no_ore end)
+    |> Enum.sort()
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{{x, y}, ore}, i} -> %{"id" => -i, "x" => x, "y" => y, "remaining" => ore, "inferred" => true} end)
   end
 
   # No base left: everyone attacks.
@@ -2293,20 +2375,32 @@ defmodule Swarm.Brain do
 
   defp build({cmds, mem, ore} = acc, v, terrain) do
     case next_build(v, terrain, mem) do
-      nil -> acc
-      {type, site} -> if ore >= @costs[type], do: order(acc, v, type, site), else: {cmds, mem, ore - @costs[type]}
+      nil ->
+        acc
+
+      {type, site, :base} ->
+        if ore >= @costs[type] do
+          {cmds, mem, ore} = order(acc, v, type, site, @base_builders)
+          # Ordered (not just waiting for a free worker): it is a base from here on.
+          {cmds, if(mem.pending && Map.get(mem.pending, :site) == site, do: %{mem | bases: Enum.uniq([site | mem.bases])}, else: mem), ore}
+        else
+          {cmds, mem, ore - @costs[type]}
+        end
+
+      {type, site} ->
+        if ore >= @costs[type], do: order(acc, v, type, site), else: {cmds, mem, ore - @costs[type]}
     end
   end
 
   # Free workers go build it (see `builders/4`); we remember the first so we can tell if the order
   # fails. With no free worker, keep the ore aside and try again next tick.
-  defp order({cmds, mem, ore}, v, type, site) do
+  defp order({cmds, mem, ore}, v, type, site, count \\ nil) do
     case free_workers(v, mem) do
       [] ->
         {cmds, mem, ore - @costs[type]}
 
       free ->
-        builders = builders(v, free, type, site)
+        builders = if count, do: closest_first(free, site) |> Enum.take(count), else: builders(v, free, type, site)
         pending = %{type: type, builder: hd(builders)["id"], at: v.tick, had: count(v, type), site: site}
         {[build_cmd(builders, type, site) | cmds], %{mem | pending: pending}, ore - @costs[type]}
     end
@@ -2334,7 +2428,7 @@ defmodule Swarm.Brain do
     end
   end
 
-  # The backup Command Center: 80 work, two builders.
+  # The backup Command Center: 80 work, two builders. (A base gets `@base_builders`, see `build/3`.)
   defp builders(_v, free, "CommandCenter", site), do: closest_first(free, site) |> Enum.take(2)
 
   defp builders(v, free, "Barracks", site) do
@@ -2373,9 +2467,13 @@ defmodule Swarm.Brain do
   defp next_build(%View{cc: nil}, _terrain, _mem), do: nil
 
   defp next_build(%View{} = v, terrain, mem) do
-    depot = if may_expand?(v, mem), do: conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
+    base = if may_expand?(v, mem), do: base_cc(v, terrain, mem)
+    depot = if base == nil and may_expand?(v, mem), do: conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem) || expansion(v, terrain, mem)
 
-    case depot do
+    case base || depot do
+      {"CommandCenter", _site, :base} = base ->
+        base
+
       nil ->
         # In a big game a co-op's tower comes before the rest: outposts are where raiders go.
         second_lab(v, terrain) ||
@@ -2469,6 +2567,97 @@ defmodule Swarm.Brain do
       big?(v) -> @big_min_wave
       true -> @min_wave
     end
+  end
+
+  # The next base Command Center, as {"CommandCenter", site, :base}, or nil: one more than we have
+  # at each of `@cc_at_workers` workers, with a Barracks up and none going up already, by the best
+  # field worth one (`base_fields/2`).
+  defp base_cc(v, terrain, mem) do
+    workers = length(View.units_of(v, "Worker"))
+    wanted = 1 + Enum.count(@cc_at_workers, &(workers >= &1))
+    ccs = View.buildings_of(v, "CommandCenter")
+
+    with true <- length(ccs) < wanted,
+         true <- Enum.all?(ccs, & &1["completed"]),
+         true <- Enum.any?(View.buildings_of(v, "Barracks"), & &1["completed"]),
+         [field | _] <- base_fields(v, mem) do
+      # The site is chosen with the ore we infer there counted as ore: nothing goes up on a pile.
+      with_inferred = %{v | deposits: v.deposits ++ inferred_ore(mem, v)}
+
+      case by_field(terrain, with_inferred, hd(field)) do
+        {_, _} = site -> {"CommandCenter", site, :base}
+        _ -> nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  # The fields worth a base, best first, each as its deposits (seen, remembered or inferred):
+  # `@base_ore` or more in it, none of our drop-offs by it (finished or going up), not where
+  # building keeps failing (`avoid/2`), and clear of every living enemy (`clear_of_enemies?/3`). An
+  # eliminated player's start first, if a scout saw it clear in the last `@clear_for` ticks (never
+  # one not seen lately: whoever took them out may still stand there). Then the ones farther from
+  # every enemy start than from ours, the nearest of those first.
+  defp base_fields(%View{cc: nil}, _mem), do: []
+
+  defp base_fields(v, mem) do
+    home = View.pos(v.cc)
+    ore = v.deposits ++ inferred_ore(mem, v)
+    ours = for b <- v.my_buildings, b["type"] in ["CommandCenter", "ResourceDepot"], do: View.pos(b)
+    avoid = avoid(v, mem)
+    from_enemy = fn pos -> v.enemy_starts |> Enum.map(&View.dist(&1, pos)) |> Enum.min(fn -> 99 end) end
+
+    ore
+    |> fields()
+    |> Enum.filter(fn field ->
+      center = View.pos(hd(field))
+      fallen = Enum.find(v.fallen_starts, &(View.dist(&1, center) <= @conquest_reach))
+      seen_clear? = fallen == nil or (mem.checked[fallen] != nil and v.tick - mem.checked[fallen] <= @clear_for)
+
+      Enum.sum_by(field, &(&1["remaining"] || 0)) >= @base_ore and seen_clear? and
+        not Enum.any?(field, fn d -> Enum.any?(ours, &(View.dist(&1, View.pos(d)) <= View.drop_off_reach())) end) and
+        not Enum.any?(avoid, &(View.dist(&1, center) <= 4)) and
+        Enum.all?(field, &clear_of_enemies?(v, mem, View.pos(&1)))
+    end)
+    |> Enum.sort_by(fn field ->
+      center = View.pos(hd(field))
+      fallen? = Enum.any?(v.fallen_starts, &(View.dist(&1, center) <= @conquest_reach))
+      {not fallen?, View.dist(center, home) - from_enemy.(center), View.dist(center, home), center}
+    end)
+  end
+
+  # Deposits grouped into fields: each with the ones within 4 tiles of it, the pile nearest our
+  # Command Center first (so every field is found from that pile).
+  defp fields(ore) do
+    Enum.reduce(Enum.sort_by(ore, &{&1["x"], &1["y"]}), [], fn d, fields ->
+      case Enum.find_index(fields, fn field -> Enum.any?(field, &(View.dist(View.pos(&1), View.pos(d)) <= 4)) end) do
+        nil -> fields ++ [[d]]
+        i -> List.update_at(fields, i, &(&1 ++ [d]))
+      end
+    end)
+  end
+
+  # Nothing of a living enemy's near `pos`: `@base_clear` tiles from their starts and the buildings
+  # of theirs we know of, out of their towers' reach, and `@base_watch` from their fighters we see
+  # or remember.
+  defp clear_of_enemies?(v, mem, pos) do
+    fighters = Map.values(mem.enemies) ++ Enum.filter(v.enemy_units, &(&1["type"] not in ["Worker", "Scout"]))
+
+    Enum.all?(v.enemy_starts, &(View.dist(&1, pos) >= @base_clear)) and
+      Enum.all?(v.enemy_buildings ++ v.remembered, &(View.dist(View.pos(&1), pos) >= @base_clear)) and
+      not Roles.under_tower?(v, pos) and
+      not Enum.any?(fighters, &(View.dist(View.pos(&1), pos) <= @base_watch))
+  end
+
+  # Whether the field by an eliminated player's start is worth a base, bar looking at it: enough
+  # ore there as far as we know, and no drop-off of ours by it yet.
+  defp worth_base?(v, mem, start) do
+    field = Enum.filter(v.deposits ++ inferred_ore(mem, v), &(View.dist(View.pos(&1), start) <= @conquest_reach))
+    ours = for b <- v.my_buildings, b["type"] in ["CommandCenter", "ResourceDepot"], do: View.pos(b)
+
+    Enum.sum_by(field, &(&1["remaining"] || 0)) >= @base_ore and
+      not Enum.any?(field, fn d -> Enum.any?(ours, &(View.dist(&1, View.pos(d)) <= View.drop_off_reach())) end)
   end
 
   # Workers mining a field with a walk to a drop-off longer than `@depot_walk` (a depot finished or
@@ -2621,11 +2810,13 @@ defmodule Swarm.Brain do
   # finished Barracks, like every tower; the first doesn't need us to be rich.
   defp outpost_tower(v, terrain) do
     towers = Enum.map(View.buildings_of(v, "GuardTower"), &View.pos/1)
-    wanted = if rich?(v), do: @outpost_towers, else: 1
+    bases = View.base_ccs(v)
+    # A base Command Center gets `@base_towers` whether we are rich or not.
+    wanted = fn o -> if(o in bases, do: @base_towers, else: if(rich?(v), do: @outpost_towers, else: 1)) end
 
     if prerequisites?(v, "GuardTower") do
       Roles.outposts(v)
-      |> Enum.reject(fn o -> Enum.count(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) >= wanted end)
+      |> Enum.reject(fn o -> Enum.count(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) >= wanted.(o) end)
       |> Enum.find_value(fn o ->
         site = site(terrain, v, {:outpost, o})
         if site && clear_of_spared?(v, "GuardTower", site), do: {"GuardTower", site}
@@ -2705,16 +2896,26 @@ defmodule Swarm.Brain do
     {cmds, mem, ore - reserve}
   end
 
-  defp train_workers({cmds, mem, ore} = acc, v) do
-    with %{"completed" => true} = cc <- v.cc,
-         queued = length(cc["production"]),
-         true <- length(View.units_of(v, "Worker")) + queued < target_workers(v) and queued < 2,
-         true <- ore >= @costs["Worker"] do
-      cmd = %{"type" => "Produce", "buildingId" => cc["id"], "unitType" => "Worker"}
-      {[cmd | cmds], mem, ore - @costs["Worker"]}
-    else
-      _ -> acc
-    end
+  # From the main Command Center and every base one (`View.base?/2`), one each a tick, while we
+  # are short of workers counting everything queued: two or three train at once.
+  defp train_workers(acc, %View{cc: nil}), do: acc
+
+  defp train_workers(acc, v) do
+    trainers = for b <- View.buildings_of(v, "CommandCenter"), b["completed"], b["id"] == v.cc["id"] or View.base?(v, b), do: b
+    queued = Enum.sum_by(trainers, &length(&1["production"] || []))
+    short = target_workers(v) - length(View.units_of(v, "Worker")) - queued
+
+    {acc, _short} =
+      Enum.reduce(trainers, {acc, short}, fn cc, {{cmds, mem, ore} = acc, short} ->
+        if short > 0 and length(cc["production"] || []) < 2 and ore >= @costs["Worker"] do
+          cmd = %{"type" => "Produce", "buildingId" => cc["id"], "unitType" => "Worker"}
+          {{[cmd | cmds], mem, ore - @costs["Worker"]}, short - 1}
+        else
+          {acc, short}
+        end
+      end)
+
+    acc
   end
 
   # Regrouping: the backup Command Center trains its own `@backup_workers` workers (the ones within
