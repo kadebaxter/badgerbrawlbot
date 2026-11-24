@@ -70,12 +70,12 @@ defmodule Swarm.InsideTest do
   describe "a base of ours lost, with another behind it" do
     # Our base in the middle at (28, 40) with a tower, twelve of theirs in the tower's reach; four
     # of ours and a miner there; another base of ours at (20, 20); home at (7, 7).
-    defp lost(players, at \\ {31, 40}) do
+    defp lost(players, at \\ {31, 40}, more \\ []) do
       {x, y} = at
       raid = for i <- 1..12, do: unit(900 + i, "Soldier", x, y, owner: 1)
       ours = for i <- 1..4, do: unit(200 + i, "Soldier", 28, 38)
       miner = unit(101, "Worker", 26, 41, activity: "Gathering")
-      s = state(units: ours ++ raid ++ [miner],
+      s = state(units: ours ++ raid ++ [miner] ++ more,
                 buildings: [building(60, "CommandCenter", 28, 40), building(61, "GuardTower", 29, 39), building(62, "CommandCenter", 20, 20)])
       third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
       %{View.new(if(players == 3, do: %{s | "players" => s["players"] ++ [third]}, else: s)) | bases: [{28, 40}, {20, 20}]}
@@ -107,6 +107,30 @@ defmodule Swarm.InsideTest do
       assert Roles.away?(g) and Roles.inside?(v, g)
       assert Roles.retreat(v, g) == nil
       assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @defend)
+    end
+  end
+
+  describe "workers leave a base ahead of a big raid, win or lose" do
+    test "twelve of theirs twelve tiles from the base: its workers go to the base they are far from" do
+      v = lost(2, {40, 40})
+      assert [{_spots, {20, 20}}] = Roles.evacuations(v, nil)
+      assert {%{"type" => "Move", "unitIds" => [101], "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
+    end
+
+    test "with forty of ours there to win it, just the same" do
+      more = for i <- 1..40, do: unit(500 + i, "Soldier", 28, 38)
+      v = lost(2, {40, 40}, more)
+      assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
+    end
+
+    test "not for a few raiders, and not from the main base" do
+      few = lost(2, {40, 40})
+      few = %{few | enemy_units: Enum.take(few.enemy_units, 5)}
+      assert Roles.evacuations(few, nil) == []
+
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 18, 8, owner: 1)
+      v = %{View.new(state(units: raid, buildings: [building(62, "CommandCenter", 40, 40)])) | bases: [{40, 40}]}
+      assert Roles.evacuations(v, nil) == []
     end
   end
 

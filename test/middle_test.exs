@@ -226,6 +226,12 @@ defmodule Swarm.MiddleTest do
       assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_launched and text =~ "siege party at their base by (59,4)" end)
     end
 
+    test "not when we don't know where their army is: twenty counted, none of them remembered anywhere" do
+      trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10)
+      nowhere = %{army_in_the_middle() | enemies: %{}}
+      assert {%{wave: nil}, _, _} = plan([units: trebs ++ soldiers(12), buildings: [@their_middle, @their_corner]], nowhere)
+    end
+
     test "not with their army by every base of theirs, nor with too small an escort" do
       trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10)
       assert {%{wave: nil}, _, _} = plan([units: trebs ++ soldiers(12), buildings: [@their_middle]], army_in_the_middle())

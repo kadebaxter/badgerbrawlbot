@@ -323,6 +323,12 @@ defmodule Swarm.UnitBrainTest do
       assert {%{"type" => "Attack", "x" => 56, "y" => 56}, _} = UnitBrain.decide(303, v, @going)
     end
 
+    test "holding or not, one with a known tower within eight tiles shells it before it walks anywhere" do
+      tower = building(70, "GuardTower", 27, 20, 1)
+      v = View.new(state(units: [unit(2, "Soldier", 20, 20), unit(303, "Trebuchet", 20, 20)], buildings: [tower]))
+      assert {%{"type" => "Attack", "targetId" => 70}, _} = UnitBrain.decide(303, v, @holding)
+    end
+
     test "a Trebuchet not in a wave waits at the rally point, the oldest too" do
       v = treb_view([unit(303, "Trebuchet", 20, 20)])
       assert {%{"type" => "Move", "x" => 10, "y" => 10}, _} = UnitBrain.decide(303, v, @gather)

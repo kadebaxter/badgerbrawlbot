@@ -768,6 +768,14 @@ defmodule Swarm.BrainTest do
       assert {%{wave: %{released: true}}, _, _} = plan([units: trebs ++ soldiers(22), tick: 160], memory)
     end
 
+    test "the staging point is out of every known enemy tower's reach, back toward where the wave leaves from" do
+      trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10)
+      # A tower of theirs two tiles from the usual spot (47, 47): the first tile back along the
+      # way that is more than its reach and three from it.
+      {s, _, _} = plan(units: trebs ++ soldiers(22), buildings: [building(70, "GuardTower", 45, 45, 1)])
+      assert %{wave: %{staging: {36, 36}, released: false}} = s
+    end
+
     test "one Trebuchet at the rally point isn't enough: the wave goes without it" do
       {s, _, _} = plan(units: [unit(301, "Trebuchet", 10, 10) | soldiers(22)])
       assert %{wave: %{released: true, members: members}} = s

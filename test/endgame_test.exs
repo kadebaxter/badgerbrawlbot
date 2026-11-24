@@ -12,6 +12,19 @@ defmodule Swarm.EndgameTest do
     do: Brain.plan(View.new(state(opts)), memory, terrain())
 
   describe "a scout's look and the count we had" do
+    test "a big raid beaten at home since the last look: a new look goes now, not when the old one is stale" do
+      units = [unit(300, "Scout", 9, 9) | soldiers(22)]
+      sent? = fn {s, _, _} -> Enum.any?(s.why, &match?({:scout_sent, _}, &1)) end
+      # Looked at tick 90, still fresh at 100: nothing sent.
+      refute sent?.(plan([units: units, tick: 100], looked(Brain.new_memory(), 1, 90)))
+      # Ten of a raid's fighters killed here, the raid last here at tick 95: sent.
+      beaten = %{looked(Brain.new_memory(), 1, 90) | raid: %{at: 95, kills: 10}}
+      assert sent?.(plan([units: units, tick: 100], beaten))
+      # Three killed isn't a big raid; and a look done after it left is the count we want.
+      refute sent?.(plan([units: units, tick: 100], %{beaten | raid: %{at: 95, kills: 3}}))
+      refute sent?.(plan([units: units, tick: 100], %{looked(Brain.new_memory(), 1, 97) | raid: %{at: 95, kills: 10}}))
+    end
+
     # Twenty of theirs counted at tick 100; a look is under way at (49, 49).
     defp counted, do: %{Brain.new_memory() | army_seen: %{1 => {20 * 990.0, 100}}, look: %{owner: 1, pos: {49, 49}, at: 120, done: nil}}
 

@@ -66,6 +66,7 @@ defmodule Swarm.UnitBrain do
   # A Trebuchet out with a wave shells the known enemy tower nearest it, of those within this many
   # tiles of the wave's target or of itself.
   @siege_towers 14
+  @siege_at_hand 8
   # ...after any stack of this many enemy workers or more on one tile in its reach (`worker_stack/2`).
   @stack 3
   # No attack-move this close to a Command Center we spare: an Archer sees 6.
@@ -213,7 +214,13 @@ defmodule Swarm.UnitBrain do
   # base, and the match with them.
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning", "Moving", "Building", "Attacking"] and rally != nil do
-    case worker_danger(unit, v, s) do
+    case leaving(unit, v, s) || worker_danger(unit, v, s) do
+      {:leave, {x, y} = spot} ->
+        cond do
+          heading?(unit, spot) -> :no_change
+          true -> %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+        end
+
       nil ->
         stand_in(unit, s) || search(unit, s) || worker(unit, v)
 
@@ -281,6 +288,20 @@ defmodule Swarm.UnitBrain do
       Map.get(s, :fall_back, false) or not winning?(v, s, closest) -> closest
       true -> nil
     end
+  end
+
+  # A worker leaves ahead of a big raid, win or lose (`Roles.evacuations/2`, worked out once for
+  # everyone in `prepare/2`): within `Roles.evacuate_reach/0` of such a group, it goes to the base
+  # that group is far from, unless it is by it already. Three games went on one raid at the base
+  # every worker mined at: 75, 61 and 60 of them, the last in a fight we won 69 for 28.
+  defp leaving(unit, v, s) do
+    here = View.pos(unit)
+    list = Map.get(v.shared || %{}, :evacuations) || Roles.evacuations(v, s.wave)
+
+    Enum.find_value(list, fn {spots, to} ->
+      near? = Enum.any?(spots, &(View.dist(&1, here) <= Roles.evacuate_reach()))
+      if near? and View.dist(here, to) > 3, do: {:leave, to}
+    end)
   end
 
   # Where a worker goes from `enemy` when its group has taken the base they are at: our next base
@@ -352,8 +373,11 @@ defmodule Swarm.UnitBrain do
   """
   def prepare(%View{} = v, wave) do
     v = Roles.share(v, wave)
-    unsafe = for d <- v.deposits, near_enemy?(d, v), into: MapSet.new(), do: d["id"]
-    %{v | shared: Map.put(v.shared, :unsafe_ore, unsafe)}
+    evacuations = Roles.evacuations(v, wave)
+    left? = fn d -> Enum.any?(evacuations, fn {spots, _to} -> Enum.any?(spots, &(View.dist(&1, View.pos(d)) <= Roles.evacuate_reach())) end) end
+    # Ore by a base the workers have left for a raid isn't walked back to while the raid is there.
+    unsafe = for d <- v.deposits, near_enemy?(d, v) or left?.(d), into: MapSet.new(), do: d["id"]
+    %{v | shared: v.shared |> Map.put(:unsafe_ore, unsafe) |> Map.put(:evacuations, evacuations)}
   end
 
   # An idle worker picks a deposit, ore by a drop-off at home (`View.home_deposits/1`) first, then
@@ -735,6 +759,9 @@ defmodule Swarm.UnitBrain do
         role == :siege_out -> {:move, s.rally}
         back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
         kill = Map.get(s, :kill) -> go_kill(v, kill)
+        # A known tower it can reach from where it stands, or would walk into the reach of: shelled
+        # before it goes anywhere, the staging point included.
+        tower = role == :wave && Map.get(s, :spare) == nil && tower_at_hand(unit, v) -> shell(unit, v, s, tower)
         holding?(s) and not sieging?(s) -> {:move, s.wave.staging}
         # Their workers standing a few to a tile within reach: a shell hits every one of them.
         worker = role == :wave && worker_stack(unit, v) -> {:attack, worker["id"]}
@@ -766,6 +793,15 @@ defmodule Swarm.UnitBrain do
       nil -> nil
       {_tile, workers} -> Enum.min_by(workers, & &1["id"])
     end
+  end
+
+  # The nearest known enemy tower within a Trebuchet's own reach of it, plus a step (`@siege_at_hand`).
+  defp tower_at_hand(unit, v) do
+    here = View.pos(unit)
+
+    Roles.enemy_towers(v)
+    |> Enum.filter(&(View.dist(View.pos(&1), here) <= @siege_at_hand))
+    |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
   end
 
   defp sieging?(%{wave: %{sieging: since}}) when since != nil, do: true

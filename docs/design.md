@@ -613,6 +613,10 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    until it is there (`research_first/2`). One on one, a house bot had Weapons2 and Armor2 at
    ticks 385 and 391 and we at 441 and 431, behind two Command Centers and ten towers: 15 of its
    Soldiers killed 22 of ours and 12 workers at our base for 9, on an estimate of +0.5.
+   **A look right after a beaten raid:** when eight or more of a raid's fighters have died at
+   our base and none is left in sight, a look done before the raid was last here no longer
+   counts as fresh, and a scout goes at once. With 43 Soldiers to their 5 after a raid of 74, the
+   count still said 75, and the counterattack waited 41 ticks for the next routine look.
    **No wave without a look:** an ordinary wave only leaves within 60 ticks of a scout having got
    to its look at the target itself (within 3 tiles of it, or a Scout with it well inside its
    sight): their base, not a spot short of it. A scout that dies on the way in, or doesn't get
@@ -757,6 +761,25 @@ on the serum in a fight eight or more of our Soldiers are in, a group worth eigh
 more, ours is taken that tick, raid or not. One on one, 61 of ours went out to a depot in the
 middle 20 tiles from our nearest tower; their serum went on in a fight a few tiles off it, ours
 12 ticks later with 38 dead, and 87 Soldiers died for 28.
+
+**Workers leave a base ahead of a big raid, win or lose.** When a group worth eight Soldiers or
+more is within 16 tiles of a Command Center of ours that isn't the main one (and farther than that
+from the main one), every worker within 16 tiles of that group goes to the nearest Command Center
+of ours the group is farther than 16 from, and the ore by the base they left isn't walked back to
+while the raid is there (`Roles.evacuations/2`). Whatever the estimate says: three games went on
+one raid at the base every worker mined at, 75, 61 and 60 of them, the last in a fight we won 69
+Soldiers for 28. Nobody leaves the main base this way.
+
+**Trebuchets and the towers in their way.** A wave with Trebuchets holds at a staging point nine
+tiles short of its target on our side; that point is moved back toward where the wave leaves
+from, a tile at a time, until it is out of every known enemy tower's reach by three tiles. And a
+Trebuchet out with a wave shells a known tower within eight tiles of it before it walks anywhere,
+the staging point included. Nine tiles short of a main base was inside the reach of three towers
+of the base in front of it: two Trebuchets parked seven tiles from one of them walked there on a
+plain move and died without a shot. A siege party only goes for a base "their army isn't at" when
+the fighters of theirs we remember, wherever they are, are half their army as we count it or
+more: with none remembered every base looked clear, and that party left for the base their 70
+stood by.
 
 **A lost base is left for the next one.** When that raid is inside a base
 of ours that isn't the main one, and another finished Command Center of ours is more than 10

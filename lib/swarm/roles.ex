@@ -87,6 +87,9 @@ defmodule Swarm.Roles do
   @inside 3
   # How far from a group a base of ours has to be to fall back to (`retreat/2`).
   @retreat_clear 10
+  # Workers leave a base ahead of a raid this big (in Soldiers) once it is this near (`evacuations/2`).
+  @evacuate_worth 8
+  @evacuate 16
   @sideways 4
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
@@ -1012,6 +1015,32 @@ defmodule Swarm.Roles do
   end
 
   def retreat(_v, _g), do: nil
+
+  @doc """
+  The bases our workers leave ahead of a raid, as `[{the raid's spots, where they go}]`: for every
+  group worth `@evacuate_worth` Soldiers or more within `@evacuate` tiles of a Command Center of
+  ours that isn't the main one, the nearest Command Center of ours farther than that from the
+  group. Whether we would win the fight or not: workers at a base that is fought at die in it.
+  None from the main base, and none with nowhere to go.
+  """
+  def evacuations(%View{cc: cc} = v, wave) when cc != nil do
+    main = View.pos(cc)
+    bases = View.base_ccs(v)
+
+    for {_id, g} <- groups(v, wave).groups,
+        g.worth >= @evacuate_worth * @soldier,
+        dist_to(g, main) > @evacuate,
+        base = Enum.find(bases, &(dist_to(g, &1) <= @evacuate)),
+        base != nil,
+        to = [main | bases] |> Enum.filter(&(dist_to(g, &1) > @evacuate)) |> Enum.min_by(&{View.dist(&1, base), &1}, fn -> nil end),
+        to != nil,
+        do: {g.spots, to}
+  end
+
+  def evacuations(_v, _wave), do: []
+
+  @doc "How near a raid a worker leaves for another base (`evacuations/2`)."
+  def evacuate_reach, do: @evacuate
 
   @doc "The group whose fight `unit` (ours) is in (`groups/2`), or nil."
   def group_for(%View{} = v, wave, unit) do

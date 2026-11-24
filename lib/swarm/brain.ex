@@ -159,6 +159,7 @@ defmodule Swarm.Brain do
   # `@look_timeout` ticks for it. A look from seven tiles short was "done" by a scout passing 13
   # tiles from their base that had seen none of it: "0 fighters", and a wave of 15 left into 41.
   @look_at 5
+  @look_after_kills 8
   @look_fresh 60
   @look_sight 3
   @look_timeout 40
@@ -369,6 +370,7 @@ defmodule Swarm.Brain do
   # stand a dozen and more to a tile by their drop-offs, mostly with no Soldier near.
   @hunt_clear 12
   @hunt_escort 4
+  @hunt_known 0.5
   # A base of a boom's is open to an attack with this many finished towers of theirs or fewer
   # within `@open_cover` of it (a tower reaches 5; two more for where ours stand to hit it), and it
   # is gone for with this many attackers or more.
@@ -379,6 +381,7 @@ defmodule Swarm.Brain do
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
   @staging_distance 9
+  @staging_clear 3
   @siege_wait 60
 
   # How far from the Command Center a tower goes: a tower hits 5 tiles out, so from here it covers
@@ -1440,7 +1443,8 @@ defmodule Swarm.Brain do
     want? =
       cond do
         owner == nil or target == nil or v.cc == nil -> false
-        looking?(look, owner) or fresh?(look, owner, v) -> false
+        looking?(look, owner) -> false
+        fresh?(look, owner, v) and not stale_by_raid?(look, memory, v) -> false
         # Nobody to send: asked again once there is (the Barracks train scouts).
         not lookers? -> false
         # With a wave out, a scout works in front of it instead (see `Swarm.UnitBrain`).
@@ -1458,6 +1462,16 @@ defmodule Swarm.Brain do
       {look, why, counted}
     end
   end
+
+  # A big raid beaten at home since the last look (`@look_after_kills` of its fighters killed here,
+  # none left in sight, the look done before it was last here): that look's count is of an army
+  # that has since died, and a new one goes now, not when the old one is `@look_fresh` ticks old.
+  # With 43 Soldiers to their 5 after a raid of 74, the count still said 75: the counterattack
+  # waited 41 ticks for the next look and met 35.
+  defp stale_by_raid?(look, %{raid: %{at: at, kills: kills}}, v),
+    do: kills >= @look_after_kills and Roles.raiders(v) == [] and look.done != nil and look.done <= at
+
+  defp stale_by_raid?(_look, _memory, _v), do: false
 
   # Returns {the look, what to log, {player, the strength counted there} or nil}.
   defp settle_look(%{done: nil} = look, v, memory, stand_in) do
@@ -2588,9 +2602,13 @@ defmodule Swarm.Brain do
     from = if v.cc, do: View.pos(v.cc), else: center(v)
     ours = Roles.strength(escort)
     fighters = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] in [owner, nil]))
+    # Only when we know where their army is: the fighters we remember are `@hunt_known` of it or
+    # more. With none of them remembered, every base of theirs looked clear, and 32 Soldiers and
+    # two Trebuchets left for the one their 70 stood by.
+    known? = Roles.strength(fighters) >= @hunt_known * enemy_army(memory, owner)
 
     (v.enemy_buildings ++ v.remembered)
-    |> Enum.filter(&(&1["owner"] == owner and &1["type"] in ["CommandCenter", "ResourceDepot"]))
+    |> Enum.filter(&(known? and &1["owner"] == owner and &1["type"] in ["CommandCenter", "ResourceDepot"]))
     |> Enum.uniq_by(& &1["id"])
     |> Enum.map(fn b ->
       pos = View.pos(b)
@@ -2906,9 +2924,19 @@ defmodule Swarm.Brain do
     %{id: cc["id"], pos: pos, goal: goal, camp: camp, siege_camp: toward(pos, home, @siege_camp_distance)}
   end
 
-  # `@staging_distance` short of the target, on our side of it, kept on the map.
-  defp staging(v, {tx, ty}, {rx, ry}) do
-    {clamp(tx + @staging_distance * sign(rx - tx), v.map_width), clamp(ty + @staging_distance * sign(ry - ty), v.map_height)}
+  # `@staging_distance` short of the target, on our side of it, kept on the map; and from there a
+  # tile at a time back toward where the wave leaves from, until it is out of every known enemy
+  # tower's reach by `@staging_clear`. Nine tiles short of their main base was inside the reach of
+  # three towers of a base they had in front of it, and two Trebuchets walked there to their deaths.
+  defp staging(v, {tx, ty}, {rx, ry} = from) do
+    first = {clamp(tx + @staging_distance * sign(rx - tx), v.map_width), clamp(ty + @staging_distance * sign(ry - ty), v.map_height)}
+    towers = Roles.enemy_towers(v)
+    clear? = fn pos -> not Enum.any?(towers, &(View.dist(View.pos(&1), pos) <= Roles.range(&1) + @staging_clear)) end
+
+    first
+    |> Stream.iterate(fn {x, y} -> {x + sign(rx - x), y + sign(ry - y)} end)
+    |> Enum.take(View.dist(first, from) + 1)
+    |> Enum.find(first, clear?)
   end
 
   defp clamp(n, size), do: n |> max(0) |> min(size - 1)
