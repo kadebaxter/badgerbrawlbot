@@ -1002,11 +1002,11 @@ defmodule Swarm.BrainTest do
     defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum}
     defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 12, 9, owner: 1))
 
-    test "with the wave far off: taken only when the raid is clearly stronger than home (1.25x)" do
+    test "with the wave far off: taken once the raid is as strong as home, an even fight or worse" do
       # Ten soldiers at home (9900); the wave at (45, 45) is too far to make it back in time.
-      # Twelve raiders (11880, 1.2x): a coin flip, not taken. Thirteen (12870, 1.3x): taken.
-      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(12)], wave_memory())
-      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(13)], wave_memory())
+      # Nine raiders (8910): home has the better of it, not taken. Ten (9900, even): taken.
+      assert {%{serum: nil}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(9)], wave_memory())
+      assert {%{serum: :take}, _, _} = plan([units: wave_at_front() ++ at_home() ++ raiders(10)], wave_memory())
     end
 
     test "with the wave close enough to get back: only if home and the wave together can't hold" do

@@ -44,6 +44,33 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(30))
     end
 
+    test "a Soldier on the serum counts for two, theirs or ours, in strength and in the fight's estimate" do
+      plain = unit(901, "Soldier", 14, 14, owner: 1)
+      juiced = Map.put(plain, "effects", ["serum"])
+      assert Swarm.Roles.serum?(juiced) and not Swarm.Roles.serum?(plain)
+      assert Swarm.Roles.strength([juiced]) == 2 * Swarm.Roles.strength([plain])
+      # An Archer isn't boosted, whatever it is marked.
+      refute Swarm.Roles.serum?(Map.put(unit(902, "Archer", 14, 14, owner: 1), "effects", ["serum"]))
+
+      # Eight of ours against six of theirs is ours to win; against six on the serum it isn't.
+      ours = for i <- 1..8, do: unit(200 + i, "Soldier", 12, 12)
+      raid = fn effects -> for i <- 1..6, do: Map.put(unit(900 + i, "Soldier", 14, 12, owner: 1), "effects", effects) end
+      estimate = fn theirs -> View.new(state(units: ours ++ theirs)) |> Swarm.Roles.groups(nil) |> Map.fetch!(:groups) |> Map.values() |> hd() |> Map.fetch!(:all) end
+      assert estimate.(raid.(nil)) > 0
+      assert estimate.(raid.(["serum"])) < 0
+    end
+
+    test "theirs on the serum in our base: we take ours, whatever the odds" do
+      juiced = for i <- 1..30, do: Map.put(unit(900 + i, "Soldier", 9, 9, owner: 1), "effects", ["serum"])
+      plain = for i <- 1..30, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+
+      # Thirty against our ten is nothing ours could turn: not taken. The same thirty on theirs: answered.
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ plain)
+      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ juiced)
+      # Still only with eight Soldiers of our own or more.
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(7) ++ juiced)
+    end
+
     test "while it lasts, every Soldier at home goes at the raid, whatever the estimates say; Archers don't" do
       # Eight raiders in the base, four tiles from our Soldiers at (10, 10); one more of ours far off at the post.
       raid = for i <- 1..8, do: unit(900 + i, "Soldier", 14, 14, owner: 1)

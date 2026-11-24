@@ -68,7 +68,7 @@ defmodule Swarm.Brain do
   # ... a wave this many tiles (ticks) from the raid can be back in time: it counts as help;
   # without one, the raid must be at least this many times what home has.
   @help_eta 15
-  @serum_margin 1.25
+  @serum_margin 1.0
   # A strike at an enemy tower by our base: at least this many fighters (eight soldiers take a tower
   # down in about nine ticks), as strong as the tower plus `@margin` times the strongest player's
   # units by it (`Swarm.Roles.strength/1`, the one measure); given up after `@strike_ticks`, and
@@ -1449,7 +1449,7 @@ defmodule Swarm.Brain do
 
     seen =
       for u <- v.enemy_units, u["type"] != "Worker", into: %{} do
-        {u["id"], u |> Map.take(["id", "owner", "type", "hp", "x", "y"]) |> Map.put("seen", v.tick)}
+        {u["id"], u |> Map.take(["id", "owner", "type", "hp", "x", "y", "effects"]) |> Map.put("seen", v.tick)}
       end
 
     eyes =
@@ -2083,8 +2083,10 @@ defmodule Swarm.Brain do
   #   - with a wave out that can be back within `@help_eta` ticks (soldiers walk a tile a tick):
   #     the raid is stronger than home and the wave together (recalling the wave alone won't do);
   #   - otherwise (no wave, or too far to make it): the raid is at least `@serum_margin` times what
-  #     can meet it at home, not a coin flip. The serum doubles soldiers' speed too, so a far wave
-  #     gets home twice as fast.
+  #     can meet it at home: an even fight or worse. (It was 1.25: taken only once we were clearly
+  #     losing, by when too few Soldiers were left for it to turn anything; 23 Soldiers stood
+  #     through the start of an even fight with it unused, and 5 were left when it qualified.)
+  #     The serum doubles soldiers' speed too, so a far wave gets home twice as fast.
   # `wave` is the wave out before this tick's recall (a recalled wave is still the help coming).
   # Never for the wave's own fights: it should win those anyway.
   defp serum_moment?(v, wave) do
@@ -2106,7 +2108,12 @@ defmodule Swarm.Brain do
     soldiers = Enum.filter(Roles.home(v, wave) ++ if(near?, do: out, else: []), &(&1["type"] == "Soldier"))
     turns_it? = 2 * Roles.strength(soldiers) >= raid
 
-    raiders != [] and raid >= @serum_raid and overrun? and turns_it? and length(View.units_of(v, "Soldier")) >= @serum_soldiers
+    # Or they have taken theirs: raiders on the serum (the server marks each, `Roles.serum?/1`,
+    # and they count double in `raid` above) are answered with ours, whatever the odds.
+    answer? = Enum.any?(raiders, &Roles.serum?/1)
+
+    raiders != [] and length(View.units_of(v, "Soldier")) >= @serum_soldiers and
+      ((raid >= @serum_raid and overrun? and turns_it?) or answer?)
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.

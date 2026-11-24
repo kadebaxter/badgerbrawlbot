@@ -308,7 +308,15 @@ defmodule Swarm.Roles do
   # A unit is worth its cost, in Soldiers (a Soldier is `@soldier`), less as it is hurt. Cost is
   # what the game itself prices them at, and it rates a ranged unit far better than HP x damage
   # per tick did: that made an Archer a third of a Soldier, and a pack of them shreds everything.
-  defp strength_of(u, _me), do: @soldier * Map.get(@cost, u["type"], 100) / 100 * hp(u) / stats(u).hp
+  # A Soldier on the serum (`serum?/1`) hits twice as hard: it counts for two, theirs or ours.
+  defp strength_of(u, _me),
+    do: @soldier * Map.get(@cost, u["type"], 100) / 100 * hp(u) / stats(u).hp * if(serum?(u), do: 2, else: 1)
+
+  @doc """
+  Whether a unit is a Soldier on the serum right now: the server marks each one (`effects`), ours
+  and the enemy's we can see. Double damage and speed for 30 ticks.
+  """
+  def serum?(u), do: u["type"] == "Soldier" and "serum" in (u["effects"] || [])
 
   @doc """
   Enemies near the Command Center: where the closest one is, and how many fighters (not
@@ -1129,7 +1137,9 @@ defmodule Swarm.Roles do
         _ -> if s.range == 1, do: 0, else: 1
       end
 
-    %{hp: hp(u), armor: s.armor + armor, damage: s.damage + weapons, cooldown: s.cooldown, delay: delay, order: order, value: strength_of(u, me) / max(1, hp(u))}
+    # On the serum it hits twice as hard (`serum?/1`): the fight is played out with that.
+    damage = (s.damage + weapons) * if(serum?(u), do: 2, else: 1)
+    %{hp: hp(u), armor: s.armor + armor, damage: damage, cooldown: s.cooldown, delay: delay, order: order, value: strength_of(u, me) / max(1, hp(u))}
   end
 
   defp center(spots) do

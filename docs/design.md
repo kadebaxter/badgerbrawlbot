@@ -385,8 +385,12 @@ wave that close, the raid is at least 1.25× everything at home, wherever it sta
 and not just because home's fighters are across the base). Never for the wave's own fights
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
-Only when it turns the fight: our Soldiers alone, counted twice (the serum doubles them), must at
-least match the raid. And while it lasts, every Soldier at home attack-moves at the nearest raider,
+It is taken at even odds or worse (the raid at least as strong as home; it was 1.25 times, by
+when too few Soldiers were left for it to matter), and only when it turns the fight: our Soldiers
+alone, counted twice (the serum doubles them), must at least match the raid. A Soldier on the
+serum, theirs or ours (the server marks each, `Swarm.Roles.serum?/1`), counts for two in every
+strength comparison and hits twice as hard in the fight's estimate. Raiders on theirs in our
+base are answered with ours, whatever the odds. And while it lasts, every Soldier at home attack-moves at the nearest raider,
 near the fight or not, whatever the estimates say (`strategy.serum_on`): they don't know it hits
 twice as hard, and juiced up at the rally point is the serum wasted.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
