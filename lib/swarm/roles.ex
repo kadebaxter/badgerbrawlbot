@@ -85,6 +85,7 @@ defmodule Swarm.Roles do
   # ten times in twenty ticks, 37 of ours walking to and fro in front of 72 with the serum on.
   @back_in 0.3
   @inside 3
+  @sideways 4
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
   # Trebuchet can't hit anything closer than `min_range`.
@@ -499,15 +500,15 @@ defmodule Swarm.Roles do
   @doc """
   Where to take cover from `from`: next to our finished Guard Tower closest to it, on the Command
   Center's side of the tower. With `away_from` (an enemy's position), only towers on our side of
-  it (closer to `from` than to the enemy), so the way there doesn't go past it. The Command Center
-  with no such tower; nil without one.
+  it (closer to `from` than to the enemy, or farther by `slack` tiles at most), so the way there
+  doesn't go past it. The Command Center with no such tower; nil without one.
   """
-  def shelter(%View{} = v, from, away_from \\ nil) do
+  def shelter(%View{} = v, from, away_from \\ nil, slack \\ 0) do
     towers =
       for t <- View.buildings_of(v, "GuardTower"),
           t["completed"],
           pos = View.pos(t),
-          away_from == nil or View.dist(pos, from) < View.dist(pos, away_from),
+          away_from == nil or View.dist(pos, from) < View.dist(pos, away_from) + slack,
           do: pos
 
     case {towers, v.cc} do
@@ -1122,8 +1123,11 @@ defmodule Swarm.Roles do
   end
 
   # By our tower nearest the gather spot on our side, if it is out of the group's reach; else nil.
+  # A tower off to the side counts (`@sideways`): with only towers strictly nearer us than them,
+  # 29 of ours ran for the home tower 20 tiles off past four of their own base's six tiles away,
+  # and 21 were cut down on the way.
   defp fallback(v, g, gather, edge) do
-    tower = if v.cc && Enum.any?(our_towers(v)), do: shelter(v, gather, edge)
+    tower = if v.cc && Enum.any?(our_towers(v)), do: shelter(v, gather, edge, @sideways)
     if tower && clear_of?(g, tower), do: tower
   end
 

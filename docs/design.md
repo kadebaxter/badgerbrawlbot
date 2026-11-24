@@ -761,6 +761,11 @@ within reach of a finished Guard Tower of ours, or within 6 tiles of a Command C
 with none of that left, any ore as before. The army floor goes up to 80 Soldiers' worth there and
 the Barracks that come first to ten.
 
+**A wave against the scoreboard.** With two or more opponents in, the army a wave is weighed
+against is at least theirs by the scoreboard, whatever a scout saw at their base: their army is
+often out. And a fight we would lose is fallen back from to our tower nearest us, one up to 4
+tiles nearer them than us included, not only those strictly on our side.
+
 **No army by the scoreboard.** An opponent whose score shows 1,500 ore or less alive outside the
 buildings we know of has no army: a wave of eight or more may leave at them without a look, and
 their army counts for that much at most, whatever we counted last.

@@ -182,6 +182,15 @@ defmodule Swarm.ReadsTest do
       refute "Barracks" in built.(commands)
     end
 
+    test "a wave is weighed against their army by the scoreboard, whatever the scout saw at their base" do
+      # A look just now that counted no fighter; fifteen attackers of ours.
+      memory = looked(Brain.new_memory(), 1, 250)
+      # 4,000 ore alive: forty Soldiers' worth may be out somewhere. No wave.
+      assert {%{wave: nil}, _, _} = Brain.plan(three([units: soldiers(22)], 4000), memory, terrain())
+      # 600 alive: nothing to speak of. It goes.
+      assert {%{wave: %{members: [_ | _]}}, _, _} = Brain.plan(three([units: soldiers(22)], 600), memory, terrain())
+    end
+
     test "never more than forty Soldiers' worth, whatever we count of them" do
       barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
       soldier = Swarm.Roles.strength([%{"type" => "Soldier"}])

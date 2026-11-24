@@ -2373,6 +2373,15 @@ defmodule Swarm.Brain do
 
     ours = Roles.strength(staged ++ siege)
     theirs = enemy_strength(v, memory, owner)
+    # With two or more opponents in, their army counts for at least what the scoreboard says
+    # (`army_by_score/2`), whatever a scout saw at their base: a house bot's army is often out. A
+    # look at an empty base sent 14, then 20, at "0 known"; they met 33 Soldiers' worth, were
+    # caught running home, and 8 were left against two opponents at tick 318.
+    theirs =
+      if owner != nil and map_size(v.start_owner) >= 2,
+        do: theirs - enemy_army(memory, owner) + max(enemy_army(memory, owner), army_by_score(v, owner)),
+        else: theirs
+
     # An army counted lately (`army_seen/3`) is something known, in sight now or not.
     scouted? = memory.enemies != %{} or v.enemy_buildings != [] or v.remembered != [] or theirs > 0
 
@@ -2384,7 +2393,7 @@ defmodule Swarm.Brain do
     alive = owner && unknown_alive(v, owner)
     no_army? = alive != nil and alive <= @no_army_ore
     left = if no_army?, do: alive * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
-    theirs = if no_army?, do: theirs - enemy_army(memory, owner) + min(enemy_army(memory, owner), left), else: theirs
+    theirs = if no_army?, do: enemy_strength(v, memory, owner) - enemy_army(memory, owner) + min(enemy_army(memory, owner), left), else: theirs
 
     early? = early_strike?(v, memory, owner, staged, ours, theirs)
 

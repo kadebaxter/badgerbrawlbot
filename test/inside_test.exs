@@ -67,4 +67,17 @@ defmodule Swarm.InsideTest do
       assert {:no_change, _} = UnitBrain.decide(101, field_state(2), @defend)
     end
   end
+
+  describe "falling back from a fight we'd lose" do
+    test "to our tower nearest us, one off to the side included, not the home one far behind" do
+      # Ours at (48, 39) with theirs six tiles north; a base tower of ours six tiles west, as far from
+      # them as from us, and the home tower fourteen tiles south.
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 48, 33, owner: 1)
+      ours = for i <- 1..4, do: unit(200 + i, "Soldier", 48, 39)
+      v = View.new(state(units: ours ++ raid, buildings: [building(50, "GuardTower", 42, 39), building(51, "GuardTower", 48, 53)]))
+      g = Roles.group_for(v, nil, hd(ours))
+      assert Roles.away?(g)
+      assert View.dist(g.fallback, {42, 39}) <= 1
+    end
+  end
 end
