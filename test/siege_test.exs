@@ -1,80 +1,16 @@
-defmodule Swarm.PunishSiegeTest do
+defmodule Swarm.SiegeTest do
   @moduledoc """
-  An opponent mining far from its start with few fighters is hit early, at its workers and clear
-  of its towers; and Trebuchets out with a wave shell the towers by the target, by name, while the
-  rest of the wave holds.
+  Trebuchets out with a wave shell the towers by the target, by name, while the rest of the wave
+  holds; and how many of them we keep.
   """
   use ExUnit.Case, async: true
   import Swarm.Test.GameState
   alias Swarm.{Brain, UnitBrain, View}
 
-  # Us at (7, 7), the enemy started at (56, 56) and has a depot in the middle, 24 tiles from there.
-  @depot building(700, "ResourceDepot", 32, 32, 1)
-  @home_depot building(701, "ResourceDepot", 52, 52, 1)
-
   defp plan(opts, memory \\ Brain.new_memory()),
     do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
 
-  defp enemies(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 33, 33, owner: 1))
   defp decide(unit, v, strategy), do: elem(UnitBrain.decide(unit["id"], v, strategy), 0)
-
-  describe "a base out in the open" do
-    test "the wave leaves with eight attackers, for that drop-off, towers or not" do
-      tower = building(702, "GuardTower", 34, 30, 1)
-      # 16 soldiers: 7 guards, 9 attackers. Without the exposed base it waits for 12.
-      {%{wave: nil}, _, _} = plan(units: soldiers(16), buildings: [@home_depot, tower])
-
-      {strategy, _, _} = plan(units: soldiers(16), buildings: [@depot, tower])
-      assert %{wave: %{punish: true, members: members}, target: {32, 32}} = strategy
-      assert length(members) == 9
-      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_launched and text =~ "out in the open" end)
-    end
-
-    test "not against more fighters than 1.2 of them can take" do
-      {_, _, memory} = plan(units: soldiers(16) ++ enemies(8), buildings: [@depot], tick: 99)
-      # Eight remembered soldiers: nine attackers aren't 1.2 times that.
-      assert {%{wave: nil}, _, _} = plan([units: soldiers(16), buildings: [@depot]], memory)
-    end
-
-    test "out there, their towers don't call it home; their fighters do" do
-      wave = %{id: 1, members: Enum.to_list(201..208), owner: 1, staging: nil, released: true, at: 90, punish: true}
-      out = for i <- 1..8, do: unit(200 + i, "Soldier", 27, 27)
-      towers = for i <- 0..2, do: building(710 + i, "GuardTower", 32 + i, 30, 1)
-      memory = %{Brain.new_memory() | wave: wave, next_wave: 2}
-
-      assert {%{wave: %{punish: true}}, _, _} = plan([units: out, buildings: [@depot | towers]], memory)
-      # The same wave, not punishing: three towers (and nothing else) are more than it.
-      assert {%{wave: nil}, _, _} = plan([units: out, buildings: [@depot | towers]], %{memory | wave: %{wave | punish: false}})
-
-      near = for i <- 1..9, do: unit(900 + i, "Soldier", 30, 30, owner: 1)
-      assert {%{wave: nil}, _, _} = plan([units: out ++ near, buildings: [@depot | towers]], memory)
-    end
-  end
-
-  describe "a punish wave member" do
-    @tower building(702, "GuardTower", 34, 30, 1)
-    @punish %{mode: :attack, target: {32, 32}, rally: {10, 10}, post: {9, 9}, threat: nil,
-              wave: %{id: 1, members: [201], released: true, staging: nil, punish: true}}
-
-    test "goes for a worker no tower covers" do
-      worker = unit(950, "Worker", 22, 24, owner: 1)
-      v = View.new(state(units: [unit(201, "Soldier", 20, 20), worker], buildings: [@tower]))
-      assert %{"type" => "Attack", "targetId" => 950} = decide(unit(201, "Soldier", 20, 20), v, @punish)
-    end
-
-    test "not one under a tower: it holds short of a target in a tower's reach" do
-      worker = unit(950, "Worker", 31, 31, owner: 1)
-      v = View.new(state(units: [unit(201, "Soldier", 18, 18), worker], buildings: [@tower]))
-      assert %{"type" => "Move", "x" => x, "y" => y} = decide(unit(201, "Soldier", 18, 18), v, @punish)
-      assert View.dist({x, y}, {32, 32}) == 8
-    end
-
-    test "in a tower's reach, steps out of it" do
-      v = View.new(state(units: [unit(201, "Soldier", 30, 30)], buildings: [@tower]))
-      assert %{"type" => "Move", "x" => x, "y" => y} = decide(unit(201, "Soldier", 30, 30), v, @punish)
-      assert View.dist({x, y}, {34, 30}) > 5
-    end
-  end
 
   describe "Trebuchets out with a wave" do
     @towers [building(710, "GuardTower", 52, 50, 1), building(711, "GuardTower", 54, 48, 1)]

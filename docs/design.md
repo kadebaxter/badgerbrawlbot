@@ -380,6 +380,9 @@ wave that close, the raid is at least 1.25× everything at home, wherever it sta
 and not just because home's fighters are across the base). Never for the wave's own fights
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
+Only when it turns the fight: with our Soldiers counted twice (the serum doubles them) we must at
+least match the raid. And while it lasts, Soldiers at home go in on a raid whatever the fight's
+estimate says (`strategy.serum_on`): the estimate doesn't know they hit twice as hard.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
@@ -509,6 +512,8 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    ore it will serve, up to 5 (a co-op in about 5
    ticks, by the miners it saves the walk), and the first Barracks by the 3 closest workers. Siege is only for the waves (at home a 350-ore Trebuchet is
    a fifth as strong as the 3.5 Soldiers it costs): at 25 fighters, with the build order done,
+   past the extras, another Barracks goes up whenever we are rich and every one we have is busy
+   (two or more queued, none going up), up to 10;
    SiegeEngineering is researched and a SiegeWorkshop built, which keeps 2 Trebuchets, and one
    for every 2 finished towers of the opponent with the most we know of, up to 6. They wait
    at the rally point and, 2 or more at a time, go out with a wave. A wave with siege holds 9 tiles short of
@@ -521,11 +526,7 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
 2. **Roles and waves (done):** the leader launches a wave once 15 attackers wait at the rally
-   point (18 for the first in a big game; 8, at 1.2 times their fighters we know of, towers not
-   counted, at an opponent with an **exposed base**: a Command Center or Resource Depot more than
-   15 tiles from where they started. Such a punish wave goes for that drop-off; its members go
-   for workers no tower covers, step out of any tower's reach, hold 8 tiles short of a target
-   that is in one, and are called back as outmatched by their fighters only; 10, before the tower square, for an early strike on a
+   point (18 for the first in a big game; 10, before the tower square, for an early strike on a
    neighbor within 30 tiles that a scout has just looked at and that we outmatch 2 to 1), and never with fewer than 12 (15 in a big game),
    counterattacks included. While it is out, attackers trained later follow it in batches of 5 or more and become
    part of it, so it goes out and comes back as one. The members are kept in the replicated
