@@ -259,6 +259,11 @@ nearest raid's, if it is worth 2 Soldiers or more), and for each:
 - the gather spot, 2 tiles past its reach (and its towers'), on the side ours come from;
 - the fallback, by our tower on our side, out of its reach.
 
+A fight we were going into last tick is seen through: it stays "go" for everyone while `all` is
+no worse than -0.5 (the leader remembers which, `View.going_in`). The estimate swings every tick
+with who happens to be near; a call that swung with it (go in, stay out, gather: seven times in
+twelve ticks) had 25 of ours lose to 20, a few fighting at a time while the rest walked in and out.
+
 Each fighter then decides for itself, by the same rule on the same numbers (`Swarm.Roles.verdict/2`):
 go in once those ready come out at least even; while all of us would but those ready wouldn't,
 gather; otherwise stay out of its reach. One already in (attacking one of them) stays in until
@@ -528,16 +533,21 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    for 90 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
-   **The opening:** the depot by the home ore is the first thing built, at tick 0, by three
+   **The opening** (two to five players): depot, Barracks, TechLab, a second and third Barracks,
+   then the first tower, a fourth Barracks and the second tower. The depot by the home ore is the
+   first thing built, at tick 0, by three
    workers (it used to wait for 9 workers, then for the army floor and the reserve: up at tick 199
    once). No Guard Tower before tick 100; then towers build up to 8 as we can pay (the bots that
    tower up first mostly lose, the ones that win end with 7 to 10). Another Barracks goes up
    whenever every one is busy and we can pay for it, rich or not, up to 14. Workers: one for every
    150 ore we can get at, up to 80. Home counts as short of ore under 150 for each worker.
    **Base Command Centers:** one more Command Center than we have at 16, 30 and 50 workers
-   (with a Barracks up, one going up at a time, three builders; it has its own order, so the rest
-   of the building carries on while they walk, its 400 held in the bank until they break ground;
-   short of the 400, only the army above the floor waits for it), by the best field worth one that
+   (with a Barracks up, 12 fighters or more and their army as last counted not bigger than ours;
+   one going up at a time, three builders; it has its own order, so the rest of the building
+   carries on while they walk, its 400 held in the bank until they break ground; short of the 400
+   every Barracks goes on training one at a time, only the second place in each queue waits), by
+   the safest field worth one (how far from the nearest living enemy's start or known building, or
+   twice how far from the middle of the map if less, up to 30; equally safe, the nearer us) that
    one of ours has seen in the last 45 ticks (the survey scout goes to look at the best candidate,
    and back every 20 ticks): 2,500
    ore or more, no drop-off of ours by it, at least 14 tiles from every living enemy's start and

@@ -91,7 +91,8 @@ defmodule Swarm.SiegeTest do
       built = [
         building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(5, "GuardTower", 12, 12),
         building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 14, 9),
-        building(9, "CommandCenter", 40, 4), building(10, "SiegeWorkshop", 3, 12)
+        building(9, "CommandCenter", 40, 4), building(10, "SiegeWorkshop", 3, 12),
+        building(11, "Barracks", 1, 10), building(12, "Barracks", 10, 1)
       ]
 
       enemy = for i <- 1..towers, do: building(800 + i, "GuardTower", 44 + rem(i, 4) * 3, 50 + div(i, 4) * 3, 1)

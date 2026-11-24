@@ -69,7 +69,10 @@ defmodule Swarm.View do
     # Nothing left for us to mine (set by `Swarm.Brain.plan/3`, see `nothing_to_mine/2` there):
     # `:mined_out` (the map, for certain), `:stalled` (we aren't getting any: workers go looking),
     # `:nowhere` (stalled, and they have looked everywhere we may go) or false.
-    no_ore: false
+    no_ore: false,
+    # The enemy fighters whose group's fight we were going into last tick (set by
+    # `Swarm.Brain.see/2`): a fight we are in is seen through (`Swarm.Roles.verdict/2`).
+    going_in: MapSet.new()
   ]
 
   @type t :: %__MODULE__{}

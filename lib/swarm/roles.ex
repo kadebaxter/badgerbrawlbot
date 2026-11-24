@@ -71,6 +71,11 @@ defmodule Swarm.Roles do
   # Go in when we come out at least even (`Swarm.Fight.advantage/2` at 0 or better), as before;
   # once in, stay until it drops below minus this. The same measure both ways, with room between.
   @edge 0.15
+  # A fight we were going into last tick is still on while all of ours in it come out no worse
+  # than this (`verdict/2`): the estimate swings every tick with who happens to be near, and a call
+  # that swung with it (go in, stay out, gather: seven times in twelve ticks) had twenty-five of
+  # ours lose to twenty, a few fighting at a time while the rest walked in and out.
+  @stick 0.5
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
   # Trebuchet can't hit anything closer than `min_range`.
@@ -901,8 +906,10 @@ defmodule Swarm.Roles do
   @doc """
   What `unit` does about the fight of group `g`, from the group's estimate (`groups/2`):
 
-  - `:go`: those ready come out at least even (`ready` 0 or more); or it is already in (attacking
-    one of them) and it hasn't turned against us (`ready` not below `-@edge`)
+  - `:go`: those ready come out at least even (`ready` 0 or more); or we were going in last tick
+    and all of ours in it come out no worse than `-@stick` (a fight begun is seen through, by
+    everyone); or it is already in (attacking one of them) and it hasn't turned against us
+    (`ready` not below `-@edge`)
   - `:gather`: all of ours would, gathered first (`all` 0 or more; not below `-@edge` for one
     already at, or on its way to, the gather spot)
   - `:away`: it would beat us: stay out of its reach
@@ -913,6 +920,7 @@ defmodule Swarm.Roles do
   def verdict(g, unit) do
     cond do
       g.ready >= 0 -> :go
+      still_on?(g) -> :go
       committed?(g, unit) and g.ready >= -@edge -> :go
       g.all >= 0 -> :gather
       gathering?(g, unit) and g.all >= -@edge -> :gather
@@ -928,19 +936,24 @@ defmodule Swarm.Roles do
   def call(g) do
     cond do
       g.ready >= 0 -> :go
+      still_on?(g) -> :go
       g.all >= 0 -> :gather
       true -> :away
     end
   end
 
+  # We were going into this fight last tick and it hasn't clearly turned against all of ours in it
+  # (`@stick`): everyone carries on, together.
+  defp still_on?(g), do: Map.get(g, :was_in, false) and g.all >= -@stick
+
   @doc "Whether group `g` is worth a line in the decision log: some of ours are in it, and it is a real force."
   def notable?(g), do: g.size > 0 and g.worth >= @raid_worth * @soldier
 
   @doc "Whether those ready for group `g`'s fight win it: they go in (`verdict/2`)."
-  def going_in?(g), do: g.ready >= 0
+  def going_in?(g), do: call(g) == :go
 
   @doc "Whether group `g` would beat us, gathered or not: nobody is going in."
-  def away?(g), do: g.all < 0 and g.ready < 0
+  def away?(g), do: call(g) == :away
 
   @doc "The group whose fight `unit` (ours) is in (`groups/2`), or nil."
   def group_for(%View{} = v, wave, unit) do
@@ -1060,10 +1073,13 @@ defmodule Swarm.Roles do
     all = advantage(v, g, ours, ours_towers, their_towers)
     ready_adv = if length(ready) == length(ours), do: all, else: advantage(v, g, ready, ours_towers, their_towers)
 
+    # Whether we were going into this fight last tick: any of its fighters was in a group we were.
+    was_in = Enum.any?(g.ids, &MapSet.member?(v.going_in, &1))
+
     # The members themselves stay out: this goes to every unit, and the view carries them already.
     g
     |> Map.delete(:members)
-    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge)})
+    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge), was_in: was_in})
   end
 
   # By our tower nearest the gather spot on our side, if it is out of the group's reach; else nil.

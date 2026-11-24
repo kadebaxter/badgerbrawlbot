@@ -29,11 +29,21 @@ defmodule Swarm.BrainTest do
       assert %{type: "ResourceDepot"} = memory.pending
     end
 
-    test "no Guard Tower before tick 100: the rest of the build order goes on" do
-      built = [@depot, building(2, "Barracks", 11, 7)]
-      builds = fn tick -> for %{"type" => "Build", "buildingType" => t} <- elem(plan(units: workers(13) ++ soldiers(8), buildings: built, ore: 400, tick: tick), 1), do: t end
-      assert builds.(60) == ["TechLab"]
-      assert builds.(100) == ["GuardTower"]
+    test "three Barracks and the TechLab before the first tower; no Guard Tower before tick 100" do
+      builds = fn buildings, workers, tick ->
+        for %{"type" => "Build", "buildingType" => t} <- elem(plan(units: workers(workers) ++ soldiers(8), buildings: buildings, ore: 400, tick: tick), 1), do: t
+      end
+
+      one = [@depot, building(2, "Barracks", 11, 7)]
+      assert builds.(one, 13, 100) == ["TechLab"]
+      lab = one ++ [building(6, "TechLab", 7, 12)]
+      assert builds.(lab, 15, 100) == ["Barracks"]
+      assert builds.(lab ++ [building(7, "Barracks", 12, 3)], 19, 100) == ["Barracks"]
+
+      three = lab ++ [building(7, "Barracks", 12, 3), building(8, "Barracks", 1, 10)]
+      assert builds.(three, 21, 100) == ["GuardTower"]
+      # Before tick 100 the tower waits (and the fourth Barracks for its 25 workers).
+      assert builds.(three, 21, 60) == []
     end
   end
 
@@ -83,8 +93,12 @@ defmodule Swarm.BrainTest do
   end
 
   test "puts the Guard Tower between our base and the enemy" do
-    buildings = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)]
-    {_, [cmd | _], _} = plan(units: workers(11) ++ soldiers(7), buildings: buildings, ore: 225)
+    buildings = [
+      building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(6, "TechLab", 7, 12),
+      building(7, "Barracks", 12, 3), building(8, "Barracks", 1, 10)
+    ]
+
+    {_, [cmd | _], _} = plan(units: workers(21) ++ soldiers(8), buildings: buildings, ore: 225)
     assert %{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} = cmd
     assert View.dist({x, y}, {56, 56}) < View.dist({7, 7}, {56, 56})
   end
@@ -876,7 +890,9 @@ defmodule Swarm.BrainTest do
         building(4, "GuardTower", 12, 12),
         building(5, "TechLab", 7, 12),
         building(6, "Barracks", 12, 3),
-        building(7, "GuardTower", 14, 9)
+        building(7, "GuardTower", 14, 9),
+        building(11, "Barracks", 1, 10),
+        building(12, "Barracks", 10, 1)
       ]
     end
 
@@ -1372,15 +1388,17 @@ defmodule Swarm.BrainTest do
         building(7, "Barracks", 12, 3),
         building(8, "GuardTower", 14, 9),
         building(9, "ResourceDepot", 3, 3),
+        building(11, "Barracks", 1, 10),
+        building(12, "Barracks", 10, 1),
         backup_cc()
       ]
     end
 
     defp builds(commands), do: for(%{"type" => "Build"} = c <- commands, do: c)
 
-    test "builds a third Barracks with two workers once the build order is done" do
+    test "builds a third tower with two workers once the build order is done" do
       {_, commands, _} = plan(units: workers(20), buildings: built(), ore: 1000)
-      assert [%{"buildingType" => "Barracks", "unitIds" => [_, _]}] = builds(commands)
+      assert [%{"buildingType" => "GuardTower", "unitIds" => [_, _]}] = builds(commands)
     end
 
     test "builds nothing extra without the ore" do
@@ -1390,7 +1408,7 @@ defmodule Swarm.BrainTest do
 
     test "doesn't wait for workers in the build order" do
       {_, commands, _} = plan(units: workers(8), buildings: [building(2, "Barracks", 11, 7), @depot], ore: 1000)
-      assert [%{"buildingType" => "GuardTower"}] = builds(commands)
+      assert [%{"buildingType" => "TechLab"}] = builds(commands)
     end
 
     test "the SiegeWorkshop waits for an army of twenty-five" do
