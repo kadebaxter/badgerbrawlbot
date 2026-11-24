@@ -17,42 +17,62 @@ defmodule Swarm.BrainTest do
     assert [%{"type" => "Produce", "unitType" => "Worker", "buildingId" => 1}] = commands
   end
 
+  # The depot by the home ore, which comes first of all (see "the opening").
+  @depot building(3, "ResourceDepot", 4, 9)
+
+  describe "the opening" do
+    test "the depot by the home ore is the first thing built, at tick 0, by three workers" do
+      idle = for i <- 1..5, do: unit(100 + i, "Worker", 8, 8)
+      {_, commands, memory} = plan(units: idle, ore: 500, tick: 0)
+      assert [%{"type" => "Build", "buildingType" => "ResourceDepot", "unitIds" => [_, _, _], "x" => x, "y" => y}] = for(%{"type" => "Build"} = c <- commands, do: c)
+      assert View.dist({x, y}, {2, 7}) == 2
+      assert %{type: "ResourceDepot"} = memory.pending
+    end
+
+    test "no Guard Tower before tick 100: the rest of the build order goes on" do
+      built = [@depot, building(2, "Barracks", 11, 7)]
+      builds = fn tick -> for %{"type" => "Build", "buildingType" => t} <- elem(plan(units: workers(13) ++ soldiers(8), buildings: built, ore: 400, tick: tick), 1), do: t end
+      assert builds.(60) == ["TechLab"]
+      assert builds.(100) == ["GuardTower"]
+    end
+  end
+
   test "builds a Barracks with seven workers and 150 ore, and waits for it" do
-    {_, commands, memory} = plan(units: workers(7), ore: 150, tick: 100)
+    {_, commands, memory} = plan(units: workers(7), buildings: [@depot], ore: 150, tick: 100)
     # The first Barracks gets three builders.
     assert [%{"type" => "Build", "buildingType" => "Barracks", "unitIds" => [builder, _, _]}] = commands
     assert %{type: "Barracks", builder: ^builder, at: 100} = memory.pending
 
     # Not again while the worker walks there, and its 150 ore stays set aside.
-    {_, commands, _} = plan([units: workers(7), ore: 150, tick: 110], memory)
+    {_, commands, _} = plan([units: workers(7), buildings: [@depot], ore: 150, tick: 110], memory)
     assert commands == []
   end
 
   test "saves up for the next building instead of training workers" do
-    assert {_, [], _} = plan(units: workers(7), ore: 100)
+    assert {_, [], _} = plan(units: workers(7), buildings: [@depot], ore: 100)
   end
 
   test "keeps training workers past the Barracks, up to twenty" do
     barracks = building(2, "Barracks", 11, 7)
-    {_, commands, _} = plan(units: workers(8), buildings: [barracks], ore: 50)
+    {_, commands, _} = plan(units: workers(8), buildings: [barracks, @depot], ore: 50)
     assert [%{"type" => "Produce", "unitType" => "Worker"}] = commands
 
-    {_, commands, _} = plan(units: workers(20), buildings: [barracks], ore: 50)
+    {_, commands, _} = plan(units: workers(20), buildings: [barracks, @depot], ore: 50)
     refute Enum.any?(commands, &(&1["unitType"] == "Worker"))
   end
 
   test "orders the building again as soon as the builder reports a failure" do
-    {_, _, memory} = plan(units: workers(7), ore: 150, tick: 100)
+    {_, _, memory} = plan(units: workers(7), buildings: [@depot], ore: 150, tick: 100)
     failed = %{"tick" => 104, "kind" => "CommandFailed", "entityId" => memory.pending.builder}
 
-    v = View.new(Map.put(state(units: workers(7), ore: 150, tick: 105), "events", [failed]))
+    v = View.new(Map.put(state(units: workers(7), buildings: [@depot], ore: 150, tick: 105), "events", [failed]))
     assert {_, [%{"type" => "Build", "buildingType" => "Barracks"}], _} = Brain.plan(v, memory, terrain())
   end
 
   test "forgets the pending building once it is up" do
-    {_, _, memory} = plan(units: workers(7), ore: 150, tick: 100)
+    {_, _, memory} = plan(units: workers(7), buildings: [@depot], ore: 150, tick: 100)
     barracks = Map.put(building(2, "Barracks", 11, 7), "completed", false)
-    assert {_, _, %{pending: nil}} = plan([units: workers(7), buildings: [barracks], tick: 120], memory)
+    assert {_, _, %{pending: nil}} = plan([units: workers(7), buildings: [barracks, @depot], tick: 120], memory)
   end
 
   test "puts the Resource Depot by the ore, on our side of it" do
@@ -149,7 +169,7 @@ defmodule Swarm.BrainTest do
   end
 
   test "the 500 ore we start with isn't rich" do
-    {_, commands, _} = plan(units: workers(5), ore: 500)
+    {_, commands, _} = plan(units: workers(5), buildings: [@depot], ore: 500)
     refute Enum.any?(commands, &(&1["type"] == "Build"))
   end
 
@@ -164,7 +184,7 @@ defmodule Swarm.BrainTest do
   test "no new Resource Depot while there is enough ore close by" do
     home = for {id, x, y} <- [{4, 2, 7}, {5, 2, 9}, {6, 3, 5}], do: %{"id" => id, "x" => x, "y" => y, "remaining" => 900}
     far = [%{"id" => 30, "x" => 30, "y" => 30, "remaining" => 900}]
-    {_, commands, _} = plan(units: workers(5), deposits: home ++ far, ore: 100)
+    {_, commands, _} = plan(units: workers(5), buildings: [@depot], deposits: home ++ far, ore: 100)
     refute Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))
   end
 
@@ -783,7 +803,7 @@ defmodule Swarm.BrainTest do
       # Ten workers by the Command Center, short of ore at home: a depot by the closest other ore.
       deposits = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 100}, %{"id" => 60, "x" => 20, "y" => 20, "remaining" => 900}]
       memory = %{Brain.new_memory() | ore_short_since: 50}
-      {_, commands, _} = plan([units: workers(10), deposits: deposits, ore: 200, tick: 100], memory)
+      {_, commands, _} = plan([units: workers(10), buildings: [@depot], deposits: deposits, ore: 200, tick: 100], memory)
       assert %{"unitIds" => [_]} = build_of(commands, "ResourceDepot")
     end
 
@@ -1368,8 +1388,8 @@ defmodule Swarm.BrainTest do
       assert builds(commands) == []
     end
 
-    test "doesn't wait for workers in the build order, except for depots" do
-      {_, commands, _} = plan(units: workers(8), buildings: [building(2, "Barracks", 11, 7)], ore: 1000)
+    test "doesn't wait for workers in the build order" do
+      {_, commands, _} = plan(units: workers(8), buildings: [building(2, "Barracks", 11, 7), @depot], ore: 1000)
       assert [%{"buildingType" => "GuardTower"}] = builds(commands)
     end
 

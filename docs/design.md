@@ -380,9 +380,10 @@ wave that close, the raid is at least 1.25× everything at home, wherever it sta
 and not just because home's fighters are across the base). Never for the wave's own fights
 (it should win those anyway); doubling Soldiers' speed also brings a recalled wave home sooner. That tick every Soldier sends its order
 again, the game loop takes the serum, and for the 30 ticks every command goes with the key.
-Only when it turns the fight: with our Soldiers counted twice (the serum doubles them) we must at
-least match the raid. And while it lasts, Soldiers at home go in on a raid whatever the fight's
-estimate says (`strategy.serum_on`): the estimate doesn't know they hit twice as hard.
+Only when it turns the fight: our Soldiers alone, counted twice (the serum doubles them), must at
+least match the raid. And while it lasts, every Soldier at home attack-moves at the nearest raider,
+near the fight or not, whatever the estimates say (`strategy.serum_on`): they don't know it hits
+twice as hard, and juiced up at the rally point is the serum wasted.
 `Swarm.serum/1` (replicated): `:practice` (the default, not in league heats), `:on` or `:off`.
 
 Who fights whom (`Swarm.Roles.target/3`), also the same on every node: enemy fighters come
@@ -525,8 +526,18 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    down, the Trebuchets are gone, or after 200 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
+   **The opening:** the depot by the home ore is the first thing built, at tick 0, by three
+   workers (it used to wait for 9 workers, then for the army floor and the reserve: up at tick 199
+   once). No Guard Tower before tick 100; then towers build up to 8 as we can pay (the bots that
+   tower up first mostly lose, the ones that win end with 7 to 10). Another Barracks goes up
+   whenever every one is busy and we can pay for it, rich or not, up to 14. Workers: one for every
+   150 ore we can get at, up to 80. Home counts as short of ore under 150 for each worker.
    **Base Command Centers:** one more Command Center than we have at 16, 30 and 50 workers
-   (with a Barracks up, one going up at a time, three builders), by the best field worth one: 2,500
+   (with a Barracks up, one going up at a time, three builders; it has its own order, so the rest
+   of the building carries on while they walk, its 400 held in the bank until they break ground;
+   short of the 400, only the army above the floor waits for it), by the best field worth one that
+   one of ours has seen in the last 45 ticks (the survey scout goes to look at the best candidate,
+   and back every 20 ticks): 2,500
    ore or more, no drop-off of ours by it, at least 14 tiles from every living enemy's start and
    every building of theirs we know of, out of their towers' reach and 12 from their fighters we
    remember. It is a base, not the hidden backup (`View.bases`): a drop-off, an outpost with two

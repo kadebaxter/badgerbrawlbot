@@ -19,6 +19,9 @@ defmodule Swarm.BasesTest do
   @field [%{"id" => 30, "x" => 20, "y" => 7, "remaining" => 1000}, %{"id" => 31, "x" => 21, "y" => 7, "remaining" => 1000},
           %{"id" => 32, "x" => 20, "y" => 8, "remaining" => 1000}]
   @home_ore %{"id" => 4, "x" => 2, "y" => 7, "remaining" => 900}
+  # One of ours standing by that field: a base only goes where we have seen the ground lately.
+  @seeing unit(300, "Scout", 18, 8)
+  @home_depot building(3, "ResourceDepot", 4, 9)
 
   # A third player, eliminated, who started at (7, 50), with its ore by (7, 53).
   defp with_fallen(state) do
@@ -29,30 +32,86 @@ defmodule Swarm.BasesTest do
 
   describe "a base Command Center" do
     test "at 16 workers, with a Barracks up, by a field with 2,500 ore or more: three builders, and it is a base" do
-      opts = [buildings: [@barracks], deposits: [@home_ore | @field], ore: 1200]
-      assert {_, commands, _} = plan(state([units: workers(15)] ++ opts))
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field], ore: 1200]
+      assert {_, commands, _} = plan(state([units: [@seeing | workers(15)]] ++ opts))
       assert ccs(commands) == []
 
-      {strategy, commands, memory} = plan(state([units: workers(16)] ++ opts))
+      {strategy, commands, memory} = plan(state([units: [@seeing | workers(16)]] ++ opts))
       assert [%{"unitIds" => [_, _, _], "x" => x, "y" => y}] = ccs(commands)
       assert View.dist({x, y}, {20, 7}) in 2..3
       assert memory.bases == [{x, y}]
+      assert %{site: {^x, ^y}, builders: [_, _, _], at: 100} = memory.base_order
       assert Enum.any?(strategy.why, &match?({:base, _}, &1))
     end
 
+    test "only where we have seen the ground lately: until then the scout goes to look" do
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field], ore: 1200]
+      home_scout = unit(300, "Scout", 9, 9)
+      {strategy, commands, _} = plan(state([units: [home_scout | workers(16)]] ++ opts))
+      assert ccs(commands) == []
+      assert strategy.survey == {20, 7}
+    end
+
+    test "it has its own order: the rest of the building goes on, its 400 held, and nothing is saved from workers or buildings" do
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field]]
+      builds = fn commands -> for %{"type" => "Build", "buildingType" => t} <- commands, do: t end
+      trains = fn commands -> for %{"type" => "Produce", "unitType" => t} <- commands, do: t end
+
+      # Ordered with 1200: the tower (next in the build order) is ordered the same tick.
+      {_, commands, memory} = plan(state([units: [@seeing | workers(16) ++ soldiers(8)], ore: 1200] ++ opts))
+      assert Enum.sort(builds.(commands)) == ["CommandCenter", "GuardTower"]
+
+      # Its builders walking: 400 of the bank is theirs. With 450 (and 100 for workers) nothing else is bought...
+      walking = [@seeing | workers(16) ++ soldiers(8)]
+      {_, commands, memory2} = plan(state([units: walking, ore: 450, tick: 101] ++ opts), %{memory | pending: nil})
+      assert builds.(commands) == [] and memory2.base_order != nil
+      # ...and with 900 the building goes on, no second Command Center.
+      {_, commands, _} = plan(state([units: walking, ore: 900, tick: 101] ++ opts), %{memory | pending: nil})
+      assert builds.(commands) == ["GuardTower"]
+
+      # Not affordable yet: workers and buildings are bought as ever; only the army above the floor waits.
+      {_, commands, memory} = plan(state([units: [@seeing | workers(16) ++ soldiers(8)], ore: 380] ++ opts))
+      assert memory.base_order == nil
+      assert builds.(commands) == ["GuardTower"]
+      assert "Worker" in trains.(commands)
+      refute "Soldier" in trains.(commands)
+    end
+
+    test "given up, with a strike against the site, when its builders are dead or 150 ticks have passed" do
+      order = %{site: {22, 5}, builders: [101, 102, 103], at: 100}
+      memory = %{Brain.new_memory() | base_order: order, bases: [{22, 5}]}
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore]]
+
+      {_, _, kept} = plan(state([units: workers(5), tick: 200] ++ opts), memory)
+      assert kept.base_order == order
+
+      {_, _, late} = plan(state([units: workers(5), tick: 251] ++ opts), memory)
+      assert late.base_order == nil and late.strikes[{22, 5}] == [251]
+
+      {_, _, dead} = plan(state([units: Enum.drop(workers(8), 3), tick: 120] ++ opts), memory)
+      assert dead.base_order == nil
+
+      # Broken ground: done with, no strike.
+      site = %{building(60, "CommandCenter", 22, 5) | "completed" => false}
+      building_it = unit(101, "Worker", 22, 6, activity: "Building", target_id: 60)
+      {_, _, up} = plan(state([units: [building_it | workers(5)], tick: 120, buildings: [@barracks, @home_depot, site], deposits: [@home_ore]]), memory)
+      assert up.base_order == nil and up.strikes == %{}
+    end
+
     test "not without a Barracks, not by a small field, and one at a time" do
-      assert {_, commands, _} = plan(state(units: workers(16), deposits: [@home_ore | @field], ore: 1200))
+      assert {_, commands, _} = plan(state(units: [@seeing | workers(16)], buildings: [@home_depot], deposits: [@home_ore | @field], ore: 1200))
       assert ccs(commands) == []
 
       small = for d <- @field, do: %{d | "remaining" => 800}
-      assert {_, commands, _} = plan(state(units: workers(16), buildings: [@barracks], deposits: [@home_ore | small], ore: 1200))
+      assert {_, commands, _} = plan(state(units: [@seeing | workers(16)], buildings: [@barracks, @home_depot], deposits: [@home_ore | small], ore: 1200))
       assert ccs(commands) == []
 
       # One going up already: the third waits for it, 30 workers or not.
       site = %{building(60, "CommandCenter", 22, 5) | "completed" => false}
       more = for d <- @field, do: %{d | "id" => d["id"] + 10, "y" => d["y"] + 20}
       builder = unit(150, "Worker", 22, 6, activity: "Building", target_id: 60)
-      assert {_, commands, _} = plan(state(units: [builder | workers(30)], buildings: [@barracks, site], deposits: [@home_ore | @field ++ more], ore: 1200))
+      seeing_more = unit(301, "Scout", 20, 26)
+      assert {_, commands, _} = plan(state(units: [builder, seeing_more | workers(30)], buildings: [@barracks, @home_depot, site], deposits: [@home_ore | @field ++ more], ore: 1200))
       assert ccs(commands) == []
     end
 
@@ -60,16 +119,17 @@ defmodule Swarm.BasesTest do
       # (Wherever else one goes, by ore the mirrored map has: never by that field.)
       away_from = fn commands, spot -> Enum.all?(ccs(commands), &(View.dist({&1["x"], &1["y"]}, spot) > 10)) end
       by_start = for d <- @field, do: %{d | "x" => d["x"] + 28, "y" => d["y"] + 40}
-      opts = [units: workers(16), ore: 1200]
-      assert {_, commands, _} = plan(state(opts ++ [buildings: [@barracks], deposits: [@home_ore | by_start]]))
+      opts = [units: [unit(300, "Scout", 46, 46) | workers(16)], ore: 1200]
+      assert {_, commands, _} = plan(state(opts ++ [buildings: [@barracks, @home_depot], deposits: [@home_ore | by_start]]))
       assert away_from.(commands, {48, 47})
 
       tower = building(700, "GuardTower", 30, 7, 1)
-      assert {_, commands, _} = plan(state(opts ++ [buildings: [@barracks, tower], deposits: [@home_ore | @field]]))
+      opts = [units: [@seeing | workers(16)], ore: 1200]
+      assert {_, commands, _} = plan(state(opts ++ [buildings: [@barracks, @home_depot, tower], deposits: [@home_ore | @field]]))
       assert away_from.(commands, {20, 7})
 
       raiders = for i <- 1..3, do: unit(900 + i, "Soldier", 26, 10, owner: 1)
-      assert {_, commands, _} = plan(state([units: workers(16) ++ raiders, ore: 1200, buildings: [@barracks], deposits: [@home_ore | @field]]))
+      assert {_, commands, _} = plan(state([units: [@seeing | workers(16) ++ raiders], ore: 1200, buildings: [@barracks, @home_depot], deposits: [@home_ore | @field]]))
       assert away_from.(commands, {20, 7})
     end
   end
@@ -78,10 +138,18 @@ defmodule Swarm.BasesTest do
     # Five piles down the west edge by our base; the map has the same in every corner.
     @corner for y <- 5..9, do: %{"id" => 40 + y, "x" => 2, "y" => y, "remaining" => 1000}
 
-    test "the second Command Center goes to a free corner, by ore nobody has seen" do
-      {_, commands, memory} = plan(state(units: workers(16), buildings: [@barracks], deposits: @corner, ore: 1200))
-      assert [%{"x" => x, "y" => y}] = ccs(commands)
+    test "a free corner's ore, which nobody has seen: the scout goes to look, and the base goes there once it has" do
+      built = [@barracks, @home_depot]
+      {strategy, commands, _} = plan(state(units: [unit(300, "Scout", 9, 9) | workers(16)], buildings: built, deposits: @corner, ore: 1200))
+      assert ccs(commands) == []
       # The corner below ours (the piles at (2, 54..58)), not the enemy's at (61, 54..58).
+      assert {2, y} = strategy.survey
+      assert y in 54..58
+
+      # There, it sees the ore the mirror promised.
+      real = for d <- @corner, do: %{d | "id" => d["id"] + 100, "y" => 63 - d["y"]}
+      {_, commands, memory} = plan(state(units: [unit(300, "Scout", 4, 55) | workers(16)], buildings: built, deposits: @corner ++ real, ore: 1200))
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
       assert x <= 5 and y in 51..61
       assert memory.bases == [{x, y}]
     end
@@ -89,8 +157,8 @@ defmodule Swarm.BasesTest do
     test "not once we have looked there and found none" do
       {_, _, memory} = plan(state(units: [unit(300, "Scout", 4, 56), unit(301, "Scout", 59, 7)], deposits: @corner))
       assert length(memory.no_ore) == 10
-      {_, commands, _} = plan(state(units: workers(16), buildings: [@barracks], deposits: @corner, ore: 1200), memory)
-      assert ccs(commands) == []
+      {strategy, commands, _} = plan(state(units: [unit(300, "Scout", 9, 9) | workers(16)], buildings: [@barracks, @home_depot], deposits: @corner, ore: 1200), memory)
+      assert ccs(commands) == [] and strategy.survey not in [{2, 54}, {61, 5}]
     end
 
     test "not on a map with more than four players: no mirror there" do
@@ -115,41 +183,38 @@ defmodule Swarm.BasesTest do
       assert [%{"id" => 801}] = v.remembered
     end
 
-    test "a scout goes to look, and back every 20 ticks; a base goes there only while it was seen clear lately" do
-      opts = [buildings: [@barracks], deposits: [@home_ore | @their_ore ++ @field], ore: 1200]
+    test "its field comes first: the scout goes to look, and back every 20 ticks; a base goes there only while it was seen clear lately" do
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @their_ore ++ @field], ore: 1200]
       scout = unit(300, "Scout", 10, 10)
+      by_their_ore = fn spot -> spot != nil and View.dist(spot, {7, 53}) <= 6 end
 
-      # Never looked at: the scout goes, and the base goes by the other field meanwhile.
+      # Never looked at: the scout goes, and no base goes up unseen.
       {strategy, commands, memory} = plan(fallen([units: [scout | workers(16)], tick: 100] ++ opts))
-      assert strategy.survey == {7, 50}
-      assert [%{"x" => x}] = ccs(commands)
-      assert x > 15
+      assert by_their_ore.(strategy.survey)
+      assert ccs(commands) == []
 
-      # The scout is there and sees it clear: the base goes by their ore, first of all.
-      there = unit(300, "Scout", 7, 48)
-      {_, commands, memory} = plan(fallen([units: [there | workers(16)], tick: 130] ++ opts), %{memory | pending: nil, bases: []})
-      assert memory.checked[{7, 50}] == 130
+      # The scout is there and sees it clear: the base goes by their ore.
+      there = unit(300, "Scout", 5, 53)
+      {_, commands, memory} = plan(fallen([units: [there | workers(16)], tick: 130] ++ opts), memory)
       assert [%{"x" => x, "y" => y}] = ccs(commands)
-      assert View.dist({x, y}, {7, 53}) <= 4
+      assert View.dist({x, y}, {7, 53}) <= 5
 
-      # Twenty ticks on it goes back to look again.
-      memory = %{memory | pending: nil, bases: [], survey: nil}
+      # (Say that order came to nothing.) Ten ticks on the scout does other things; at twenty it goes back.
+      memory = %{memory | pending: nil, bases: [], base_order: nil, survey: nil}
       {strategy, _, _} = plan(fallen([units: [scout | workers(16)], tick: 140] ++ opts), memory)
-      refute strategy.survey == {7, 50}
+      refute by_their_ore.(strategy.survey)
       {strategy, _, _} = plan(fallen([units: [scout | workers(16)], tick: 150] ++ opts), memory)
-      assert strategy.survey == {7, 50}
+      assert by_their_ore.(strategy.survey)
 
       # Not seen for 45 ticks: no base there until it has been.
       {_, commands, _} = plan(fallen([units: [scout | workers(16)], tick: 180] ++ opts), memory)
-      assert [%{"x" => x}] = ccs(commands)
-      assert x > 15
+      assert ccs(commands) == []
     end
 
     test "not clear: whoever took them out is still there" do
-      opts = [buildings: [@barracks], deposits: [@home_ore | @their_ore], ore: 1200]
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @their_ore], ore: 1200]
       killers = for i <- 1..4, do: unit(900 + i, "Soldier", 10, 50, owner: 1)
-      {_, commands, memory} = plan(fallen([units: [unit(300, "Scout", 7, 46) | workers(16) ++ killers], tick: 130] ++ opts))
-      assert memory.checked[{7, 50}] == 130
+      {_, commands, _} = plan(fallen([units: [unit(300, "Scout", 5, 53) | workers(16) ++ killers], tick: 130] ++ opts))
       assert Enum.all?(ccs(commands), &(View.dist({&1["x"], &1["y"]}, {7, 53}) > 10))
     end
   end

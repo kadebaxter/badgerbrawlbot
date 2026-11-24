@@ -441,6 +441,10 @@ defmodule Swarm.UnitBrain do
       cc = finish_target(v, s, unit) -> {:attack, cc["id"]}
       # Safe mode: the wave goes for the last opponent's Command Center, and nothing else.
       kill = role == :wave && Map.get(s, :kill) -> go_kill(v, kill)
+      # The serum is on: every Soldier at home goes at the raid, in a fight's reach or not, whatever
+      # the estimates say (they don't know it hits twice as hard). Juiced up at the rally point is
+      # the serum wasted.
+      charge = role != :wave && serum_charge(unit, v, s) -> charge
       back = unit["type"] == "Archer" && outnumbered?(v, unit, group) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       # In a fight: what its group's estimate says (`Roles.verdict/2`).
       fight = group && in_fight(unit, v, s, role, group) -> fight
@@ -479,10 +483,7 @@ defmodule Swarm.UnitBrain do
     home? = role != :wave
     enemy = Roles.fighter_target(v, s.wave, unit)
 
-    # With the serum on, a Soldier at home goes in on a raid whatever the estimate says.
-    verdict = if home? and group.raid and unit["type"] == "Soldier" and Map.get(s, :serum_on, false), do: :go, else: Roles.verdict(group, unit)
-
-    case verdict do
+    case Roles.verdict(group, unit) do
       :go ->
         cond do
           enemy -> {:attack, enemy["id"]}
@@ -516,6 +517,19 @@ defmodule Swarm.UnitBrain do
     cc = v.cc && View.pos(v.cc)
     Enum.find([group.fallback, s.rally, cc], &(&1 != nil and Roles.clear_of?(group, &1))) || s.rally || cc || group.gather
   end
+
+  # With the serum on, where a Soldier at home goes: the raider it can hit now, else an attack-move
+  # at the nearest raider (`Roles.raiders/1`). Nil with the serum off, for anyone else, or no raid.
+  defp serum_charge(%{"type" => "Soldier"} = unit, v, %{serum_on: true}) do
+    here = View.pos(unit)
+
+    case Enum.min_by(Roles.raiders(v), &{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end) do
+      nil -> nil
+      raider -> if View.dist(View.pos(raider), here) <= 1, do: {:attack, raider["id"]}, else: {:attack_move, View.pos(raider)}
+    end
+  end
+
+  defp serum_charge(_unit, _v, _s), do: nil
 
   # To help at `spot`: an attack-move once near (`@help_near`), a plain move until then. An
   # attack-move stops for everything on the way: a recalled wave told to help walked through an

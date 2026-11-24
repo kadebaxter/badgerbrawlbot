@@ -123,7 +123,7 @@ defmodule Swarm.EconomyTest do
     end
 
     test "not in the opening: the first Barracks gets the ore" do
-      {_, commands, _} = plan(units: workers(7), ore: 150)
+      {_, commands, _} = plan(units: workers(7), buildings: [building(3, "ResourceDepot", 4, 9)], ore: 150)
       assert [%{"buildingType" => "Barracks"}] = commands
     end
   end

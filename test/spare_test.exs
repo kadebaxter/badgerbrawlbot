@@ -87,7 +87,7 @@ defmodule Swarm.SpareTest do
     test "their side of the map is ours to mine: a depot by their ore once home runs short" do
       # Home ore nearly gone; known ore at (44, 44), on their side (12 from their start, 37 from ours).
       deposits = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 100}, %{"id" => 60, "x" => 44, "y" => 44, "remaining" => 900}]
-      opts = [units: workers(10), buildings: [@their_cc], deposits: deposits, ore: 200, tick: 100]
+      opts = [units: workers(10), buildings: [@their_cc, building(3, "ResourceDepot", 4, 9)], deposits: deposits, ore: 200, tick: 100]
       memory = %{Brain.new_memory() | ore_short_since: 50}
       depot? = fn {_, commands, _} -> Enum.find(commands, &match?(%{"type" => "Build", "buildingType" => "ResourceDepot"}, &1)) end
 

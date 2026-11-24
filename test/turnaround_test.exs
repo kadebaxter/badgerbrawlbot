@@ -44,15 +44,22 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(30))
     end
 
-    test "while it lasts, a Soldier at home goes in on a raid the estimate says to stay out of" do
-      # Eight raiders in the base, four tiles from our four Soldiers at (10, 10).
-      units = soldiers(4) ++ for(i <- 1..8, do: unit(900 + i, "Soldier", 14, 14, owner: 1))
+    test "while it lasts, every Soldier at home goes at the raid, whatever the estimates say; Archers don't" do
+      # Eight raiders in the base, four tiles from our Soldiers at (10, 10); one more of ours far off at the post.
+      raid = for i <- 1..8, do: unit(900 + i, "Soldier", 14, 14, owner: 1)
+      units = soldiers(4) ++ [unit(250, "Soldier", 2, 2), unit(260, "Archer", 10, 10)] ++ raid
       strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
       v = View.new(state(units: units))
 
       {before, _} = UnitBrain.decide(201, v, strategy)
       refute match?(%{"type" => "Attack"}, before)
-      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, Map.put(strategy, :serum_on, true))
+
+      on = Map.put(strategy, :serum_on, true)
+      assert {%{"type" => "Attack", "x" => 14, "y" => 14}, _} = UnitBrain.decide(201, v, on)
+      # The one standing far from the fight too: juiced up at home is the serum wasted.
+      assert {%{"type" => "Attack", "x" => 14, "y" => 14}, _} = UnitBrain.decide(250, v, on)
+      {archer, _} = UnitBrain.decide(260, v, on)
+      refute match?(%{"type" => "Attack", "x" => 14}, archer)
     end
   end
 
@@ -61,21 +68,32 @@ defmodule Swarm.TurnaroundTest do
       building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(5, "GuardTower", 12, 12),
       building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "GuardTower", 14, 9),
       building(9, "CommandCenter", 40, 4), building(20, "Barracks", 3, 3), building(21, "Barracks", 3, 11),
-      building(22, "GuardTower", 10, 13), building(23, "GuardTower", 13, 6), building(24, "GuardTower", 4, 13)
+      building(22, "GuardTower", 10, 13), building(23, "GuardTower", 13, 6), building(24, "GuardTower", 4, 13),
+      building(25, "GuardTower", 13, 13), building(26, "GuardTower", 1, 13), building(27, "GuardTower", 13, 1)
     ]
     defp busy(buildings), do: for(b <- buildings, do: if(b["type"] == "Barracks", do: %{b | "production" => [%{"unitType" => "Soldier"}, %{"unitType" => "Soldier"}]}, else: b))
     defp builds(commands), do: for(%{"type" => "Build", "buildingType" => t} <- commands, do: t)
 
-    test "a fifth when we are rich and all four are busy" do
+    test "a fifth when all four are busy and we can pay for it, rich or not" do
       {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 1500)
+      assert builds(commands) == ["Barracks"]
+
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 300)
       assert builds(commands) == ["Barracks"]
     end
 
-    test "not while one has room in its queue, and not without the ore" do
+    test "before the build order is done too" do
+      early = busy([building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9)])
+      {_, commands, _} = plan(units: workers(10) ++ soldiers(8), buildings: early, ore: 300, tick: 60)
+      assert builds(commands) == ["Barracks"]
+    end
+
+    test "not while one has room in its queue, and never saved up for" do
       {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: @built, ore: 1500)
       assert builds(commands) == []
 
-      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 300)
+      # 200 ore: not enough for one and the workers' reserve. The Barracks train with it.
+      {_, commands, _} = plan(units: workers(20) ++ soldiers(12), buildings: busy(@built), ore: 200)
       assert builds(commands) == []
     end
   end

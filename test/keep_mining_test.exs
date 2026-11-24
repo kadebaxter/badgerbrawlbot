@@ -70,10 +70,11 @@ defmodule Swarm.KeepMiningTest do
   describe "a big game with home out of ore" do
     test "the depot doesn't wait for fifteen fighters" do
       field = [ore(30, 20, 20), ore(31, 21, 20), ore(32, 20, 21)]
-      {_, commands, memory} = big_plan([units: workers(5), deposits: field, ore: 100, tick: 100], Brain.new_memory())
+      home = [building(3, "ResourceDepot", 4, 9)]
+      {_, commands, memory} = big_plan([units: workers(5), buildings: home, deposits: field, ore: 100, tick: 100], Brain.new_memory())
       assert depots(commands) == []
 
-      {_, commands, _} = big_plan([units: workers(5), deposits: field, ore: 100, tick: 130], memory)
+      {_, commands, _} = big_plan([units: workers(5), buildings: home, deposits: field, ore: 100, tick: 130], memory)
       assert [_] = depots(commands)
     end
   end
@@ -106,11 +107,11 @@ defmodule Swarm.KeepMiningTest do
       refute trains_worker?(commands)
     end
 
-    test "home is short sooner with more workers: under 100 ore each" do
-      {_, _, memory} = plan(units: workers(40), deposits: Enum.take(@home, 4), ore: 0, tick: 100)
+    test "home is short sooner with more workers: under 150 ore each" do
+      {_, _, memory} = plan(units: workers(26), deposits: Enum.take(@home, 4), ore: 0, tick: 100)
       assert memory.ore_short_since == nil
 
-      {_, _, memory} = plan(units: workers(41), deposits: Enum.take(@home, 4), ore: 0, tick: 100)
+      {_, _, memory} = plan(units: workers(27), deposits: Enum.take(@home, 4), ore: 0, tick: 100)
       assert memory.ore_short_since == 100
     end
   end
