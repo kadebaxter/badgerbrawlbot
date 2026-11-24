@@ -36,7 +36,7 @@ defmodule Swarm.Brain do
   every fighter attacks: sitting still would lose on time anyway.
   """
 
-  alias Swarm.{Roles, View}
+  alias Swarm.{Reads, Roles, View}
 
   @target_workers 20
   # A big game needs a bigger economy to out-grow everyone: this many workers there.
@@ -269,6 +269,8 @@ defmodule Swarm.Brain do
   # `@army_floor_ticks` ticks. Below it, the Barracks train first.
   @army_floor 6
   @army_floor_ticks 100
+  # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
+  @flood_floor 40
 
   # Built once the build order is done and only while rich, one at a time, in this order.
   @extras [
@@ -364,6 +366,12 @@ defmodule Swarm.Brain do
   # stand a dozen and more to a tile by their drop-offs, mostly with no Soldier near.
   @hunt_clear 12
   @hunt_escort 4
+  # A base of a boom's is open to an attack with this many finished towers of theirs or fewer
+  # within `@open_cover` of it (a tower reaches 5; two more for where ours stand to hit it), and it
+  # is gone for with this many attackers or more.
+  @open_towers 2
+  @open_cover 7
+  @open_min 8
   # Trebuchets needed at the rally point to go out with a wave.
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
@@ -577,6 +585,8 @@ defmodule Swarm.Brain do
       checked: %{},
       # player => {the most of their army we have known lately (`Roles.strength/1`), the tick}.
       army_seen: %{},
+      # What kind of opponent each player is (`Swarm.Reads`), by slot.
+      reads: %{},
       # Whether the army keeps together at home (`@together_until`).
       together: false,
       # Opponents' starts we have seen with no Command Center of theirs on them (see `last_cc/2`).
@@ -994,7 +1004,7 @@ defmodule Swarm.Brain do
       |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
-      |> army_floor(v)
+      |> army_floor(v, memory)
       |> found_base(v, terrain)
       |> build(v, terrain)
       |> more_barracks(v, terrain)
@@ -1212,6 +1222,8 @@ defmodule Swarm.Brain do
     stand_in = stand_in(v)
     {look, looked, counted} = look(memory, v, rally, owner, target, stand_in)
     memory = %{memory | army_seen: lower_count(memory.army_seen, counted, v)}
+    {reads, read_why} = reads(v, memory, counted)
+    memory = Map.put(memory, :reads, reads)
     {check, checked, died_at} = siege_watch(memory, v)
     {peek, peeked} = peek(memory, v, died_at)
     check_rest = if died_at, do: v.tick + @check_rest, else: memory.check_rest
@@ -1238,7 +1250,7 @@ defmodule Swarm.Brain do
         true -> target
       end
 
-    why = home_why ++ spare_why ++ why
+    why = read_why ++ home_why ++ spare_why ++ why
 
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
@@ -1586,6 +1598,7 @@ defmodule Swarm.Brain do
       all_in?(v) -> Tuple.insert_at(all_in(v, memory, owner), 3, nil)
       memory.wave && Map.get(memory.wave, :kind) == :strike -> keep_strike(v, memory)
       memory.wave && Map.get(memory.wave, :kind) == :sortie -> keep_sortie(v, memory)
+      memory.wave && Map.get(memory.wave, :hunt, false) -> keep_hunt(v, memory, rally)
       memory.wave -> keep_wave(v, memory, rally, Map.get(memory.wave, :goal) || target)
       memory.regroup -> {nil, memory.next_wave, [], "regrouping at the backup Command Center"}
       spot = siege_spot(v, memory) -> sortie(v, memory, spot)
@@ -1970,6 +1983,25 @@ defmodule Swarm.Brain do
     end
   end
 
+  # A wave after a boom's open base (`open_base/4`): kept like any wave while the base it went for
+  # is still open (still there as far as we know, with no more towers by it than it may have);
+  # then on to the next open one, and home when there is none.
+  defp keep_hunt(v, %{wave: wave} = memory, rally) do
+    alive = Enum.filter(v.my_units, &(&1["id"] in wave.members))
+
+    cond do
+      open?(v, wave.owner, wave.goal) ->
+        keep_wave(v, memory, rally, wave.goal)
+
+      next = alive != [] && open_base(v, memory, wave.owner, alive) ->
+        {kept, next_wave, why, hold} = keep_wave(v, %{memory | wave: %{wave | goal: next}}, rally, next)
+        {kept, next_wave, [{:wave_reinforced, "wave #{wave.id}: on to their base by #{fmt(next)}"} | why], hold}
+
+      true ->
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: no base of player #{wave.owner}'s left without towers, coming home"}], nil}
+    end
+  end
+
   # A siege party (`@siege_idle`) for as long as it still has a Trebuchet.
   defp party?(wave, alive), do: Map.get(wave, :party, false) and Enum.any?(alive, &(&1["type"] == "Trebuchet"))
 
@@ -2303,9 +2335,17 @@ defmodule Swarm.Brain do
     siege = if party?, do: at_rally, else: siege
     ours = if party?, do: Roles.strength(staged ++ siege), else: ours
 
+    # A neighbor that reads as a boom (`Swarm.Reads`): a base of theirs with next to no towers by
+    # it (`open_base/4`) is gone for now, with `@open_min` attackers or more, before the towers go
+    # up; no waiting for a full wave or our own tower square, and their towers elsewhere don't
+    # count against it.
+    open = if not party? and Reads.kind(Map.get(memory, :reads, %{}), owner) == :boom and length(staged) >= @open_min, do: open_base(v, memory, owner, staged)
+    target = open || target
+
     ready? =
       cond do
         party? -> true
+        open != nil -> true
         scouted? -> length(staged) >= want and ours >= @margin * theirs
         true -> length(staged) >= max(@first_wave, want)
       end
@@ -2335,10 +2375,10 @@ defmodule Swarm.Brain do
         not scouted? and not ready? ->
           "#{waiting}, want #{max(@first_wave, want)} while nothing is scouted"
 
-        length(staged) < want and not party? ->
+        length(staged) < want and not party? and open == nil ->
           "#{waiting}, want #{want}"
 
-        (towers = if(early? or party?, do: nil, else: towers_short(v, memory))) != nil ->
+        (towers = if(early? or party? or open != nil, do: nil, else: towers_short(v, memory))) != nil ->
           "#{waiting}, building the tower square first (#{towers} of #{@big_towers})"
 
         not counter? and looking?(memory.look, owner) ->
@@ -2375,6 +2415,7 @@ defmodule Swarm.Brain do
           counter? -> "counterattack: "
           party? and hunt != nil -> "siege party at their base by #{fmt(hunt)}, none of their army we know of near it: "
           party? -> "siege party (their army is gone, #{round(their_army)} known): "
+          open != nil -> "they read as a boom, and their base by #{fmt(open)} has next to no towers: "
           early? -> "early strike on a weak neighbor: "
           true -> ""
         end
@@ -2396,7 +2437,9 @@ defmodule Swarm.Brain do
         at: v.tick,
         party: party?,
         # Where a hunting party goes (`soft_target/4`); nil for everyone else: the usual target.
-        goal: if(party?, do: hunt)
+        goal: if(party?, do: hunt, else: open),
+        # After an open base of a boom (`open_base/4`): it moves on to the next, or comes home.
+        hunt: open != nil
       }
 
       {wave, memory.next_wave + 1, [{:wave_launched, why}], nil}
@@ -2452,6 +2495,80 @@ defmodule Swarm.Brain do
     end
   end
 
+  # A base of `owner`'s open to an attack: a Command Center or Resource Depot we know of with no
+  # more than `@open_towers` finished towers of theirs within `@open_cover` of it, where those
+  # towers and the fighters of theirs we remember within `@hunt_clear` are no more than `escort`
+  # can meet (`@margin`). The one with the fewest towers, then the nearest to us. Nil with none.
+  defp open_base(v, memory, owner, escort) do
+    from = if v.cc, do: View.pos(v.cc), else: center(v)
+    ours = Roles.strength(escort)
+    fighters = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] in [owner, nil] and &1["type"] != "Scout"))
+
+    known_of(v, owner)
+    |> Enum.filter(&(&1["type"] in ["CommandCenter", "ResourceDepot"]))
+    |> Enum.map(fn b ->
+      pos = View.pos(b)
+      cover = towers_by(v, owner, pos)
+      near = Enum.filter(fighters, &(View.dist(View.pos(&1), pos) <= @hunt_clear))
+      {length(cover), View.dist(pos, from), pos, Roles.strength(near) + Roles.strength(cover)}
+    end)
+    |> Enum.filter(fn {towers, _d, _pos, theirs} -> towers <= @open_towers and ours >= @margin * theirs end)
+    |> Enum.min(fn -> nil end)
+    |> case do
+      nil -> nil
+      {_towers, _d, pos, _theirs} -> pos
+    end
+  end
+
+  # Whether `owner` still has a building at `pos`, as far as we know, with no more than
+  # `@open_towers` finished towers by it.
+  defp open?(v, owner, pos),
+    do: Enum.any?(known_of(v, owner), &(View.pos(&1) == pos)) and length(towers_by(v, owner, pos)) <= @open_towers
+
+  defp known_of(v, owner),
+    do: (v.enemy_buildings ++ v.remembered) |> Enum.filter(&(&1["owner"] == owner)) |> Enum.uniq_by(& &1["id"])
+
+  defp towers_by(v, owner, pos),
+    do: Enum.filter(known_of(v, owner), &(&1["type"] == "GuardTower" and &1["completed"] != false and View.dist(View.pos(&1), pos) <= @open_cover))
+
+  # Each opponent's read (`Swarm.Reads`) brought up to date: what we remember of their units, the
+  # buildings of theirs we know, their army as we count it and their ore banked, against ours.
+  # `counted` is this tick's look (`look/6`), if one got there.
+  defp reads(v, memory, counted) do
+    soldier = Roles.strength([%{"type" => "Soldier"}])
+    ours = Roles.strength(Roles.fighters(v)) / soldier
+
+    looked =
+      case counted do
+        {:at_least, owner, _} -> owner
+        {owner, _} -> owner
+        _ -> nil
+      end
+
+    units = (Map.values(memory.enemies) ++ v.enemy_units) |> Enum.uniq_by(& &1["id"])
+
+    Enum.reduce(Map.keys(v.enemy_survival), {Map.get(memory, :reads, %{}), []}, fn owner, {reads, notes} ->
+      theirs = Enum.filter(units, &(&1["owner"] == owner))
+      count = fn type -> Enum.count(theirs, &(&1["type"] == type)) end
+      known = known_of(v, owner)
+
+      facts = %{
+        army: enemy_army(memory, owner) / soldier,
+        soldiers: count.("Soldier"),
+        archers: count.("Archer"),
+        scouts: count.("Scout"),
+        trebuchets: count.("Trebuchet"),
+        ccs: Enum.count(known, &(&1["type"] == "CommandCenter")),
+        towers: Enum.count(known, &(&1["type"] == "GuardTower")),
+        economy: Map.get(v.enemy_economy, owner, 0),
+        looked: looked == owner
+      }
+
+      {reads, more} = Reads.update(reads, v.tick, owner, facts, ours, v.my_mined)
+      {reads, notes ++ more}
+    end)
+  end
+
   @doc """
   The fighters we remember of player `owner` (all opponents if nil), or the most we have known of
   their army lately if that is more (`army_seen/3`). No towers.
@@ -2479,10 +2596,14 @@ defmodule Swarm.Brain do
 
       _ ->
         from = if v.cc, do: View.pos(v.cc), else: center(v)
+        reads = Map.get(memory, :reads, %{})
 
+        # A neighbor that reads as a boom (`Swarm.Reads`: no army to speak of, bases going up
+        # without towers) comes first, the nearest: by its score it is the strongest of them, and
+        # left alone until it was.
         v
         |> Roles.neighbors()
-        |> Enum.min_by(fn {start, slot} -> {Map.get(v.enemy_survival, slot, 0), View.dist(start, from)} end, fn -> nil end)
+        |> Enum.min_by(fn {start, slot} -> {Reads.kind(reads, slot) != :boom, Map.get(v.enemy_survival, slot, 0), View.dist(start, from)} end, fn -> nil end)
         |> case do
           {_start, slot} -> slot
           nil -> nil
@@ -3344,10 +3465,27 @@ defmodule Swarm.Brain do
   end
 
   # Below the floor, the Barracks train before anything is built or researched.
-  defp army_floor(acc, v) do
-    if length(Roles.fighters(v)) < @army_floor + div(v.tick, @army_floor_ticks),
+  defp army_floor(acc, v, memory) do
+    fighters = Roles.fighters(v)
+
+    if length(fighters) < @army_floor + div(v.tick, @army_floor_ticks) or Roles.strength(fighters) < flood_floor(v, memory),
       do: train_army(acc, v, nil),
       else: acc
+  end
+
+  # With two neighbors that read as floods (`Swarm.Reads`), the floor is the bigger army of the
+  # two as we know it, up to `@flood_floor` Soldiers' worth: until ours is that, the Barracks are
+  # fed before anything else is built or researched. Among five of them we had 31 fighters at
+  # tick 300 to their 48 to 56 each, on the same workers: the difference had gone into research,
+  # depots, a second Tech Lab and a base, and the first raid took the Barracks and the workers.
+  # As a strength; 0 with fewer than two floods next to us.
+  defp flood_floor(v, memory) do
+    reads = Map.get(memory, :reads, %{})
+    floods = for {_start, slot} <- Roles.neighbors(v), Reads.kind(reads, slot) == :flood, do: enemy_army(memory, slot)
+
+    if length(floods) >= 2,
+      do: min(Enum.max(floods), @flood_floor * Roles.strength([%{"type" => "Soldier"}])),
+      else: 0
   end
 
   defp from_build_order(v, terrain, avoid) do

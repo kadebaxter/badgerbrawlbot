@@ -52,6 +52,8 @@ defmodule Swarm.View do
     shared: nil,
     # player slot => survival score (the ore value of everything they have alive), opponents only
     enemy_survival: %{},
+    # player slot => ore banked so far (their economy score), opponents still in only
+    enemy_economy: %{},
     # Spots away from home where building keeps failing (set by `Swarm.Brain.plan/3`): nothing
     # goes up by one for a while.
     blocked: [],
@@ -155,6 +157,13 @@ defmodule Swarm.View do
           not p["eliminated"],
           into: %{},
           do: {p["slot"], get_in(p, ["score", "survival"]) || 0}
+        ),
+      enemy_economy:
+        for(
+          p <- others,
+          not p["eliminated"],
+          into: %{},
+          do: {p["slot"], get_in(p, ["score", "economy"]) || 0}
         )
     }
   end

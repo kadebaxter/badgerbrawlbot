@@ -691,6 +691,36 @@ Alloy settings, and a Grafana dashboard.
 
 ---
 
+### Reading the opponents (`Swarm.Reads`)
+
+The leader keeps a read of each opponent, from what we remember of their units, the buildings of
+theirs we know, their army as we count it and their ore banked (the scoreboard has it for
+everyone), against ours. Nothing before a scout has looked at them, nor before tick 120.
+
+| Read | What says so | What we do |
+|---|---|---|
+| `:boom` | an army of 3 Soldiers' worth or less (or under 0.3 of ours), and two Command Centers or more, five towers or more, or 1.25 times our ore banked | their bases without towers are gone for early (below) |
+| `:flood` | an army of 6 or more and 0.7 of ours or more | as ever: held at our towers |
+| `:siege` | Trebuchets seen, or a smaller army with 40% Archers or more | as ever (for now) |
+| `:harass` | 6 Scouts or more seen, fewer than 6 fighters, one Command Center | as ever (for now) |
+| `:unknown` | none of the above | as ever |
+
+A read changes only once what we see has said the same thing for 30 ticks, with a line in the
+decision log (`kind=read`) giving what it was read from.
+
+**A boom's open bases.** A neighbor that reads as a boom is the opponent we go after, before the
+weaker ones: by its score it is the strongest, and left alone it only gets stronger (a bot with
+no fighters at all took 72% of a map's ore behind 145 towers). With 8 attackers or more at the
+rally point, a wave leaves for a Command Center or Resource Depot of theirs with two finished
+towers or fewer within 7 tiles, if the attackers are 1.5 times those towers and the fighters we
+remember by it: no waiting for a full wave or for our own towers, and their towers elsewhere don't
+count. The base gone (or towered up), it goes on to the next open one, and comes home when there
+is none. Everything that calls a wave home still does.
+
+**Floods on two sides.** With two neighbors that read as floods, the army floor (below which the
+Barracks train before anything is built or researched) is the bigger army of the two as we know
+it, up to 40 Soldiers' worth. What the Barracks can't take still goes to the rest.
+
 ## Messages
 
 Raft traffic between the ra servers is handled by `ra`. Our own messages are plain Elixir terms;
