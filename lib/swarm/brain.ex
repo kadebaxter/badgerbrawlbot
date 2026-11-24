@@ -878,14 +878,15 @@ defmodule Swarm.Brain do
     end
   end
 
-  # With two or more opponents in, the army only goes out to fight under our towers: a spot within
+  # In every game (it was only with two or more opponents in; one on one, 61 of ours went out to a
+  # depot in the middle 20 tiles from our nearest tower, and 87 died for 28), the army only goes
+  # out to fight under our towers: a spot within
   # reach of a finished Guard Tower of ours (its range plus one), or within `@help_cover` of a
   # Command Center of ours. A depot with no tower is the price of a Soldier; 38 went out for one in
   # the middle, met 40, and led them home. And six tiles from a tower is the open: 32 fighters and
   # 62 workers died at a field between two of our bases, in reach of neither's towers.
   defp worth_help?(v, spot) do
-    map_size(v.start_owner) < 2 or
-      Enum.any?(Roles.our_towers(v), &(View.dist(View.pos(&1), spot) <= Roles.range(&1) + 1)) or
+    Enum.any?(Roles.our_towers(v), &(View.dist(View.pos(&1), spot) <= Roles.range(&1) + 1)) or
       Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
   end
 
@@ -1042,6 +1043,7 @@ defmodule Swarm.Brain do
       |> finish_sites(v)
       |> research_first(v)
       |> then(&if(claiming?, do: &1 |> found_base(v, terrain) |> hold_for_middle(v, terrain) |> build(v, terrain), else: &1))
+      |> then(&if(claiming?, do: &1, else: first_base(&1, v, terrain)))
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
       |> then(&if(claiming?, do: &1, else: &1 |> found_base(v, terrain) |> build(v, terrain)))
@@ -1506,8 +1508,8 @@ defmodule Swarm.Brain do
 
   # A player's army going by the scoreboard, as a strength: the ore value of everything they have
   # alive (the server reports it), less their finished buildings we know of and as many workers as
-  # we have ourselves (we can't see theirs), at a Soldier's strength for its price. Too high if
-  # anything: buildings we haven't seen count as army.
+  # we have ourselves (we can't see theirs), at a Soldier's strength for its price. Their buildings
+  # count for what ours are worth when we know of fewer.
   defp army_by_score(v, owner) do
     alive = Map.get(v.enemy_survival, owner, 0)
 
@@ -1516,6 +1518,12 @@ defmodule Swarm.Brain do
       |> Enum.filter(&(&1["owner"] == owner and &1["completed"] != false))
       |> Enum.uniq_by(& &1["id"])
       |> Enum.sum_by(&Map.get(@costs, &1["type"], 0))
+
+    # Their buildings we haven't seen: taken to be worth what ours are, at least. Counted as army,
+    # three Command Centers of theirs we never saw were twelve Soldiers we trained to match, and
+    # no base of ours went up all game.
+    own = v.my_buildings |> Enum.filter(&(&1["completed"] != false)) |> Enum.sum_by(&Map.get(@costs, &1["type"], 0))
+    buildings = max(buildings, own)
 
     workers = @costs["Worker"] * length(View.units_of(v, "Worker"))
     max(alive - buildings - workers, 0) * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
@@ -2335,8 +2343,19 @@ defmodule Swarm.Brain do
     # and they count double in `raid` above) are answered with ours, whatever the odds.
     answer? = Enum.any?(raiders, &Roles.serum?/1)
 
-    raiders != [] and length(View.units_of(v, "Soldier")) >= @serum_soldiers and
-      ((raid >= @serum_raid and overrun? and turns_it?) or joined? or answer?)
+    # Wherever the fight is, raid or not: a group worth it with fighters on the serum and
+    # `@serum_soldiers` of ours or more in its fight. 64 of ours met 47 a few tiles off a depot of
+    # ours, in no raid by the book; theirs went on, ours 12 ticks later, with 38 Soldiers dead.
+    on_serum = for e <- v.enemy_units, Roles.serum?(e), into: MapSet.new(), do: e["id"]
+
+    met? =
+      MapSet.size(on_serum) > 0 and
+        Enum.any?(Roles.groups(v, wave).groups, fn {_id, g} ->
+          g.size >= @serum_soldiers and g.worth >= @serum_raid and Enum.any?(g.ids, &MapSet.member?(on_serum, &1))
+        end)
+
+    length(View.units_of(v, "Soldier")) >= @serum_soldiers and
+      (met? or (raiders != [] and ((raid >= @serum_raid and overrun? and turns_it?) or joined? or answer?)))
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.
@@ -3175,6 +3194,32 @@ defmodule Swarm.Brain do
   end
 
   defp hold_for_middle(acc, _v, _terrain), do: acc
+
+  # Our first base comes ahead of the army floor (`army_floor/3`), and the ore is kept for it while
+  # we are short of its price: with the floor at their army and our income theirs, nothing was ever
+  # left for one. We ended on 43 workers and one base against 64 on four.
+  defp first_base({_cmds, %{base_order: nil}, _ore} = acc, v, terrain) do
+    if Enum.any?(View.buildings_of(v, "CommandCenter"), &View.base?(v, &1)) do
+      acc
+    else
+      case found_base(acc, v, terrain) do
+        # Short of it: each Barracks keeps one in its queue (`train_army/3`: nothing is trained any
+        # later for it), and the rest of the ore waits.
+        {_cmds, %{base_order: nil} = mem, ore} = short when ore < 400 ->
+          if base_cc(v, terrain, mem) do
+            {cmds, mem, ore} = train_army(short, v, terrain)
+            {cmds, mem, min(ore, 0)}
+          else
+            short
+          end
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp first_base(acc, _v, _terrain), do: acc
 
   # Whether a base is wanted and we can't pay for it yet: then each Barracks keeps one in its
   # queue and no more (`train_army/3`), and what that leaves in the bank adds up to its 400.

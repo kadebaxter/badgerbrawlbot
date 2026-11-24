@@ -144,6 +144,18 @@ defmodule Swarm.ReadsTest do
       assert army_first?(commands)
     end
 
+    test "their buildings we haven't seen count for what ours are worth, not as army" do
+      barracks = for i <- 0..2, do: building(10 + i, "Barracks", 11, 3 + 3 * i)
+      # 4,000 alive each, less our 20 workers' worth and 1,000 in buildings like ours: twenty Soldiers against our twelve.
+      opts = fn more -> [units: workers(20) ++ soldiers(12), buildings: labs_busy(barracks ++ [building(20, "TechLab", 10, 12)] ++ more), ore: 450] end
+      {_, commands, _} = Brain.plan(three(opts.([]), 4000), Brain.new_memory(), terrain())
+      assert army_first?(commands)
+      # With 1,250 more in buildings of our own (ten towers), theirs are taken to have as much: under eight.
+      towers = for i <- 1..10, do: building(60 + i, "GuardTower", 2 + i, 14)
+      {_, commands, _} = Brain.plan(three(opts.(towers), 4000), Brain.new_memory(), terrain())
+      refute army_first?(commands)
+    end
+
     test "catching up, another Barracks as soon as every one is training at all, up to the fourteen there may be" do
       # Each with one in its queue: not "busy" enough for another by the usual rule (two queued).
       training = fn i -> building(10 + i, "Barracks", 11 + 3 * div(i, 4), 3 + 3 * rem(i, 4)) |> Map.put("production", [%{"unitType" => "Soldier"}]) end

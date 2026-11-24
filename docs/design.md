@@ -727,10 +727,12 @@ count. The base gone (or towered up), it goes on to the next open one, and comes
 is none. Everything that calls a wave home still does.
 
 **Never a smaller army than theirs.** The army floor (below which the Barracks train before
-anything is built, any base is founded and any worker is trained; only the first research comes
-ahead of it) is, in every game and from tick 120, the biggest army of any opponent still in going
-by the scoreboard (the same count a look falls back on; too high if anything, as their buildings
-we haven't seen count as army), with no limit to it. No look or read is needed. With two
+anything is built, any base is founded and any worker is trained; only the first research and our
+first base come ahead of it: that base's 400 is kept while each Barracks keeps one Soldier in its
+queue. With the floor at their army and our income theirs, nothing was ever left for a base: we
+ended one game on 43 workers and one base against 64 on four) is, in every game and from tick 120, the biggest army of any opponent still in going
+by the scoreboard (the same count a look falls back on; their buildings count for what ours are
+worth when we know of fewer, not as army), with no limit to it. No look or read is needed. With two
 neighbors that read as floods it is also the bigger of the two as we know it. What the Barracks
 can't take still goes to the rest.
 While our army is under that floor, another Barracks comes right after the fighters and ahead
@@ -747,6 +749,14 @@ plus one) or within 3 tiles of our Command Center, there is nowhere left to stay
 every fighter attacks, whatever the estimate (`Roles.inside?/2`). Workers never fight: a worker
 does 4 damage a tick with 40 health against a Soldier's 9 and 110. They hit back for a while, and
 75 of them died in fifteen ticks at one base, and the match with them.
+
+**Help only under our towers, and their serum answered anywhere.** In every game the army only
+goes out to help where a finished tower of ours reaches (its range plus one) or within 5 tiles of
+a Command Center of ours; it was only so with two or more opponents. And when their fighters are
+on the serum in a fight eight or more of our Soldiers are in, a group worth eight Soldiers or
+more, ours is taken that tick, raid or not. One on one, 61 of ours went out to a depot in the
+middle 20 tiles from our nearest tower; their serum went on in a fight a few tiles off it, ours
+12 ticks later with 38 dead, and 87 Soldiers died for 28.
 
 **A lost base is left for the next one.** When that raid is inside a base
 of ours that isn't the main one, and another finished Command Center of ours is more than 10

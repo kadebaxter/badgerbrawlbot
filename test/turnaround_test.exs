@@ -56,6 +56,17 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil}, _, _} = plan(units: soldiers(7) ++ raiders(30, 9))
     end
 
+    test "theirs on, in a fight eight of ours or more are in, is answered with ours wherever that is" do
+      # Out in the open at (30, 30): nothing of ours near, so no raid by the book.
+      ours = for i <- 1..10, do: unit(200 + i, "Soldier", 30, 30)
+      theirs = for i <- 1..12, do: unit(900 + i, "Soldier", 33, 30, owner: 1)
+      juiced = Enum.map(theirs, &Map.put(&1, "effects", ["serum"]))
+      assert {%{serum: nil}, _, _} = plan(units: ours ++ theirs)
+      assert {%{serum: :take}, _, _} = plan(units: ours ++ juiced)
+      # Seven of ours: not a fight to spend it on.
+      assert {%{serum: nil}, _, _} = plan(units: Enum.take(ours, 7) ++ juiced)
+    end
+
     test "a Soldier on the serum counts for two, theirs or ours, in strength and in the fight's estimate" do
       plain = unit(901, "Soldier", 14, 14, owner: 1)
       juiced = Map.put(plain, "effects", ["serum"])
@@ -254,10 +265,12 @@ defmodule Swarm.RecentCountTest do
     test "home doesn't go out to two raiders with forty counted behind them" do
       miners = for i <- 1..4, do: unit(100 + i, "Worker", 25, 7, activity: "Gathering")
       pair = for i <- 1..2, do: unit(900 + i, "Soldier", 27, 7, owner: 1)
-      {%{help: {27, 7}}, _, _} = plan([units: miners ++ pair ++ soldiers(10)], Brain.new_memory())
+      # (A tower of ours by them: the army only goes out under one.)
+      tower = building(70, "GuardTower", 24, 9)
+      {%{help: {27, 7}}, _, _} = plan([units: miners ++ pair ++ soldiers(10), buildings: [tower]], Brain.new_memory())
 
       memory = %{Brain.new_memory() | army_seen: %{1 => {40 * 990.0, 80}}}
-      assert {%{help: nil}, _, _} = plan([units: miners ++ pair ++ soldiers(10)], memory)
+      assert {%{help: nil}, _, _} = plan([units: miners ++ pair ++ soldiers(10), buildings: [tower]], memory)
     end
   end
 

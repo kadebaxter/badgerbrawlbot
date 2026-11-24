@@ -46,6 +46,20 @@ defmodule Swarm.BasesTest do
       assert Enum.any?(strategy.why, &match?({:base, _}, &1))
     end
 
+    test "our first one comes ahead of the army floor, its ore kept for it with one Soldier a Barracks training" do
+      # Their army by the scoreboard far above ours (9,000 ore alive against our twelve Soldiers).
+      behind = fn s -> %{s | "players" => Enum.map(s["players"], &if(&1["slot"] == 0, do: &1, else: Map.put(&1, "score", %{"survival" => 9000, "total" => 9000})))} end
+      opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field], tick: 250]
+      {_, commands, _} = plan(behind.(state([units: [@seeing | workers(16) ++ army()], ore: 1200] ++ opts)))
+      assert [_] = ccs(commands)
+
+      # Short of its 400: a Soldier in the Barracks' queue, and the rest waits (no worker, no building).
+      {_, commands, memory} = plan(behind.(state([units: [@seeing | workers(16) ++ army()], ore: 350] ++ opts)))
+      assert memory.base_order == nil
+      assert [%{"unitType" => "Soldier"}] = for(%{"type" => "Produce"} = c <- commands, do: c)
+      assert for(%{"type" => "Build"} = c <- commands, do: c) == []
+    end
+
     test "only where we have seen the ground lately: until then the scout goes to look" do
       opts = [buildings: [@barracks, @home_depot], deposits: [@home_ore | @field], ore: 1200]
       home_scout = unit(300, "Scout", 9, 9)

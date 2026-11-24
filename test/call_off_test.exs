@@ -10,8 +10,11 @@ defmodule Swarm.CallOffTest do
 
   @gather %{mode: :gather, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
 
+  # A tower of ours by the field the help tests are at: the army only goes out under one.
+  @field_tower building(70, "GuardTower", 24, 9)
+
   defp plan(opts, memory \\ Brain.new_memory()),
-    do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
+    do: Brain.plan(View.new(state(Keyword.put_new(opts, :buildings, [@field_tower]))), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
 
   describe "a wave is called off" do
     # Twelve out at (40, 40), the most it has had.
@@ -102,14 +105,14 @@ defmodule Swarm.CallOffTest do
         %{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ Enum.take([other.(1, 56, 56), other.(2, 7, 56)], players)}
       end
 
-      s = state(units: field_miners() ++ field_raid(2) ++ soldiers(10))
+      s = state(units: field_miners() ++ field_raid(2) ++ soldiers(10), buildings: [@field_tower])
       memory = looked(Brain.new_memory(), 1, 100)
       assert {%{help: nil}, _, _} = Brain.plan(View.new(scored.(s, 2)), memory, terrain())
       # One opponent: as it was.
       assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(scored.(s, 1)), memory, terrain())
     end
 
-    test "with two or more opponents in, only where a tower or a Command Center of ours stands" do
+    test "only where a tower or a Command Center of ours stands, however many opponents are in" do
       third = fn s -> %{s | "players" => s["players"] ++ [%{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}]} end
       memory = looked(Brain.new_memory(), 1, 100)
       units = field_miners() ++ field_raid(2) ++ soldiers(10)
@@ -122,6 +125,9 @@ defmodule Swarm.CallOffTest do
       # A tower seven tiles off doesn't reach them: that is the open.
       far = building(70, "GuardTower", 20, 9)
       assert {%{help: nil}, _, _} = Brain.plan(View.new(third.(state(units: units, buildings: [far]))), memory, terrain())
+      # One on one just the same.
+      assert {%{help: nil}, _, _} = Brain.plan(View.new(state(units: units)), memory, terrain())
+      assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(state(units: units, buildings: [tower])), memory, terrain())
     end
 
     test "it follows the fight no more than three tiles farther from home than where it committed" do
@@ -167,7 +173,7 @@ defmodule Swarm.CallOffTest do
 
     test "is called off when what is there gets well beyond what home can bring" do
       {_, _, memory} = plan(units: field_miners() ++ field_raid(2) ++ soldiers(10))
-      {s, _, _} = plan([units: field_miners() ++ field_raid(16) ++ soldiers(10), tick: 101], memory)
+      {s, _, _} = plan([units: field_miners() ++ field_raid(24) ++ soldiers(10), tick: 101], memory)
       assert s.help == nil
       assert Enum.any?(s.why, &match?({:help, "help at (27,7) called off" <> _}, &1))
     end
@@ -195,7 +201,7 @@ defmodule Swarm.CallOffTest do
     test "after help is called off, none again for a while" do
       pair = for i <- 1..2, do: unit(900 + i, "Soldier", 27, 7, owner: 1)
       {_, _, memory} = plan(units: edge_miners() ++ pair ++ soldiers(10))
-      big = for i <- 1..16, do: unit(940 + i, "Soldier", 27, 7, owner: 1)
+      big = for i <- 1..24, do: unit(940 + i, "Soldier", 27, 7, owner: 1)
       {%{help: nil}, _, memory} = plan([units: edge_miners() ++ big ++ soldiers(10), tick: 101], memory)
 
       # The big raid moves off, two raiders again: still no help until 20 ticks have passed. (The
@@ -211,12 +217,12 @@ defmodule Swarm.CallOffTest do
     raid = fn n -> for i <- 1..n, do: unit(900 + i, "Soldier", 27, 7, owner: 1) end
     home = fn n -> for i <- 1..n, do: unit(200 + i, "Soldier", 10, 10) end
     {_, _, memory} = plan(units: miners ++ raid.(2) ++ home.(10))
-    {%{help: nil}, _, memory} = plan([units: miners ++ raid.(16) ++ home.(10), tick: 101], memory)
+    {%{help: nil}, _, memory} = plan([units: miners ++ raid.(24) ++ home.(10), tick: 101], memory)
 
-    # 25 ticks on, past the rest: nine raiders there against home's ten (even, not 1.3x): not yet.
+    # 25 ticks on, past the rest: eleven raiders there against home's ten and the tower (even, not 1.3x): not yet.
     # (The sixteen forgotten: what we knew of their army lately is its own rule.)
     memory = %{memory | army_seen: %{}}
-    assert {%{help: nil}, _, _} = plan([units: miners ++ raid.(9) ++ home.(10), tick: 126], memory)
+    assert {%{help: nil}, _, _} = plan([units: miners ++ raid.(11) ++ home.(10), tick: 126], memory)
     # Seven (10 is over 1.3 x 7): it goes.
     assert {%{help: {27, 7}}, _, _} = plan([units: miners ++ raid.(7) ++ home.(10), tick: 126], memory)
   end
