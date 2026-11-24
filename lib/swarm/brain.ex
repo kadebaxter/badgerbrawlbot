@@ -307,6 +307,13 @@ defmodule Swarm.Brain do
   # (the middle is where everyone expands to and every army crosses), up to `@safe_enough`;
   # equally safe, the nearer us. So our own side's field and the free corners before the middle.
   @safe_enough 30
+  # Except the first: until we have a base in the middle of the map (within a quarter of the
+  # map's width of its center), the fields there come first, the nearest to us. The middle holds
+  # the most ore on the map (21,600 of 72,000 with two to four players), and whoever sits there
+  # with an army keeps everyone else off it: with our first base in a far corner, the hardest
+  # house bot took the whole middle and out-mined us two to one. Our army then lives at that base
+  # (`rally/1`): the rally point is there, not at home, and it gets `@forward_towers` towers.
+  @forward_towers 4
   @base_ore 2500
   @base_clear 14
   @base_watch 12
@@ -320,7 +327,10 @@ defmodule Swarm.Brain do
   # A second TechLab once we have this many workers and the first is up, ahead of the rest of the
   # build order: two upgrades at a time.
   @second_lab_workers 25
-  @siege_after_fighters 25
+  # (It was 25 fighters and the whole build order done: the first Trebuchets came at tick 650 to
+  # 1100. Their workers stand a dozen and more to a tile while they mine, and a shell hits
+  # everything on the tile it lands on: Trebuchets are for those as much as for towers.)
+  @siege_after_fighters 15
   @trebuchets 2
   # More against a wall of towers: one for every `@towers_per_trebuchet` finished towers of the
   # opponent who has the most we know of, up to `@max_trebuchets`. Two take about 56 ticks a tower
@@ -340,6 +350,12 @@ defmodule Swarm.Brain do
   # outrange every tower, so towers don't count against a party, to leave or to be called back,
   # and it isn't called back for being few. Two stood at the rally point for 650 ticks in a game
   # lost by 886 points, facing no fighters, six towers and four Command Centers.
+  # A party also goes hunting with their army alive, at a base of theirs it isn't at
+  # (`soft_target/4`): a drop-off of theirs with no fighters of theirs we know of within
+  # `@hunt_clear` that the escort (`@hunt_escort` attackers or more) couldn't meet. Their workers
+  # stand a dozen and more to a tile by their drop-offs, mostly with no Soldier near.
+  @hunt_clear 12
+  @hunt_escort 4
   # Trebuchets needed at the rally point to go out with a wave.
   @siege_group 2
   # A wave with siege waits this far short of the target for it, at most `@siege_wait` ticks.
@@ -468,7 +484,7 @@ defmodule Swarm.Brain do
   # the fighting ones before the second Harvesting. One TechLab got through five of these in a
   # 630-tick game (each takes 30 to 80 ticks, one at a time): a second one (`@second_lab_workers`)
   # researches alongside it.
-  @research ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Armor2", "SiegeEngineering", "Harvesting2", "Fortify1", "Armor3", "Fortify2"]
+  @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Weapons2", "Armor2", "Harvesting2", "Fortify1", "Armor3", "Fortify2"]
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -1198,7 +1214,7 @@ defmodule Swarm.Brain do
       case wave && Map.get(wave, :kind) do
         :strike -> wave.tower_pos
         :sortie -> wave.spot
-        _ -> target
+        _ -> (wave && Map.get(wave, :goal)) || target
       end
 
     check = if wave && Map.get(wave, :kind) == :sortie, do: nil, else: memory.check
@@ -1556,7 +1572,7 @@ defmodule Swarm.Brain do
       all_in?(v) -> Tuple.insert_at(all_in(v, memory, owner), 3, nil)
       memory.wave && Map.get(memory.wave, :kind) == :strike -> keep_strike(v, memory)
       memory.wave && Map.get(memory.wave, :kind) == :sortie -> keep_sortie(v, memory)
-      memory.wave -> keep_wave(v, memory, rally, target)
+      memory.wave -> keep_wave(v, memory, rally, Map.get(memory.wave, :goal) || target)
       memory.regroup -> {nil, memory.next_wave, [], "regrouping at the backup Command Center"}
       spot = siege_spot(v, memory) -> sortie(v, memory, spot)
       strike = strike(v, memory) -> strike
@@ -2260,7 +2276,11 @@ defmodule Swarm.Brain do
     # A siege party (`@siege_idle`): too few attackers for a wave, Trebuchets at the rally point,
     # and those attackers `@margin` times their army as we know it (towers aside).
     their_army = enemy_army(memory, owner)
-    party? = at_rally != [] and length(staged) < want and Roles.strength(staged) >= @margin * their_army
+    gone? = Roles.strength(staged) >= @margin * their_army
+    # Their army alive: a base of theirs it isn't at, if we have the escort for it.
+    hunt = if at_rally != [] and not gone? and length(staged) >= @hunt_escort, do: soft_target(v, memory, owner, staged)
+    party? = at_rally != [] and ((length(staged) < want and gone?) or hunt != nil)
+    target = if party? and hunt, do: hunt, else: target
     siege = if party?, do: at_rally, else: siege
     ours = if party?, do: Roles.strength(staged ++ siege), else: ours
 
@@ -2334,6 +2354,7 @@ defmodule Swarm.Brain do
       counter =
         cond do
           counter? -> "counterattack: "
+          party? and hunt != nil -> "siege party at their base by #{fmt(hunt)}, none of their army we know of near it: "
           party? -> "siege party (their army is gone, #{round(their_army)} known): "
           early? -> "early strike on a weak neighbor: "
           true -> ""
@@ -2354,7 +2375,9 @@ defmodule Swarm.Brain do
         staging: if(siege != [], do: staging(v, target, from)),
         released: siege == [],
         at: v.tick,
-        party: party?
+        party: party?,
+        # Where a hunting party goes (`soft_target/4`); nil for everyone else: the usual target.
+        goal: if(party?, do: hunt)
       }
 
       {wave, memory.next_wave + 1, [{:wave_launched, why}], nil}
@@ -2385,6 +2408,29 @@ defmodule Swarm.Brain do
       |> Enum.uniq_by(& &1["id"])
 
     enemy_army(memory, owner) + Roles.strength(towers)
+  end
+
+  # A drop-off of `owner`'s (Command Center or Resource Depot we know of) their army isn't at:
+  # the fighters of theirs we remember within `@hunt_clear` of it are no more than the escort can
+  # meet (`@margin`). The one with the fewest of them by it, then the nearest to us. Nil with none.
+  defp soft_target(v, memory, owner, escort) do
+    from = if v.cc, do: View.pos(v.cc), else: center(v)
+    ours = Roles.strength(escort)
+    fighters = memory.enemies |> Map.values() |> Enum.filter(&(&1["owner"] in [owner, nil]))
+
+    (v.enemy_buildings ++ v.remembered)
+    |> Enum.filter(&(&1["owner"] == owner and &1["type"] in ["CommandCenter", "ResourceDepot"]))
+    |> Enum.uniq_by(& &1["id"])
+    |> Enum.map(fn b ->
+      pos = View.pos(b)
+      {Roles.strength(Enum.filter(fighters, &(View.dist(View.pos(&1), pos) <= @hunt_clear))), View.dist(pos, from), pos}
+    end)
+    |> Enum.filter(fn {near, _d, _pos} -> ours >= @margin * near end)
+    |> Enum.min(fn -> nil end)
+    |> case do
+      nil -> nil
+      {_near, _d, pos} -> pos
+    end
   end
 
   @doc """
@@ -2618,9 +2664,23 @@ defmodule Swarm.Brain do
 
   defp clamp(n, size), do: n |> max(0) |> min(size - 1)
 
-  # Where guards stand: behind the Guard Tower closest to the enemy, else the rally point.
+  # Where guards stand: behind the Guard Tower closest to the enemy, else the rally point. With the
+  # army living at a base in the middle, the guards are the ones who stay home: behind the home
+  # tower closest to the enemy (within `@base_radius` of the Command Center), else by the Command
+  # Center, on the enemy's side.
   defp post(v, rally, enemy) do
-    case Enum.filter(View.buildings_of(v, "GuardTower"), & &1["completed"]) do
+    forward? = forward_base(v) != nil
+    home = View.pos(v.cc)
+
+    towers =
+      for t <- View.buildings_of(v, "GuardTower"), t["completed"], not forward? or View.dist(View.pos(t), home) <= @base_radius, do: t
+
+    case towers do
+      [] when forward? ->
+        {x, y} = home
+        {ex, ey} = enemy || center(v)
+        {x + 3 * sign(ex - x), y + 3 * sign(ey - y)}
+
       [] ->
         rally
 
@@ -2631,12 +2691,24 @@ defmodule Swarm.Brain do
     end
   end
 
-  # Three tiles from the Command Center toward the middle of the map.
+  # Three tiles from the Command Center toward the middle of the map; with a base of ours in the
+  # middle (`forward_base/1`), three tiles from that, toward the nearest enemy start: the army
+  # lives where the ore is fought over, and its towers with it.
   defp rally(%View{cc: cc} = v) do
-    {x, y} = View.pos(cc)
-    {cx, cy} = center(v)
-    {x + 3 * sign(cx - x), y + 3 * sign(cy - y)}
+    case forward_base(v) do
+      nil ->
+        {x, y} = View.pos(cc)
+        {cx, cy} = center(v)
+        {x + 3 * sign(cx - x), y + 3 * sign(cy - y)}
+
+      {x, y} = base ->
+        {ex, ey} = Enum.min_by(v.enemy_starts, &View.dist(&1, base), fn -> center(v) end)
+        {clamp(x + 3 * sign(ex - x), v.map_width), clamp(y + 3 * sign(ey - y), v.map_height)}
+    end
   end
+
+  defp forward_base(v), do: View.forward_base(v)
+  defp middle?(v, pos), do: View.middle?(v, pos)
 
   defp center(%View{} = v), do: {div(v.map_width, 2), div(v.map_height, 2)}
 
@@ -3048,6 +3120,10 @@ defmodule Swarm.Brain do
       min(min(from_them, 2 * View.dist(pos, middle)), @safe_enough)
     end
 
+    # Until we have a base in the middle (`@forward_towers`), finished or going up, the fields there
+    # come first.
+    ours_middle? = Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.base?(v, &1) and middle?(v, View.pos(&1))))
+
     ore
     |> fields()
     |> Enum.filter(fn field ->
@@ -3061,7 +3137,8 @@ defmodule Swarm.Brain do
     |> Enum.sort_by(fn field ->
       center = View.pos(hd(field))
       fallen? = Enum.any?(v.fallen_starts, &(View.dist(&1, center) <= @conquest_reach))
-      {not fallen?, -safety.(center), View.dist(center, home), center}
+      wanted_middle? = not ours_middle? and middle?(v, center)
+      {not fallen?, not wanted_middle?, if(wanted_middle?, do: 0, else: -safety.(center)), View.dist(center, home), center}
     end)
   end
 
@@ -3241,8 +3318,16 @@ defmodule Swarm.Brain do
   defp outpost_tower(v, terrain) do
     towers = Enum.map(View.buildings_of(v, "GuardTower"), &View.pos/1)
     bases = View.base_ccs(v)
-    # A base Command Center gets `@base_towers` whether we are rich or not.
-    wanted = fn o -> if(o in bases, do: @base_towers, else: if(rich?(v), do: @outpost_towers, else: 1)) end
+    # A base Command Center gets `@base_towers` whether we are rich or not; the one in the middle,
+    # where the army lives, `@forward_towers`.
+    wanted = fn o ->
+      cond do
+        o in bases and middle?(v, o) -> @forward_towers
+        o in bases -> @base_towers
+        rich?(v) -> @outpost_towers
+        true -> 1
+      end
+    end
 
     if prerequisites?(v, "GuardTower") do
       Roles.outposts(v)
@@ -3262,10 +3347,7 @@ defmodule Swarm.Brain do
     end
   end
 
-  defp siege_time?(v) do
-    build_order_done? = Enum.all?(build_order(v), fn {type, wanted, _, _, _} -> count(v, type) >= wanted end)
-    build_order_done? and length(Roles.fighters(v)) >= @siege_after_fighters
-  end
+  defp siege_time?(v), do: length(Roles.fighters(v)) >= @siege_after_fighters
 
   # Rich, with the build order done: the first extra we are short of and have room for.
   defp extra(v, terrain) do

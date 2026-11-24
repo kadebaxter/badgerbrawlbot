@@ -65,6 +65,8 @@ defmodule Swarm.UnitBrain do
   # A Trebuchet out with a wave shells the known enemy tower nearest it, of those within this many
   # tiles of the wave's target or of itself.
   @siege_towers 14
+  # ...after any stack of this many enemy workers or more on one tile in its reach (`worker_stack/2`).
+  @stack 3
   # No attack-move this close to a Command Center we spare: an Archer sees 6.
   @spare_sight 8
 
@@ -692,6 +694,8 @@ defmodule Swarm.UnitBrain do
         back = kite(unit, v, s, :fighters, @siege_blind_spot) -> {:move, back}
         kill = Map.get(s, :kill) -> go_kill(v, kill)
         holding?(s) and not sieging?(s) -> {:move, s.wave.staging}
+        # Their workers standing a few to a tile within reach: a shell hits every one of them.
+        worker = role == :wave && worker_stack(unit, v) -> {:attack, worker["id"]}
         # No spared Command Center in a shell's way: with one, the camp out of its reach as ever.
         tower = Map.get(s, :spare) == nil && siege_tower(unit, v, s) -> shell(unit, v, s, tower)
         true -> onward(unit, s, :siege_camp)
@@ -702,6 +706,24 @@ defmodule Swarm.UnitBrain do
     if carrying_out?(unit, intent, memory.intent),
       do: {:no_change, memory},
       else: {command(unit, intent), %{memory | intent: intent}}
+  end
+
+  # One of the enemy workers in the biggest stack a Trebuchet out with a wave can hit from where it
+  # is (3 to 7 tiles off), `@stack` or more of them standing on one tile (mining, banking or idle:
+  # a shell takes three ticks to land and misses whoever has moved on): the one with the lowest id,
+  # so every Trebuchet names the same. Nil with no such stack.
+  defp worker_stack(unit, v) do
+    here = View.pos(unit)
+
+    v.enemy_units
+    |> Enum.filter(&(&1["type"] == "Worker" and &1["activity"] != "Moving" and View.dist(View.pos(&1), here) in @siege_blind_spot..7))
+    |> Enum.group_by(&View.pos/1)
+    |> Enum.filter(fn {_tile, workers} -> length(workers) >= @stack end)
+    |> Enum.max_by(fn {tile, workers} -> {length(workers), -View.dist(tile, here), tile} end, fn -> nil end)
+    |> case do
+      nil -> nil
+      {_tile, workers} -> Enum.min_by(workers, & &1["id"])
+    end
   end
 
   defp sieging?(%{wave: %{sieging: since}}) when since != nil, do: true

@@ -1,0 +1,135 @@
+defmodule Swarm.MiddleTest do
+  @moduledoc """
+  Taking the middle: the first base goes there, the army lives at it, and Trebuchets go after
+  their workers, who stand many to a tile by their drop-offs.
+  """
+  use ExUnit.Case, async: true
+  import Swarm.Test.GameState
+  alias Swarm.{Brain, UnitBrain, View}
+
+  # Us at (7, 7), the enemy at (56, 56), a 64x64 map: its middle is within 16 of (32, 32).
+  @barracks building(2, "Barracks", 11, 7)
+  @depot building(3, "ResourceDepot", 4, 9)
+  @home_ore %{"id" => 4, "x" => 2, "y" => 7, "remaining" => 900}
+  defp field(id, x, y), do: for(i <- 0..2, do: %{"id" => id + i, "x" => x + i, "y" => y, "remaining" => 1000})
+  defp plan(opts, memory \\ Brain.new_memory()), do: Brain.plan(View.new(state(opts)), looked(memory, 1, opts[:tick] || 100), terrain())
+  defp ccs(commands), do: for(%{"type" => "Build", "buildingType" => "CommandCenter"} = c <- commands, do: c)
+
+  describe "the first base" do
+    # A field in the middle at (26, 26) and a safer one nearer home at (6, 22); both seen.
+    @seeing [unit(300, "Scout", 24, 24), unit(301, "Scout", 8, 20)]
+
+    test "goes to the middle, not the safest field" do
+      opts = [units: @seeing ++ workers(16) ++ soldiers(12), buildings: [@barracks, @depot], deposits: [@home_ore | field(30, 26, 26) ++ field(40, 6, 22)], ore: 1200]
+      {_, commands, _} = plan(opts)
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
+      assert View.dist({x, y}, {27, 26}) <= 4
+    end
+
+    test "with one of ours in the middle already, the next goes to the safest again" do
+      middle = building(60, "CommandCenter", 28, 28)
+      more = field(50, 34, 26)
+      opts = [units: @seeing ++ [unit(302, "Scout", 34, 24)] ++ workers(30) ++ soldiers(12), buildings: [@barracks, @depot, middle],
+              deposits: [@home_ore | more ++ field(40, 6, 22)], ore: 1200]
+      {_, commands, _} = plan(opts, %{Brain.new_memory() | bases: [{28, 28}]})
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
+      assert View.dist({x, y}, {7, 22}) <= 4
+    end
+  end
+
+  describe "with a base of ours in the middle" do
+    @middle building(60, "CommandCenter", 28, 28)
+    defp held, do: %{Brain.new_memory() | bases: [{28, 28}]}
+
+    test "the army lives there: the rally point is three tiles from it, toward the enemy" do
+      {strategy, _, _} = plan([units: soldiers(5), buildings: [@barracks, @depot, @middle]], held())
+      assert strategy.rally == {31, 31}
+
+      # Without the mark it is a hidden backup, and the army waits at home as before.
+      {strategy, _, _} = plan(units: soldiers(5), buildings: [@barracks, @depot, @middle])
+      assert strategy.rally == {10, 10}
+    end
+
+    test "a quarter of the army stays to guard home, never fewer than seven; the rest are the army in the middle" do
+      roles = fn n ->
+        v = %{View.new(state(units: soldiers(n), buildings: [@barracks, @depot, @middle])) | bases: [{28, 28}]}
+        Enum.frequencies(Map.values(Swarm.Roles.home_roles(v, nil)))
+      end
+
+      assert roles.(40) == %{guard: 10, attacker: 30}
+      assert roles.(60) == %{guard: 15, attacker: 45}
+      assert roles.(20) == %{guard: 7, attacker: 13}
+
+      # Without a base in the middle: seven guards, as ever.
+      v = View.new(state(units: soldiers(40), buildings: [@barracks, @depot]))
+      assert Enum.frequencies(Map.values(Swarm.Roles.home_roles(v, nil))) == %{guard: 7, attacker: 33}
+    end
+
+    test "the guards stand at home, behind the home tower nearest the enemy, not out at the middle base" do
+      home_tower = building(5, "GuardTower", 11, 11)
+      forward_tower = building(70, "GuardTower", 30, 30)
+      {strategy, _, _} = plan([units: soldiers(20), buildings: [@barracks, @depot, @middle, home_tower, forward_tower]], held())
+      assert strategy.post == {10, 10}
+      assert strategy.rally == {31, 31}
+
+      # No tower at home yet: by the Command Center, on the enemy's side.
+      {strategy, _, _} = plan([units: soldiers(20), buildings: [@barracks, @depot, @middle, forward_tower]], held())
+      assert strategy.post == {10, 10}
+    end
+
+    test "it gets four towers, where another base gets two" do
+      towers = for {id, x, y} <- [{70, 30, 30}, {71, 26, 30}], do: building(id, "GuardTower", x, y)
+      home = [building(5, "GuardTower", 11, 11), building(6, "TechLab", 7, 12), building(7, "Barracks", 12, 3), building(8, "Barracks", 1, 10)]
+      opts = [units: workers(12) ++ soldiers(8), buildings: [@barracks, @depot, @middle] ++ home ++ towers, ore: 300]
+      {_, commands, _} = plan(opts, held())
+      assert [%{"x" => x, "y" => y}] = for(%{"type" => "Build", "buildingType" => "GuardTower"} = c <- commands, do: c)
+      assert View.dist({x, y}, {28, 28}) <= 4
+    end
+  end
+
+  describe "a Trebuchet out with a wave" do
+    @hunt %{mode: :attack, target: {50, 50}, rally: {10, 10}, post: {9, 9}, threat: nil,
+            wave: %{id: 1, members: [201, 301], released: true, staging: nil, at: 100, party: true}}
+    defp decide(units), do: elem(UnitBrain.decide(301, View.new(state(units: [unit(301, "Trebuchet", 40, 40) | units])), @hunt), 0)
+    defp miners(ids, x, y, activity \\ "Gathering"), do: for(id <- ids, do: unit(id, "Worker", x, y, owner: 1, activity: activity))
+
+    test "shells the biggest stack of their workers in its reach, by name" do
+      # Five on one tile six tiles off, three on another; a lone Soldier nearer than either.
+      units = miners(901..905, 46, 40) ++ miners(911..913, 44, 44) ++ [unit(950, "Soldier", 44, 40, owner: 1)]
+      assert %{"type" => "Attack", "targetId" => 901} = decide(units)
+    end
+
+    test "not workers on the move (the shell would miss), nor a couple, nor ones out of its reach" do
+      refute match?(%{"targetId" => id} when id in 901..905, decide(miners(901..905, 46, 40, "Moving")))
+      refute match?(%{"targetId" => id} when id in 901..902, decide(miners(901..902, 46, 40)))
+      refute match?(%{"targetId" => id} when id in 901..905, decide(miners(901..905, 49, 40)))
+      refute match?(%{"targetId" => id} when id in 901..905, decide(miners(901..905, 42, 40)))
+    end
+  end
+
+  describe "a hunting party" do
+    # Their army (twenty, counted lately) stands by their base in the middle; their corner base at
+    # (59, 4) has nobody of theirs we know of near it.
+    @their_middle building(720, "CommandCenter", 33, 33, 1)
+    @their_corner building(721, "CommandCenter", 59, 4, 1)
+    defp army_in_the_middle do
+      seen = for i <- 1..20, into: %{}, do: {900 + i, %{"id" => 900 + i, "owner" => 1, "type" => "Soldier", "hp" => 110, "x" => 34, "y" => 34, "seen" => 95}}
+      %{Brain.new_memory() | enemies: seen, army_seen: %{1 => {20 * 990.0, 95}}}
+    end
+
+    test "Trebuchets and an escort of four or more go for the base their army isn't at" do
+      trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10)
+      {strategy, _, _} = plan([units: trebs ++ soldiers(12), buildings: [@their_middle, @their_corner]], army_in_the_middle())
+      assert %{wave: %{party: true, goal: {59, 4}, members: members}, target: {59, 4}} = strategy
+      assert 301 in members and 302 in members and length(members) == 7
+      assert Enum.any?(strategy.why, fn {kind, text} -> kind == :wave_launched and text =~ "siege party at their base by (59,4)" end)
+    end
+
+    test "not with their army by every base of theirs, nor with too small an escort" do
+      trebs = for i <- 1..2, do: unit(300 + i, "Trebuchet", 10, 10)
+      assert {%{wave: nil}, _, _} = plan([units: trebs ++ soldiers(12), buildings: [@their_middle]], army_in_the_middle())
+      # Ten soldiers: seven guards, three attackers at the rally point.
+      assert {%{wave: nil}, _, _} = plan([units: trebs ++ soldiers(10), buildings: [@their_middle, @their_corner]], army_in_the_middle())
+    end
+  end
+end

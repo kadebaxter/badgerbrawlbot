@@ -24,6 +24,10 @@ defmodule Swarm.Roles do
   alias Swarm.View
 
   @guards 7
+  # With the army living at a base of ours in the middle of the map (`View.forward_base/1`), this
+  # share of the fighters at home stays to guard the main base, if that is more than `@guards`:
+  # home must hold a raid until the army is back from twenty tiles away.
+  @home_share 0.25
   # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
   @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
@@ -148,8 +152,10 @@ defmodule Swarm.Roles do
         {Map.put(groups, o, taken), newest_first.(away ++ extra)}
       end)
 
-    # 2. The newest of the rest guard the main base.
-    {guards, pool} = Enum.split(pool, @guards)
+    # 2. The newest of the rest guard the main base: `@guards` of them, or `@home_share` of all the
+    #    fighters at home once the army lives in the middle, if that is more.
+    guard_count = if View.forward_base(v), do: max(@guards, round(@home_share * length(home(v, wave)))), else: @guards
+    {guards, pool} = Enum.split(pool, guard_count)
 
     # 3. Each group is filled up from the closest of the rest. One that can't reach
     #    `@min_escort_group` isn't worth having: those fighters attack instead.

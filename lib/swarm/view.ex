@@ -291,6 +291,21 @@ defmodule Swarm.View do
     %{v | deposits: visible ++ remembered}
   end
 
+  @doc "The middle of the map."
+  def center(%__MODULE__{} = v), do: {div(v.map_width, 2), div(v.map_height, 2)}
+
+  @doc "Whether `pos` is in the middle of the map: within a quarter of its (smaller) side of the center."
+  def middle?(%__MODULE__{} = v, pos), do: dist(pos, center(v)) <= div(min(v.map_width, v.map_height), 4)
+
+  @doc """
+  Our finished base Command Center in the middle of the map (`middle?/2`), the nearest to its
+  center, or nil: where the army lives once we have one (`Swarm.Brain`), all but the share that
+  stays to guard home (`Swarm.Roles.home_roles/2`).
+  """
+  def forward_base(%__MODULE__{} = v) do
+    v |> base_ccs() |> Enum.filter(&middle?(v, &1)) |> Enum.min_by(&{dist(&1, center(v)), &1}, fn -> nil end)
+  end
+
   @doc """
   Our finished Command Centers other than the main one: backups, kept secret. Nobody mines by one
   but its own workers while we regroup there.

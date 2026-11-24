@@ -537,6 +537,13 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    for 90 ticks. Trebuchets step
    back from anything inside their 3-tile blind spot. A tower standing on its own (no other of
    theirs within 6) the wave takes together, shooting at us or not.
+   **Trebuchets for their workers:** SiegeEngineering comes right after the first Weapons and
+   Armor, from 15 fighters (it was 25 and the whole build order done). A Trebuchet out with a wave
+   shells, before any tower, the biggest stack of enemy workers standing still on one tile in its
+   reach (three or more: a shell hits everything on the tile it lands on, and their miners stand a
+   dozen to a tile). A party also goes hunting with their army alive: Trebuchets at the rally
+   point and four attackers or more go for a drop-off of theirs with no fighters of theirs we
+   know of within 12 that the escort couldn't meet.
    **A siege party:** with their army gone (the attackers at the rally point are 1.5 times the
    fighters of theirs we know of, none included), the Trebuchets at the rally point go out
    without a wave's worth of attackers, one of them or more, with whoever is there. Their towers
@@ -569,6 +576,13 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    mines by it. On two- to four-player maps the ore we haven't seen counts: the map is mirrored
    left to right and top to bottom, so every deposit we have seen tells us three more (dropped
    once we look and find none). Fields farther from every enemy start than from ours come first.
+   **The middle first:** until we have a base in the middle of the map (within a quarter of its
+   width of the center), the fields there come before the safest, the nearest to us. The middle
+   holds the most ore, and whoever sits there with an army keeps everyone else off it. With a
+   base of ours there the army lives at it: the rally point is three tiles from it, toward the
+   nearest enemy start, and it gets four towers. A quarter of the fighters at home (never
+   fewer than the usual seven) stay as guards at the main base, behind its tower nearest the
+   enemy: it must hold a raid until the army is back.
    **An eliminated player's start** comes before all of them, and nothing of theirs the server
    still remembers counts (their buildings go with them). But only once a scout has seen it clear
    in the last 45 ticks: the survey scout goes there, and back every 20 ticks, while that field is
