@@ -271,6 +271,7 @@ defmodule Swarm.Brain do
   # The most the floor is raised to with floods on two sides (`flood_floor/2`), in Soldiers.
   @flood_floor 40
   @help_chase 3
+  @help_cover 8
   @score_floor_from 120
 
   # Built once the build order is done and only while rich, one at a time, in this order.
@@ -829,7 +830,7 @@ defmodule Swarm.Brain do
   defp help(%View{cc: nil}, memory, _s), do: {nil, %{memory | help: nil}, []}
 
   defp help(v, memory, s) do
-    spots = Enum.reject(Roles.help_wanted(v), &Roles.covered?(v, &1))
+    spots = Roles.help_wanted(v) |> Enum.reject(&Roles.covered?(v, &1)) |> Enum.filter(&worth_help?(v, &1))
 
     resting? = memory.help_off_at != nil and v.tick - memory.help_off_at < @help_rest
 
@@ -869,6 +870,14 @@ defmodule Swarm.Brain do
             {pos, %{memory | help: %{help | pos: pos, clear_since: clear_since}}, []}
         end
     end
+  end
+
+  # With two or more opponents in, the army only goes out to where there is something to hold: a
+  # finished Guard Tower or a Command Center of ours within `@help_cover`. A depot with no tower is
+  # the price of a Soldier; 38 went out for one in the middle, met 40, and led them home.
+  defp worth_help?(v, spot) do
+    map_size(v.start_owner) < 2 or
+      Enum.any?(Roles.our_towers(v) ++ View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
   end
 
   # Whether home may commit to help at `spot`: it can take what is there (`Roles.can_take?/3`);
@@ -1012,16 +1021,19 @@ defmodule Swarm.Brain do
     # Under the flood floor (`flood_floor/2`), the next Barracks comes right after the fighters,
     # ahead of everything else that is built (`more_barracks/4`).
     catch_up? = Roles.strength(Roles.fighters(v)) < flood_floor(v, memory)
+    # With three or four players, the base in the middle and its towers come before all that
+    # (`claiming_middle?/2`).
+    claiming? = claiming_middle?(v, memory)
 
     {commands, memory, _ore} =
       {[], memory, v.ore - reserve - held}
       |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
+      |> then(&if(claiming?, do: &1 |> found_base(v, terrain) |> hold_for_middle(v, terrain) |> build(v, terrain), else: &1))
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
-      |> found_base(v, terrain)
-      |> build(v, terrain)
+      |> then(&if(claiming?, do: &1, else: &1 |> found_base(v, terrain) |> build(v, terrain)))
       |> then(&if(catch_up?, do: &1, else: more_barracks(&1, v, terrain, false)))
       |> with_reserve(home_reserve, &train_workers(&1, v))
       |> research(v)
@@ -3050,6 +3062,48 @@ defmodule Swarm.Brain do
 
   defp found_base(acc, _v, _terrain), do: acc
 
+  # With three or four players, the middle of the map is gone for as fast as we can: whoever holds
+  # it with towers mines the most ore on the map and keeps the others off it. Against two house
+  # bots we put a depot there at tick 227 with no tower, spent the army defending it, and the one
+  # that then made it a base ended with five Command Centers and 95 workers to our 60.
+  #
+  # Claiming it: we have no base Command Center there yet (finished or going up) and a field there
+  # is worth one and clear of them (`base_candidates/2`), or we have one and it is short of its
+  # `@forward_towers` towers. While that holds, the base and what is built (its towers first,
+  # `next_build/3`) come before the fighters and the Barracks, the ore is kept for its Command
+  # Center once it may go up (`hold_for_middle/3`), and no depot goes to a field there
+  # (`remote_depot/3`): a depot there has no towers, and a field with a depot by it gets no base.
+  defp claiming_middle?(%View{cc: nil}, _mem), do: false
+
+  defp claiming_middle?(v, mem) do
+    contested?(v) and
+      case middle_base(v) do
+        nil -> Enum.any?(base_candidates(v, mem), &middle?(v, View.pos(hd(&1))))
+        pos -> Enum.count(View.buildings_of(v, "GuardTower"), &(View.dist(View.pos(&1), pos) <= @outpost_tower_reach)) < @forward_towers
+      end
+  end
+
+  # Three or four players: two or three opponents around a middle everyone wants.
+  defp contested?(%View{players: players}), do: players in 3..4
+
+  # Where our base Command Center in the middle stands, finished or going up, or nil.
+  defp middle_base(v) do
+    Enum.find_value(View.buildings_of(v, "CommandCenter"), fn b ->
+      if View.base?(v, b) and middle?(v, View.pos(b)), do: View.pos(b)
+    end)
+  end
+
+  # The ore we have is kept for the Command Center in the middle once one may go up there
+  # (`base_cc/3`) and we are short of its price: nothing else is bought meanwhile.
+  defp hold_for_middle({cmds, %{base_order: nil} = mem, ore} = acc, v, terrain) do
+    case ore < @costs["CommandCenter"] && base_cc(v, terrain, mem) do
+      {"CommandCenter", site, :base} -> if middle?(v, site), do: {cmds, mem, 0}, else: acc
+      _ -> acc
+    end
+  end
+
+  defp hold_for_middle(acc, _v, _terrain), do: acc
+
   # Whether a base is wanted and we can't pay for it yet: then each Barracks keeps one in its
   # queue and no more (`train_army/3`), and what that leaves in the bank adds up to its 400.
   # Nothing is trained any later for it; workers, buildings and research never wait.
@@ -3160,7 +3214,7 @@ defmodule Swarm.Brain do
       nil ->
         # In a big game a co-op's tower comes before the rest: outposts are where raiders go.
         second_lab(v, terrain) ||
-          if big?(v),
+          if big?(v) or contested?(v),
             do:
               outpost_tower(v, terrain) || from_build_order(v, terrain, avoid(v, mem)) ||
                 siege_workshop(v, terrain) || extra(v, terrain),
@@ -3383,7 +3437,9 @@ defmodule Swarm.Brain do
          target = Enum.max_by(far, fn d -> {Enum.count(far, &(View.dist(View.pos(&1), View.pos(d)) <= 4)), -d["id"]} end),
          true <- Enum.count(far, &(View.dist(View.pos(&1), View.pos(target)) <= 4)) >= @remote_miners,
          true <- field_ore(v, target) >= @depot_ore,
-         false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)) do
+         false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)),
+         # The middle gets a base with towers, not a bare depot (`claiming_middle?/2`).
+         false <- contested?(v) and middle?(v, View.pos(target)) and middle_base(v) == nil do
       right_by(terrain, v, target)
     else
       _ -> nil
@@ -3540,7 +3596,13 @@ defmodule Swarm.Brain do
   # finished Barracks, like every tower; the first doesn't need us to be rich.
   defp outpost_tower(v, terrain) do
     towers = Enum.map(View.buildings_of(v, "GuardTower"), &View.pos/1)
-    bases = View.base_ccs(v)
+    # With three or four players a base's towers start with its Command Center, not once it is up.
+    going_up =
+      if contested?(v),
+        do: for(b <- View.buildings_of(v, "CommandCenter"), not b["completed"], View.base?(v, b), do: View.pos(b)),
+        else: []
+
+    bases = View.base_ccs(v) ++ going_up
     # A base Command Center gets `@base_towers` whether we are rich or not; the one in the middle,
     # where the army lives, `@forward_towers`.
     wanted = fn o ->
@@ -3553,7 +3615,7 @@ defmodule Swarm.Brain do
     end
 
     if prerequisites?(v, "GuardTower") do
-      Roles.outposts(v)
+      (going_up ++ Roles.outposts(v))
       |> Enum.reject(fn o -> Enum.count(towers, &(View.dist(&1, o) <= @outpost_tower_reach)) >= wanted.(o) end)
       |> Enum.find_value(fn o ->
         site = site(terrain, v, {:outpost, o})

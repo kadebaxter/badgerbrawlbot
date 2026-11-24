@@ -739,6 +739,18 @@ every fighter attacks, whatever the estimate (`Roles.inside?/2`). A worker in da
 hits back too (4 damage a tick) instead of running for cover that isn't there, for as long as the
 raid is inside the base and the fight is lost.
 
+**Three or four players: the middle first.** Whoever holds the middle with towers mines the
+most ore on the map and keeps the others off it. While we have no base Command Center there and a
+field there is worth one and clear of them, or we have one short of its four towers:
+the base and what is built come before the fighters and the Barracks; once the Command Center may
+go up (16 workers, 12 fighters, a scout has seen the field) the ore is kept for it and nothing
+else is bought; its towers are ordered while it is still going up, ahead of the build order; and
+no depot goes to a field in the middle before the base, since a field with a depot by it gets no
+base and a depot has no towers.
+
+**Nothing to hold, no help.** With two or more opponents in, the army only goes out to help where
+a finished Guard Tower or a Command Center of ours stands within 8 tiles.
+
 **Help past the towers.** With two or more opponents in, home only commits to help at an outpost
 or by our workers if it can also take the army, by the scoreboard, of whoever is raiding there,
 looked at or not. And help follows a fight no more than 3 tiles farther from home than where it

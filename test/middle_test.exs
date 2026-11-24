@@ -37,6 +37,46 @@ defmodule Swarm.MiddleTest do
     end
   end
 
+  describe "with three or four players, the middle is gone for as fast as we can" do
+    # The same game with a third player, at (7, 56).
+    defp three(opts, memory \\ Brain.new_memory()) do
+      s = state(opts)
+      third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
+      Brain.plan(View.new(%{s | "players" => s["players"] ++ [third]}), looked(memory, 1, opts[:tick] || 100), terrain())
+    end
+
+    defp spent(commands), do: for(%{"type" => type} = c <- commands, type in ["Produce", "Build", "Research"], do: c)
+    defp towers(commands), do: for(%{"type" => "Build", "buildingType" => "GuardTower", "x" => x, "y" => y} <- commands, do: {x, y})
+
+    defp opts, do: [units: @seeing ++ workers(16) ++ soldiers(12), buildings: [@barracks, @depot], deposits: [@home_ore | field(30, 26, 26) ++ field(40, 6, 22)]]
+
+    test "short of its Command Center's price, the ore is kept for it: nothing else is bought" do
+      {_, commands, _} = three(opts() ++ [ore: 350])
+      assert spent(commands) == []
+      # With one opponent the Barracks train meanwhile, as ever.
+      {_, commands, _} = plan(opts() ++ [ore: 350])
+      assert spent(commands) != []
+    end
+
+    test "with the ore for it, it goes up in the middle" do
+      {_, commands, _} = three(opts() ++ [ore: 1200])
+      assert [%{"x" => x, "y" => y}] = ccs(commands)
+      assert View.dist({x, y}, {27, 26}) <= 4
+    end
+
+    test "its towers start while it is going up, before the Barracks get the ore" do
+      going_up = %{building(60, "CommandCenter", 28, 28) | "completed" => false}
+      opts = Keyword.merge(opts(), buildings: [@barracks, @depot, going_up], ore: 600)
+      memory = %{Brain.new_memory() | bases: [{28, 28}]}
+      {_, commands, _} = three(opts, memory)
+      assert [spot] = towers(commands)
+      assert View.dist(spot, {28, 28}) <= 6
+      # With one opponent they wait for it to be up.
+      {_, commands, _} = plan(opts, memory)
+      assert towers(commands) == []
+    end
+  end
+
   describe "with a base of ours in the middle" do
     @middle building(60, "CommandCenter", 28, 28)
     defp held, do: %{Brain.new_memory() | bases: [{28, 28}]}

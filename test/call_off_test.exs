@@ -109,6 +109,18 @@ defmodule Swarm.CallOffTest do
       assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(scored.(s, 1)), memory, terrain())
     end
 
+    test "with two or more opponents in, only where a tower or a Command Center of ours stands" do
+      third = fn s -> %{s | "players" => s["players"] ++ [%{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}]} end
+      memory = looked(Brain.new_memory(), 1, 100)
+      units = field_miners() ++ field_raid(2) ++ soldiers(10)
+
+      # Our workers out at a field with nothing of ours to hold: the army stays.
+      assert {%{help: nil}, _, _} = Brain.plan(View.new(third.(state(units: units))), memory, terrain())
+      # A tower of ours by them: it goes.
+      tower = building(70, "GuardTower", 24, 9)
+      assert {%{help: {27, 7}}, _, _} = Brain.plan(View.new(third.(state(units: units, buildings: [tower]))), memory, terrain())
+    end
+
     test "it follows the fight no more than three tiles farther from home than where it committed" do
       # Committed at (26, 7), 19 tiles from home: as far as (29, 7), not to (30, 7).
       {_, _, memory} = plan(units: field_miners() ++ field_raid(2, 26) ++ soldiers(10))
