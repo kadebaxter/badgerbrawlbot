@@ -36,15 +36,24 @@ defmodule Swarm.TurnaroundTest do
   end
 
   describe "the serum" do
-    defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 9, 9, owner: 1))
+    # A raid in the base but not inside it yet: five tiles from the Command Center, no tower of ours.
+    defp raiders(n, at \\ 12), do: for(i <- 1..n, do: unit(900 + i, "Soldier", at, at, owner: 1))
 
     test "taken when the fight's estimate with it has us ahead; not against a raid it can't beat" do
-      # Ten Soldiers at home against fourteen: lost plain (-0.66), ours with the serum (+0.24).
+      # Ten Soldiers at home against fourteen: lost plain, ours with the serum.
       assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(14))
-      # Against sixteen the estimate with it is still -0.33, though twice ten is more than sixteen:
-      # hitting twice as hard isn't being twice as many. Not taken.
+      # Against sixteen the estimate with it is still against us, though twice ten is more than
+      # sixteen: hitting twice as hard isn't being twice as many. Not taken.
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(16))
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(30))
+    end
+
+    test "taken once the raid is inside our base, where everyone fights it, whatever the odds" do
+      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(16, 9))
+      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(30, 9))
+      # Not for a couple of raiders, and not with fewer than eight Soldiers of ours in it.
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ raiders(2, 9))
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(7) ++ raiders(30, 9))
     end
 
     test "a Soldier on the serum counts for two, theirs or ours, in strength and in the fight's estimate" do
@@ -64,8 +73,8 @@ defmodule Swarm.TurnaroundTest do
     end
 
     test "theirs on the serum in our base: we take ours, whatever the odds" do
-      juiced = for i <- 1..30, do: Map.put(unit(900 + i, "Soldier", 9, 9, owner: 1), "effects", ["serum"])
-      plain = for i <- 1..30, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+      juiced = for i <- 1..30, do: Map.put(unit(900 + i, "Soldier", 12, 12, owner: 1), "effects", ["serum"])
+      plain = for i <- 1..30, do: unit(900 + i, "Soldier", 12, 12, owner: 1)
 
       # Thirty against our ten is nothing ours could turn: not taken. The same thirty on theirs: answered.
       assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ plain)

@@ -604,7 +604,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    in the last 45 ticks: the survey scout goes there, and back every 20 ticks, while that field is
    worth a base. With no field worth one, the build order's hidden backup goes up as before.
    **Upgrades:** every tier of Weapons (units and towers), Armor (units) and Fortify (buildings,
-   towers too), Weapons and Armor 1 and 2 before the second Harvesting; a second TechLab at 25
+   towers too), in the order Harvesting1, Weapons1, Armor1, Armor2, Weapons2, Armor3, then
+   SiegeEngineering, the second Harvesting and Fortify (all the Armor before SiegeEngineering:
+   the house bots end with Armor3); a second TechLab at 25
    workers, ahead of the rest of the build order, so two are researched at a time.
    **No wave without a look:** an ordinary wave only leaves within 60 ticks of a scout having got
    to its look at the target itself (within 3 tiles of it, or a Scout with it well inside its
@@ -765,6 +767,17 @@ the Barracks that come first to ten.
 against is at least theirs by the scoreboard, whatever a scout saw at their base: their army is
 often out. And a fight we would lose is fallen back from to our tower nearest us, one up to 4
 tiles nearer them than us included, not only those strictly on our side.
+
+**The serum.** Taken when a raid worth it (8 Soldiers' worth or more) is inside our base, where
+everyone fights it, with eight or more of our Soldiers in that fight, whatever the odds; or, with
+the raid still outside, when the estimate with it has us ahead of a raid that size; or in answer
+to theirs.
+
+**Soldiers only.** The Barracks train Soldiers and no Archers (it was one Archer to two
+Soldiers). Run on the game's own engine with the same ore a side, 30 Soldiers beat 20 Soldiers and
+8 Archers five times in five, kiting or not, and 60 beat 40 and 16: Soldiers are the faster, and an
+Archer's range is worth a few ticks of shots before they are on it. Archers only came out ahead
+attacking an army that stood still. (The Archer rules stay, for any we still have.)
 
 **No army by the scoreboard.** An opponent whose score shows 1,500 ore or less alive outside the
 buildings we know of has no army: a wave of eight or more may leave at them without a look, and

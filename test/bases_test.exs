@@ -98,11 +98,11 @@ defmodule Swarm.BasesTest do
       end
 
       # A base wanted (16 workers, 12 fighters, the field seen), not yet affordable: an empty queue gets its one...
-      # (495 ore pays for a worker and two Archers.)
-      assert fighters.(16, []) == 2
+      # (495 ore pays for a worker and a Soldier in each of the three.)
+      assert fighters.(16, []) == 3
       # ...and a queue with one in it waits. With no base wanted (15 workers) it would get a second.
       assert fighters.(16, one) == 0
-      assert fighters.(15, one) == 2
+      assert fighters.(15, one) == 3
     end
 
     test "given up, with a strike against the site, when its builders are dead or 150 ticks have passed" do

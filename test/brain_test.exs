@@ -859,7 +859,7 @@ defmodule Swarm.BrainTest do
       # tiles: a worker between them mines and banks without a step).
       start = [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 11)]
       rich = [%{"id" => 4, "x" => 2, "y" => 7, "remaining" => 2000}]
-      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, deposits: rich, ore: 200)
+      {_, commands, _} = plan(units: workers(5) ++ soldiers(5), buildings: start, deposits: rich, ore: 300)
       assert [%{"x" => x, "y" => y}] = depot_builds(commands)
       assert View.dist({x, y}, {2, 7}) <= 2
 
@@ -1431,16 +1431,16 @@ defmodule Swarm.BrainTest do
       assert [%{"buildingType" => "SiegeWorkshop"}] = builds(commands)
     end
 
-    test "SiegeEngineering comes right after the first Weapons and Armor, once we have fifteen fighters" do
-      first = ["Harvesting1", "Weapons1", "Armor1"]
+    test "SiegeEngineering comes after Weapons2 and all the Armor, once we have fifteen fighters" do
+      first = ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
       early = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], first)) end
       next = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
-      assert next.(elem(Brain.plan(early.(workers(20) ++ soldiers(14)), nil, terrain()), 1)) == "Weapons2"
+      assert next.(elem(Brain.plan(early.(workers(20) ++ soldiers(14)), nil, terrain()), 1)) == "Harvesting2"
       assert next.(elem(Brain.plan(early.(workers(20) ++ soldiers(15)), nil, terrain()), 1)) == "SiegeEngineering"
     end
 
     test "SiegeEngineering is skipped in the research order until then" do
-      done = ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Armor2"]
+      done = ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Armor2", "Armor3"]
       v = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], done)) end
       research = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
 
@@ -1516,9 +1516,10 @@ defmodule Swarm.BrainTest do
     end
   end
 
-  test "barracks train two soldiers for each archer" do
+  test "barracks train Soldiers only, however many we have" do
     barracks = building(2, "Barracks", 11, 7)
     {_, commands, _} = plan(units: workers(10) ++ soldiers(2), buildings: [barracks], ore: 1000)
-    assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Archer", "buildingId" => 2}, &1))
+    assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Soldier", "buildingId" => 2}, &1))
+    refute Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Archer"}, &1))
   end
 end

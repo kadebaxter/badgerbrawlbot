@@ -116,7 +116,7 @@ defmodule Swarm.TowerRulesTest do
   end
 
   describe "upgrades" do
-    test "after Armor2: Fortify1, Armor3, Fortify2, each only once the one before it is done" do
+    test "after Armor2: Armor3, then Fortify1 and Fortify2, each only once the one before it is done" do
       lab = building(20, "TechLab", 12, 7) |> Map.put("research", nil)
       base = ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2"]
 
@@ -126,9 +126,9 @@ defmodule Swarm.TowerRulesTest do
         Enum.find_value(commands, &(&1["type"] == "Research" && &1["upgrade"]))
       end
 
-      assert research.(base, []) == "Fortify1"
-      assert research.(base ++ ["Fortify1"], []) == "Armor3"
-      assert research.(base ++ ["Fortify1", "Armor3"], []) == "Fortify2"
+      assert research.(base, []) == "Armor3"
+      assert research.(base ++ ["Armor3"], []) == "Fortify1"
+      assert research.(base ++ ["Armor3", "Fortify1"], []) == "Fortify2"
       # Armor2 still going: not Armor3 yet.
       assert research.(base -- ["Armor2"], [%{"upgrade" => "Armor2"}]) == "Fortify1"
       assert research.(base -- ["Armor2"], [%{"upgrade" => "Armor2"}, %{"upgrade" => "Fortify1"}]) == nil

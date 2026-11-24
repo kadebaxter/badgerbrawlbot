@@ -509,7 +509,10 @@ defmodule Swarm.Brain do
   # the fighting ones before the second Harvesting. One TechLab got through five of these in a
   # 630-tick game (each takes 30 to 80 ticks, one at a time): a second one (`@second_lab_workers`)
   # researches alongside it.
-  @research ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Weapons2", "Armor2", "Harvesting2", "Fortify1", "Armor3", "Fortify2"]
+  # Armor before SiegeEngineering: the house bots end with Armor3, and in two games of three we
+  # stopped at Armor1. On the game's engine, 30 Soldiers with Armor3 beat 30 with Armor1 (both
+  # with Weapons2) four times in five, with 7 left.
+  @research ["Harvesting1", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Harvesting2", "Fortify1", "Fortify2"]
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -2316,9 +2319,20 @@ defmodule Swarm.Brain do
     raider_ids = MapSet.new(raiders, & &1["id"])
     on = %{v | serum_on: true, shared: v.shared && Map.delete(v.shared, :groups)}
 
+    # Some raid worth it, that is (`@serum_raid`): two Soldiers we would beat anyway turned "it"
+    # while 50 more came into sight, and the serum was gone when they got there.
     turns_it? =
       Enum.any?(Roles.groups(on, wave).groups, fn {_id, g} ->
-        g.size > 0 and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
+        g.size > 0 and g.worth >= @serum_raid and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
+      end)
+
+    # Or the fight is joined whatever the odds: a raid worth it is inside our base
+    # (`Roles.inside?/2`), where everyone fights it (`Swarm.UnitBrain`), with `@serum_soldiers`
+    # of ours or more in it. That is the fight the serum is for; kept for a fight it would turn
+    # by the estimate, it was taken on fights we were staying out of, or not at all.
+    joined? =
+      Enum.any?(Roles.groups(v, wave).groups, fn {_id, g} ->
+        g.size >= @serum_soldiers and g.worth >= @serum_raid and Roles.inside?(v, g) and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
       end)
 
     # Or they have taken theirs: raiders on the serum (the server marks each, `Roles.serum?/1`,
@@ -2326,7 +2340,7 @@ defmodule Swarm.Brain do
     answer? = Enum.any?(raiders, &Roles.serum?/1)
 
     raiders != [] and length(View.units_of(v, "Soldier")) >= @serum_soldiers and
-      ((raid >= @serum_raid and overrun? and turns_it?) or answer?)
+      ((raid >= @serum_raid and overrun? and turns_it?) or joined? or answer?)
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.
@@ -3922,9 +3936,11 @@ defmodule Swarm.Brain do
   # Every finished Barracks trains non-stop: two soldiers for each archer.
   # (`terrain` nil: below the army floor, where nothing is saved for.)
   defp train_army(acc, v, terrain) do
-    soldiers = length(View.units_of(v, "Soldier"))
-    archers = length(View.units_of(v, "Archer"))
-    kind = if archers * 2 < soldiers, do: "Archer", else: "Soldier"
+    # Soldiers only. For the same ore, on the game's own engine, 30 Soldiers beat 20 Soldiers and
+    # 8 Archers five times in five with 12 left (and 60 beat 40 and 16), kiting or not: Soldiers
+    # are the faster, an Archer has 60 HP for 125 ore to a Soldier's 110 for 100, and its range is
+    # worth three or four ticks of shots before they are on it. (It was one Archer to two Soldiers.)
+    kind = "Soldier"
 
     # Rich: fill the queues (the game takes five) so the ore turns into units, not waste. Saving
     # for a base (`saving_for_base?/3`): one in each queue, which trains just as fast.
