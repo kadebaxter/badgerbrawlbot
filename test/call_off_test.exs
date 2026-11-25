@@ -212,8 +212,15 @@ defmodule Swarm.CallOffTest do
       {_, _, memory} = plan(units: edge_miners() ++ far_miners ++ pair ++ home)
       assert memory.help.pos == {27, 7}
 
-      {s, _, _} = plan([units: edge_miners() ++ far_miners ++ pack ++ home, tick: 101], memory)
-      assert s.help == {27, 7}
+      # (Home falls back to its towers from that pack, and a fall-back ends help: it doesn't stand
+      # at the spot it was helping at either. And it isn't committed again at the pack's edge.)
+      {s, _, memory} = plan([units: edge_miners() ++ far_miners ++ pack ++ home, tick: 101], memory)
+      assert s.fall_back
+      assert s.help == nil
+      assert [{:help, "help at (27,7) called off: home has fallen back to its towers"}] = Enum.filter(s.why, &match?({:help, _}, &1))
+
+      {s, _, _} = plan([units: edge_miners() ++ far_miners ++ pack ++ home, tick: 102], memory)
+      assert s.help == nil
       refute Enum.any?(s.why, &match?({:help, _}, &1))
     end
 

@@ -130,6 +130,16 @@ defmodule Swarm.FieldTest do
       assert Enum.sort(t.strategy.claim_guard) == Enum.sort(attackers)
     end
 
+    test "with nobody at home who could guard it, no field is taken; with an attacker again, it is" do
+      # Five Soldiers: all of them the base's own guards.
+      t = tick(400, [scout() | walking() ++ home(1..5)], start())
+      assert Swarm.Roles.home_roles(t.v, nil) |> Map.values() |> Enum.all?(&(&1 == :guard))
+      assert t.strategy.claim == nil and t.log == []
+
+      t = tick(401, [scout() | walking() ++ home(1..12)], t.memory)
+      assert t.strategy.claim == {34, 34} and t.strategy.claim_guard != []
+    end
+
     test "Archers at the held field pull nobody else out from home" do
       t = tick(400, [scout() | walking() ++ home()], start())
       there = at_field(1..10) ++ home(11..40)

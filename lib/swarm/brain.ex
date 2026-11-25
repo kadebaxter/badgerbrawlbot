@@ -227,6 +227,8 @@ defmodule Swarm.Brain do
   # `@pack_memory` ticks), and no fewer than `@claim_guard_min` fighters.
   @claim_guard_times 3
   @claim_guard_min 10
+  # Help within this of where the army lives is help at home: no neighbor's army is weighed for it (`army_around/4`).
+  @help_home 12
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
   # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
   # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
@@ -987,9 +989,16 @@ defmodule Swarm.Brain do
     spots = Roles.help_wanted(v) |> Enum.reject(&Roles.covered?(v, &1)) |> Enum.filter(&worth_help?(v, &1))
 
     resting? = memory.help_off_at != nil and v.tick - memory.help_off_at < @help_rest
+    # Home fallen back to its towers (`strategy.fall_back`) goes nowhere, and what it was going to
+    # is over: help committed at tick 386 sat through a 60-tick fight at our towers, and the tick
+    # the fall-back lifted 57 Soldiers set off for where it had been, 20 tiles out.
+    fallen_back? = Map.get(s, :fall_back, false)
 
     case memory.help do
-      nil when resting? ->
+      %{pos: pos} when fallen_back? ->
+        {nil, %{memory | help: nil, help_off_at: v.tick, help_off_pos: pos}, [{:help, "help at #{fmt(pos)} called off: home has fallen back to its towers"}]}
+
+      nil when resting? or fallen_back? ->
         {nil, memory, []}
 
       nil ->
@@ -1012,9 +1021,16 @@ defmodule Swarm.Brain do
         # The same measure that committed to it (`Roles.help_odds/3`).
         {ours, theirs} = Roles.help_odds(v, s.wave, pos)
 
+        around = army_around(v, memory, s, pos)
+
         cond do
           clear_since && v.tick - clear_since >= @help_clear ->
             {nil, %{memory | help: nil}, [{:help, "help at #{fmt(pos)} over: nothing there for #{@help_clear} ticks"}]}
+
+          around != nil and elem(around, 1) > @help_give_up * ours ->
+            {slot, army} = around
+            why = "help at #{fmt(pos)} called off: player #{slot}'s army around us is #{round(army)} against #{round(ours)} home can bring"
+            {nil, %{memory | help: nil, help_off_at: v.tick, help_off_pos: pos}, [{:help, why}]}
 
           theirs > @help_give_up * ours ->
             why = "help at #{fmt(pos)} called off: #{round(theirs)} there against #{round(ours)} home can bring"
@@ -1061,7 +1077,28 @@ defmodule Swarm.Brain do
     # Away from every Command Center of ours (a depot and its tower), only clearly as well: at
     # even, 92 of ours went out to a depot in the middle against 94 and arrived in pieces.
     depot? = not Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
-    if near_last? or depot?, do: ours >= @help_give_up * theirs, else: ours >= theirs
+    # Between two armies, away from where the army lives: only if home is a match for the bigger
+    # of them too (`army_around/4`), whatever is at the spot.
+    around = case army_around(v, memory, s, spot), do: ({_slot, army} -> army; nil -> 0)
+    ours >= around and if(near_last? or depot?, do: ours >= @help_give_up * theirs, else: ours >= theirs)
+  end
+
+  # Between two armies (`between_armies/2`, the hold on the wave), the bigger of them, for a spot
+  # more than `@help_home` from where the army lives (the rally point, or the main Command
+  # Center): `{player, army}`; nil otherwise. The army leaves its towers for such a spot only if it
+  # is a match for that one as well, and comes back when that one is `@help_give_up` times it:
+  # whoever of the three leaves first is finished by the one that didn't. (With "between two
+  # armies" on the status line all game, 57 went 12 tiles out toward our second base on the odds
+  # at the spot; the 67 a neighbor had 15 tiles from the way there killed 54 of them.)
+  defp army_around(v, memory, s, spot) do
+    lives = Map.get(s, :rally) || View.pos(v.cc)
+
+    with true <- View.dist(spot, lives) > @help_home and View.dist(spot, View.pos(v.cc)) > @help_home,
+         [{slot, army} | _] <- between_armies(v, memory) do
+      {slot, army}
+    else
+      _ -> nil
+    end
   end
 
   # Our finished Command Center that isn't the main one, or nil.
@@ -1348,9 +1385,10 @@ defmodule Swarm.Brain do
                |> Enum.filter(&((&1["remaining"] || 0) > 0))
                |> Enum.reject(&(Roles.under_tower?(v, View.pos(&1)) or Enum.any?(v.enemy_starts, fn s -> View.dist(s, View.pos(&1)) < View.enemy_clear() end)))
                |> Enum.sort_by(&{from.(View.pos(&1)), &1["id"]})
-               |> Enum.find(&Roles.can_take?(v, nil, View.pos(&1))) do
-          pos = View.pos(d)
-          claim = guarded(v, memory, %{pos: pos, at: v.tick})
+               |> Enum.find(&Roles.can_take?(v, nil, View.pos(&1))),
+             pos = View.pos(d),
+             # (With nobody to guard it there is no taking it: the next tick with an attacker at home.)
+             %{guard: [_ | _]} = claim <- guarded(v, memory, %{pos: pos, at: v.tick}) do
           what = if idle? and quiet?, do: "our workers have had nothing to mine", else: "our workers have been driven off the ore"
 
           why =

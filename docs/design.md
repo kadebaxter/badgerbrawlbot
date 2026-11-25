@@ -934,6 +934,17 @@ only while an enemy fighter could hit a worker at it (its reach and two steps), 
 within eight tiles; a worker in reach steps back behind the guard, or a few tiles straight back
 with the guard all in the fight, and not to a tower 25 tiles away.
 
+**Help ends with a fall-back, and between two armies it is weighed against them.** Help
+committed at tick 386 sat through a 60-tick fight at our towers; the tick the fall-back lifted,
+57 Soldiers set off for where it had been, 20 tiles out, stopped 12 tiles out to kill a
+neighbor's workers, and its 67 Soldiers killed 54 of them (63 and four towers had just beaten 22
+of the same army for 9). So: home fallen back to its towers calls help off and commits to none
+(`help/3`), with the usual rest before the next. And while we are between two armies (the hold on
+the wave, `between_armies/2`), help at a spot more than 12 tiles from where the army lives needs
+home to be a match for the bigger of them too, whatever is at the spot, and is called off when
+that one grows to 1.3 times it (`army_around/4`). A field is not claimed with nobody at home to
+guard it.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the
