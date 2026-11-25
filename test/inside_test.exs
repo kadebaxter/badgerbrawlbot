@@ -32,11 +32,30 @@ defmodule Swarm.InsideTest do
   describe "workers" do
     @worker unit(101, "Worker", 11, 10, activity: "Gathering")
 
-    test "inside our base with the fight lost, a worker by them runs; it never hits back" do
+    test "inside our last base with the fight lost, a worker by them hits back, and keeps at it" do
       v = view({14, 10}, {12, 12}, [@worker])
-      assert {%{"type" => "Move", "unitIds" => [101]}, _} = UnitBrain.decide(101, v, @defend)
+      assert {%{"type" => "Attack", "unitIds" => [101], "x" => 14, "y" => 10}, _} = UnitBrain.decide(101, v, @defend)
       v = view({14, 10}, {12, 12}, [%{@worker | "activity" => "Attacking"}])
+      assert {:no_change, _} = UnitBrain.decide(101, v, @defend)
+    end
+
+    test "with another base of ours to go to, it runs there" do
+      v = view({14, 10}, {12, 12}, [@worker])
+      other = building(62, "CommandCenter", 40, 40)
+      v = %{View.new(state(units: v.my_units ++ v.enemy_units, buildings: [building(50, "GuardTower", 12, 12), other])) | bases: [{40, 40}]}
       assert {%{"type" => "Move", "unitIds" => [101]}, _} = UnitBrain.decide(101, v, @defend)
+    end
+
+    test "with the map mined out, a worker goes for the nearest raider on us, win or lose, and not while there is ore" do
+      # Twelve of theirs at our Command Center, fifteen tiles from the worker.
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+      far = unit(101, "Worker", 24, 9, activity: "Idle")
+      v = View.new(state(units: [far | raid]))
+      refute match?({%{"type" => "Attack"}, _}, UnitBrain.decide(101, v, @defend))
+      assert {%{"type" => "Attack", "unitIds" => [101], "x" => 9, "y" => 9}, _} = UnitBrain.decide(101, %{v | no_ore: :mined_out}, @defend)
+      # Nobody on us: nothing to fight.
+      quiet = %{View.new(state(units: [far])) | no_ore: :mined_out}
+      refute match?({%{"type" => "Attack"}, _}, UnitBrain.decide(101, quiet, @defend))
     end
 
     test "with them outside the base, it runs for cover as ever" do

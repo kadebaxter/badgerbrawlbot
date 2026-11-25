@@ -94,6 +94,8 @@ defmodule Swarm.UnitBrain do
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
+  # How far a worker goes for a raider once the map is mined out.
+  @worker_fight 20
   @cc_cover 6
   # An enemy fighter that could hit a worker with this many steps sends it to cover, whatever else.
   @worker_margin 2
@@ -211,12 +213,15 @@ defmodule Swarm.UnitBrain do
   # workers we lost in one game walked straight into the archers that killed them) or building
   # (a site under fire waits; the builder doesn't stand there and die) runs just like a miner.
   #
-  # A worker never stands and fights: it does 4 damage a tick with 40 health, against a Soldier's 9
-  # and 110. Hitting back inside a base we were losing, 75 workers died in fifteen ticks at one
-  # base, and the match with them.
+  # A worker only fights with the map mined out, or at our last base with the fight there lost
+  # (`fighting/3`).
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning", "Moving", "Building", "Attacking"] and rally != nil do
-    case leaving(unit, v, s) || worker_danger(unit, v, s) do
+    case fighting(unit, v, s) || leaving(unit, v, s) || worker_danger(unit, v, s) do
+      {:fight, spot} ->
+        # Attacking already: it goes on to the next of them by itself.
+        if unit["activity"] == "Attacking", do: :no_change, else: command(unit, {:attack_move, spot})
+
       {:leave, {x, y} = spot} ->
         cond do
           heading?(unit, spot) -> :no_change
@@ -289,6 +294,46 @@ defmodule Swarm.UnitBrain do
       Roles.sheltered?(v, here) -> nil
       Map.get(s, :fall_back, false) or not winning?(v, s, closest) -> closest
       true -> nil
+    end
+  end
+
+  # When a worker fights, as `{:fight, where}`:
+  # - the map is mined out (`View.no_ore`): there is nothing else it is for, and the nearest raider
+  #   on us (`Roles.raiders/1`) within `@worker_fight` is attacked. On the game's own engine, 73
+  #   Soldiers beat 47 with their 67 workers standing by five times in five, with 24 to 34 left;
+  #   with the workers fighting, the 47 won five in five and none of them died (both sides
+  #   Weapons2 and Armor3: a worker hits a Soldier for 4, and takes four hits to kill).
+  # - a raid we would lose to is inside our base (`Roles.inside?/2`, `Roles.away?/1`) and we have
+  #   no other base to go to: 77 and 66 workers died at the main base without a blow.
+  # While there is ore and somewhere to go, it runs as ever: 75 workers who were the whole
+  # economy fought at one base of several, and the match went with them.
+  defp fighting(unit, v, s) do
+    here = View.pos(unit)
+
+    cond do
+      v.no_ore == :mined_out ->
+        Roles.raiders(v)
+        |> Enum.map(&View.pos/1)
+        |> Enum.filter(&(View.dist(&1, here) <= @worker_fight))
+        |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
+        |> then(&(&1 && {:fight, &1}))
+
+      View.base_ccs(v) == [] ->
+        enemy =
+          v.enemy_units
+          |> Enum.filter(&(&1["type"] != "Worker" and View.dist(View.pos(&1), here) <= @worker_alarm))
+          |> Enum.min_by(&{View.dist(View.pos(&1), here), &1["id"]}, fn -> nil end)
+
+        with %{} <- enemy,
+             %{} = g <- Roles.group_of_enemy(v, s.wave, enemy["id"]),
+             true <- Roles.inside?(v, g) and Roles.away?(g) do
+          {:fight, View.pos(enemy)}
+        else
+          _ -> nil
+        end
+
+      true ->
+        nil
     end
   end
 

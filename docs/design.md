@@ -756,9 +756,15 @@ Soldiers to their 41.
 **Inside our base, everyone fights.** A raid that would beat us is stayed out of only while it
 is outside the base. Once one of them is within reach of a finished Guard Tower of ours (its range
 plus one) or within 3 tiles of our Command Center, there is nowhere left to stay out of its way:
-every fighter attacks, whatever the estimate (`Roles.inside?/2`). Workers never fight: a worker
-does 4 damage a tick with 40 health against a Soldier's 9 and 110. They hit back for a while, and
-75 of them died in fifteen ticks at one base, and the match with them.
+every fighter attacks, whatever the estimate (`Roles.inside?/2`). Workers fight in two cases only
+(`UnitBrain.fighting/3`). With the map mined out, a worker within 20 tiles of a raider on us
+attacks it: there is nothing else it is for. On the game's own engine, 73 Soldiers beat 47 with
+their 67 workers standing by five times in five with 24 to 34 left; with the workers fighting the
+47 won five in five and none of them died (both sides Weapons2 and Armor3: a worker hits a Soldier
+for 4 and takes four hits to kill). And at our last base, with a raid we would lose to inside it
+and no other base to go to: 77 and 66 workers died at the main base without a blow. While there
+is ore and somewhere to go they run: 75 who were the whole economy fought at one base of several
+at tick 400, and the match went with them.
 
 **Help only under our towers, and their serum answered anywhere.** In every game the army only
 goes out to help where a finished tower of ours reaches (its range plus one) or within 5 tiles of
