@@ -224,6 +224,9 @@ defmodule Swarm.UnitBrain do
   # (`fighting/3`).
   defp worker(%{"activity" => activity} = unit, v, %{rally: rally} = s)
        when activity in ["Idle", "Gathering", "Returning", "Moving", "Building", "Attacking"] and rally != nil do
+    # The field we are taking, for where a worker on it runs to and what it mines there.
+    v = %{v | claim: Map.get(s, :claim) || v.claim}
+
     case fighting(unit, v, s) || leaving(unit, v, s) || worker_danger(unit, v, s) do
       {:fight, spot} ->
         # Attacking already: it goes on to the next of them by itself.
@@ -395,14 +398,17 @@ defmodule Swarm.UnitBrain do
     here = View.pos(unit)
     there = View.pos(enemy)
 
-    tower = if v.cc && Enum.any?(View.buildings_of(v, "GuardTower"), & &1["completed"]), do: Roles.shelter(v, here, there)
+    # On a field we hold: behind our fighters there, or a few tiles straight back from the enemy
+    # with all of them in the fight. Not to a tower or a drop-off 25 tiles off, with the ore.
+    held? = on_held_field?(v, here)
+    tower = if v.cc && not held? && Enum.any?(View.buildings_of(v, "GuardTower"), & &1["completed"]), do: Roles.shelter(v, here, there)
 
     if tower && not in_danger?(v, tower) do
       tower
     else
       (Enum.map(Roles.fighters(v), &View.pos/1) ++ View.drop_offs(v))
-      |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there) and not in_danger?(v, &1)))
-      |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> tower end)
+      |> Enum.filter(&(View.dist(&1, here) < View.dist(&1, there) and not in_danger?(v, &1) and (not held? or on_held_field?(v, &1))))
+      |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> if(held?, do: away(v, here, there), else: tower) end)
     end
   end
 
@@ -561,17 +567,24 @@ defmodule Swarm.UnitBrain do
   end
 
   # The ore of the field our army is taking for us (`strategy.claim`, `Swarm.Brain`), once
-  # `@claim_escort` of our fighters stand within `@claim_cover` of it: enemy ground or not, with
-  # no enemy fighter by it and in no tower's reach (`unsafe?/2`). Until they are there, nothing.
-  defp claimed_ore(%View{claim: nil}), do: []
-
-  defp claimed_ore(%View{claim: claim} = v) do
-    there = Enum.count(Roles.fighters(v), &(View.dist(View.pos(&1), claim) <= @claim_cover))
-
-    if there >= @claim_escort,
-      do: Enum.filter(v.deposits, &(View.dist(View.pos(&1), claim) <= @claim_cover and (&1["remaining"] || 0) > 0 and not unsafe?(&1, v))),
+  # `@claim_escort` of our fighters stand within `@claim_cover` of it (`held?/1`): enemy ground or
+  # not. Until they are there, nothing. Held, a pile is left alone only while an enemy fighter
+  # could hit a worker at it (`in_danger?/2`: its reach and a step or two) or a tower can: not for
+  # one anywhere within `@unsafe_ore`, as everywhere else. (With 35 of ours on the field, two
+  # Archers eight tiles off made every pile unsafe, and 43 workers walked home and back for
+  # another 140 ticks.)
+  defp claimed_ore(%View{} = v) do
+    if held?(v),
+      do: Enum.filter(v.deposits, &(View.dist(View.pos(&1), v.claim) <= @claim_cover and (&1["remaining"] || 0) > 0 and not in_danger?(v, View.pos(&1)))),
       else: []
   end
+
+  # The field we are taking is held: `@claim_escort` of our fighters stand within `@claim_cover` of it.
+  defp held?(%View{claim: nil}), do: false
+  defp held?(%View{claim: claim} = v), do: Enum.count(Roles.fighters(v), &(View.dist(View.pos(&1), claim) <= @claim_cover)) >= @claim_escort
+
+  # On a field we hold (`held?/1`, within `@claim_cover` of it and a few tiles more).
+  defp on_held_field?(v, pos), do: held?(v) and View.dist(pos, v.claim) <= @claim_cover + @claim_escort
 
   # An idle worker with nothing safe to do stands by the tower closest to it, not out in the open;
   # if an enemy reaches that, by the closest drop-off none does.
@@ -628,6 +641,9 @@ defmodule Swarm.UnitBrain do
       role == :wave and holding?(s) -> {:attack_move, s.wave.staging}
       role == :wave -> onward(unit, s, :camp)
       match?({:escort, _}, role) -> escort(v, s, elem(role, 1))
+      # The guard of the field we are taking stands on it (`Swarm.Brain.claim/2`): from the
+      # strategy, so it sets off the tick it is picked (its job on the view comes a tick later).
+      field = unit["id"] in Map.get(s, :claim_guard, []) && Map.get(s, :claim) -> to_help(unit, cover(v, s, field))
       raze = role == :attacker && Map.get(s, :raze) -> {:attack, raze}
       s.threat && not Roles.covered?(v, s.threat.pos) -> go_help(unit, v, s, cover(v, s, s.threat.pos))
       help = role == :attacker && Map.get(s, :help) -> to_help(unit, cover(v, s, help))

@@ -46,8 +46,12 @@ defmodule Swarm.ClaimTest do
     assert [said] = t.log
     assert said =~ "nothing to mine for 20 ticks" and said =~ "the field at (34,34)" and said =~ "3200 ore known there"
 
-    # Home's attackers set off for it; the guards stay; the workers wait under cover, not mining yet.
-    assert %{"type" => "Move", "x" => 34, "y" => 34} = t.orders[201]
+    # A guard of ten of home's attackers sets off for it; the rest and the base's guards stay; the
+    # workers wait under cover, not mining yet.
+    assert said =~ "a guard of 10 takes the field" and said =~ "the rest stay home"
+    assert t.strategy.claim_guard == Enum.to_list(201..210)
+    assert Enum.all?(201..210, &match?(%{"type" => "Move", "x" => 34, "y" => 34}, t.orders[&1]))
+    refute Enum.any?(211..220, &match?(%{"x" => 34, "y" => 34}, t.orders[&1]))
     refute Enum.any?(101..110, &match?(%{"type" => "Gather"}, t.orders[&1]))
 
     # No wave leaves meanwhile, and it says why.
@@ -72,7 +76,7 @@ defmodule Swarm.ClaimTest do
     # Tick 500: mining it. The army stays there while the field has ore.
     mining = for w <- idle(), do: %{w | "x" => 33, "y" => 34, "activity" => "Gathering", "targetId" => 31}
     t = tick(500, [scout() | mining ++ there], t.memory, deposits: in_sight())
-    assert t.strategy.claim == {34, 34} and t.strategy.help == {34, 34}
+    assert t.strategy.claim == {34, 34} and t.strategy.claim_guard == Enum.to_list(201..210) and t.strategy.help == nil
 
     # Tick 600: the field is in sight and empty. Done.
     t = tick(600, [scout() | (for w <- idle(), do: %{w | "x" => 33, "y" => 34}) ++ there], t.memory)

@@ -915,6 +915,25 @@ ticks of them, with home fallen back to the towers (or 25 ticks after), or with 
 its workers. They fell back from 69 raiders, ten ticks later that read as "nothing to mine", and
 the army was sent to a field in the middle with 87 a few tiles from it.
 
+**A field is held by a guard, and mined behind it.** Three things from a game won on a field we
+took 350 ticks late (home mined out; 43 workers walked to the middle, an Archer or two came into
+reach, all of them walked home, and again: nothing banked from tick 390 to 740).
+*Driven off the ore* starts a claim as well as idleness does: nothing banked for 40 ticks and no
+worker mining or carrying, whoever is walking where, with no enemy at a base of ours and home not
+fallen back (`claim/2`). Waiting for ten quiet ticks with nobody "on the way to ore" took 200.
+*The field has a guard, not the army*: three times what the enemy has had there in the last 40
+ticks, ten at least, of home's attackers nearest it (`guarded/3`, `strategy.claim_guard`, the
+`{:field, pos}` job in `Roles.home_roles/2`); it keeps its members, replaces its dead and grows
+with what comes. Everyone else stays at the towers: a raid at a held field pulls no one from
+home (`Roles.find_groups/2`), where 80 used to set out for two Archers and turn back, twenty
+times, and were out on such a walk when 80 came at the base. The claim is still given up at the
+old odds against all of home, and the guard fights by the same estimate as anyone: it stays out
+of what would beat it.
+*Workers on a held field stay on it* (`UnitBrain.claimed_ore/1`, `refuge/3`): a pile is left
+only while an enemy fighter could hit a worker at it (its reach and two steps), not for one
+within eight tiles; a worker in reach steps back behind the guard, or a few tiles straight back
+with the guard all in the fight, and not to a tower 25 tiles away.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the

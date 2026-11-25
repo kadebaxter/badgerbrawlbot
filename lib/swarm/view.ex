@@ -34,6 +34,8 @@ defmodule Swarm.View do
     spared: nil,
     # The field our army is taking for the workers (set by `Swarm.Brain.plan/3`), or nil.
     claim: nil,
+    # The fighters holding that field (`Swarm.Brain.claim/2`), by id.
+    claim_guard: [],
     # In sight, plus remembered ones once `with_known_ore/2` has run (those have a "seen" tick).
     deposits: [],
     enemy_starts: [],

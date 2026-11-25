@@ -220,6 +220,13 @@ defmodule Swarm.Brain do
   @between_spent 0.5
   @claim_radius 5
   @claim_rest 60
+  # Driven off the ore: nothing banked for this long and nobody mining or carrying, whoever is
+  # walking where (`claim/2`). Longer than the walk to a field and back to the first drop-off.
+  @claim_driven 40
+  # The field's guard: this many times what the enemy has had there (the most in the last
+  # `@pack_memory` ticks), and no fewer than `@claim_guard_min` fighters.
+  @claim_guard_times 3
+  @claim_guard_min 10
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
   # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
   # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
@@ -610,7 +617,8 @@ defmodule Swarm.Brain do
       # Player slot => the tick we first saw an army of theirs away from their base, while we
       # remember any of it (see `behind/3`).
       behind: %{},
-      # The field the army is taking for the workers, %{pos, at}, or nil; and when one was last
+      # The field the army is taking for the workers, %{pos, at, guard: the ids of the fighters
+      # holding it, seen: {the most the enemy had there, when}}, or nil; and when one was last
       # given up (see `claim/2`).
       claim: nil,
       claim_off_at: nil,
@@ -736,6 +744,8 @@ defmodule Swarm.Brain do
     packs = remember_packs(memory.packs, v)
     behind = behind_since(Map.get(memory, :behind, %{}), v, packs)
     recent = Enum.uniq_by(recent_enemies(v, memory.enemies) ++ pack_unseen(v, packs), & &1["id"]) ++ behind(v, packs, behind)
+    # The field we are taking and who holds it, as of last tick: every job at home is read off this view.
+    v = %{v | claim: memory.claim && memory.claim.pos, claim_guard: (memory.claim && Map.get(memory.claim, :guard)) || []}
     v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent, together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
@@ -1138,9 +1148,9 @@ defmodule Swarm.Brain do
     {help, memory, helped} = help(v, memory, strategy)
     {search, memory, searching} = ore_search(v, memory, terrain, Map.get(strategy, :worker_scout))
 
-    # With nowhere else to help, home's attackers go to the field we are taking.
+    # (The field we are taking has its own guard, `claim/2`: the rest stay home.)
     strategy =
-      %{strategy | survey: survey, regroup: regroup, help: help || Map.get(strategy, :claim), why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
+      %{strategy | survey: survey, regroup: regroup, help: help, why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
       |> Map.put(:search, search)
 
     v = %{v | claim: Map.get(strategy, :claim)}
@@ -1301,7 +1311,7 @@ defmodule Swarm.Brain do
             {%{memory | claim: nil, claim_off_at: v.tick}, [{:claim, "the field at #{fmt(pos)} is given up: #{round(theirs)} there against #{round(ours)} home can bring"}]}
 
           true ->
-            {%{memory | claim: claim}, []}
+            {%{memory | claim: guarded(v, memory, claim)}, []}
         end
 
       nil ->
@@ -1317,7 +1327,19 @@ defmodule Swarm.Brain do
             (memory.raid == nil or v.tick - memory.raid.at >= @claim_idle) and
             Roles.evacuations(v, memory.wave) == []
 
-        with true <- idle? and quiet? and not resting? and not all_in?(v),
+        # Or driven off it: workers walk out to ore, an Archer comes into reach, and all of them walk
+        # home again. That is no raid on a base and no hiding, and "on its way to ore" is all they
+        # ever are: for 350 ticks, 43 workers banked nothing, and this waited 200 of them for a
+        # quiet ten. Nothing banked for `@claim_driven` ticks and nobody mining or carrying, with
+        # no enemy at a base of ours and home not fallen back.
+        carrying? = Enum.any?(workers, &(&1["activity"] in ["Gathering", "Returning"]))
+        at_base? = Enum.any?(Roles.enemy_fighters(v), &Roles.at_base?(v, View.pos(&1)))
+
+        driven? =
+          length(workers) >= @rebuild_workers and not carrying? and v.tick - grew_at >= @claim_driven and v.no_ore != :mined_out and
+            not at_base? and not memory.fall_back and (memory.fall_back_at == nil or v.tick - memory.fall_back_at >= @fall_back_hold + @claim_idle)
+
+        with true <- ((idle? and quiet?) or driven?) and not resting? and not all_in?(v),
              ccs = for(b <- View.buildings_of(v, "CommandCenter"), b["completed"], do: View.pos(b)),
              [_ | _] <- ccs,
              from = fn pos -> ccs |> Enum.map(&View.dist(&1, pos)) |> Enum.min() end,
@@ -1328,12 +1350,48 @@ defmodule Swarm.Brain do
                |> Enum.sort_by(&{from.(View.pos(&1)), &1["id"]})
                |> Enum.find(&Roles.can_take?(v, nil, View.pos(&1))) do
           pos = View.pos(d)
-          why = "our workers have had nothing to mine for #{v.tick - grew_at} ticks: the army takes the field at #{fmt(pos)} (#{left.(pos)} ore known there), and they mine it with the army there"
-          {%{memory | claim: %{pos: pos, at: v.tick}}, [{:claim, why}]}
+          claim = guarded(v, memory, %{pos: pos, at: v.tick})
+          what = if idle? and quiet?, do: "our workers have had nothing to mine", else: "our workers have been driven off the ore"
+
+          why =
+            "#{what} for #{v.tick - grew_at} ticks: a guard of #{length(claim.guard)} takes the field at #{fmt(pos)} (#{left.(pos)} ore known there), " <>
+              "and they mine it with the guard there; the rest stay home"
+
+          {%{memory | claim: claim}, [{:claim, why}]}
         else
           _ -> {memory, []}
         end
     end
+  end
+
+  # The field's guard, kept in the claim: `@claim_guard_times` what the enemy has there (in sight
+  # or just out of it, within `Roles.claim_reach/0`; the most in the last `@pack_memory` ticks), and
+  # `@claim_guard_min` at least, of home's attackers. The rest stay at the towers: with a neighbor's
+  # army beside us, the whole army on a field 25 tiles out leaves the base to it. Those in it stay
+  # in it; it is filled up with the attackers nearest the field, and grows with what comes.
+  defp guarded(v, memory, %{pos: pos} = claim) do
+    soldier = Roles.strength([%{"type" => "Soldier"}])
+    there = (Roles.enemy_fighters(v) ++ v.recent_enemies) |> Enum.uniq_by(& &1["id"]) |> Enum.filter(&(View.dist(View.pos(&1), pos) <= Roles.claim_reach())) |> Roles.strength()
+
+    {seen, seen_at} =
+      case Map.get(claim, :seen) do
+        {most, at} when most > there and v.tick - at <= @pack_memory -> {most, at}
+        _ -> {there, v.tick}
+      end
+
+    want = max(@claim_guard_min, ceil(@claim_guard_times * seen / soldier))
+    roles = Roles.home_roles(v, memory.wave)
+    home = Roles.home(v, memory.wave)
+    kept = for u <- home, u["id"] in Map.get(claim, :guard, []), do: u["id"]
+
+    more =
+      home
+      |> Enum.filter(&(roles[&1["id"]] == :attacker and &1["id"] not in kept))
+      |> Enum.sort_by(&{View.dist(View.pos(&1), pos), &1["id"]})
+      |> Enum.take(max(want - length(kept), 0))
+      |> Enum.map(& &1["id"])
+
+    claim |> Map.put(:guard, kept ++ more) |> Map.put(:seen, {seen, seen_at})
   end
 
   # We know of no ore with anything left in it.
@@ -1568,6 +1626,7 @@ defmodule Swarm.Brain do
       # The field the army is taking for the workers (`claim/2`), or nil: home's attackers go
       # there, and the workers mine it once they are there (`Swarm.UnitBrain`).
       claim: memory.claim && memory.claim.pos,
+      claim_guard: (memory.claim && Map.get(memory.claim, :guard)) || [],
       survey: nil,
       regroup: nil,
       help: nil

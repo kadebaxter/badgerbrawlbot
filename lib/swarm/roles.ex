@@ -129,7 +129,7 @@ defmodule Swarm.Roles do
           | nil
   @type threat :: %{pos: {integer, integer}, size: non_neg_integer()} | nil
 
-  @type role :: :wave | :guard | {:escort, View.pos()} | :attacker | :scout | :siege_out
+  @type role :: :wave | :guard | {:escort, View.pos()} | {:field, View.pos()} | :attacker | :scout | :siege_out
 
   @spec role(View.t(), wave(), integer()) :: role()
   def role(%View{} = v, wave, id) do
@@ -188,7 +188,16 @@ defmodule Swarm.Roles do
       end)
 
     escorts = for {o, group} <- groups, u <- group, do: {u["id"], {:escort, o}}
-    Map.new(Enum.map(guards, &{&1["id"], :guard}) ++ escorts ++ Enum.map(attackers, &{&1["id"], :attacker}))
+    roles = Map.new(Enum.map(guards, &{&1["id"], :guard}) ++ escorts ++ Enum.map(attackers, &{&1["id"], :attacker}))
+
+    # 5. The guard of a field we are taking (`View.claim_guard`, picked by `Swarm.Brain.claim/2`
+    #    from the attackers) holds it: `{:field, where}`.
+    if v.claim != nil and v.claim_guard != [] do
+      field = MapSet.new(v.claim_guard)
+      Map.new(roles, fn {id, role} -> {id, if(MapSet.member?(field, id), do: {:field, v.claim}, else: role)} end)
+    else
+      roles
+    end
   end
 
   defp siege_role(_v, wave, id), do: if(id in members(wave), do: :wave, else: :siege_out)
@@ -1149,6 +1158,11 @@ defmodule Swarm.Roles do
     # for help if home can clearly take it (`Swarm.Brain`). 45 of ours ran 20 tiles to a depot in
     # the middle to gather next to 78.
     raids = Enum.filter(groups, &(&1.raid and &1.worth >= @raid_worth * @soldier and (&1.base or &1.worth < @evacuate_worth * @soldier)))
+    # Nor does a raid at a field we hold with a guard (`View.claim_guard`), at no base: it is the
+    # guard's. For two to four Archers there, 80 at home set out for the middle and turned back
+    # some twenty times in 190 ticks, and were out on one of those walks when 80 came at the base.
+    held = if v.claim != nil and v.claim_guard != [], do: v.claim
+    raids = Enum.reject(raids, &(held != nil and not &1.base and dist_to(&1, held) <= @claim_reach))
 
     # Each of our fighters: {it, its group, how far it is from it}.
     attacker? = fn o -> not MapSet.member?(in_wave, o["id"]) and Map.get(roles, o["id"], :attacker) == :attacker end
@@ -1180,6 +1194,9 @@ defmodule Swarm.Roles do
       true -> {nil, nil}
     end
   end
+
+  @doc "How near a field we are taking an enemy counts as on it."
+  def claim_reach, do: @claim_reach
 
   @doc "Enemy fighters within `@group_link` of each other, as lists: one per group (a chain counts)."
   def clusters(enemies), do: cluster(enemies)
