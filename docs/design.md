@@ -904,7 +904,7 @@ up when what is there is 1.3 times what home can bring, and then not taken again
 53 workers stood for 110 ticks with 3,188 ore 12 tiles from our second base: another player's
 28 workers were on it, unguarded, while 16 of our 30 Soldiers walked to the far corner.
 
-**Between two armies no wave leaves.** With two or more opponents in, when both our neighbors
+**Between two armies no wave leaves.** With two or more opponents in, when two of those around us (below)
 have an army of six Soldiers' worth or more that is over half of ours (by what we remember or
 the scoreboard, whichever is more; not a neighbor a look has read as a boom), no wave leaves
 (`between_armies/2`): whoever of the three fights first is finished by the one that didn't. We
@@ -914,6 +914,26 @@ against 41. It lifts when one of them has spent its army, on us or on anyone. An
 ticks of them, with home fallen back to the towers (or 25 ticks after), or with a base left by
 its workers. They fell back from 69 raiders, ten ticks later that read as "nothing to mine", and
 the army was sent to a field in the middle with 87 a few tiles from it.
+
+**Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
+steps; from a corner all three others are as far (a diagonal step costs what a straight one
+does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the
+two beside us, never the one across the map. Broken by slot, the neighbors were the one across
+the map and one beside us: the wave went across the map at tick 226, and the Formics beside us
+was never looked at or counted. Everyone as many steps away as the farther neighbor is around us
+(`Roles.around/1`), and the hold between two armies counts all of them: any two with armies
+hold the wave, and the two biggest are named.
+
+**The rest of an army is behind the part in sight.** When four or more of a player's fighters
+(not Scouts) are in sight more than 15 tiles from their start, what the scoreboard says they
+have (`army_by_score/2`) less every fighter of theirs we remember (in sight, or seen in the
+last 40 ticks, anywhere) is taken to be with them: that many Soldiers standing by the one in
+sight nearest their start, in the fight's estimate and everything else that reads
+`recent_enemies` (`Swarm.Brain.behind/3`). For 15 ticks from when we first saw them out: by then
+a column has walked into sight, and what we have seen is what there is. Nine Soldiers came into
+sight by our base in the middle with 40 on the scoreboard; on +0.93 against nine, 29 of ours
+went in, three ticks later it was 34 and 11 Archers, and the army was gone in 20 ticks. The
+fight's note says how many of the count nobody has seen.
 
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the

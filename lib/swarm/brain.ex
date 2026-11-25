@@ -239,6 +239,12 @@ defmodule Swarm.Brain do
   @pack_memory 40
   # ...and it was last seen no farther from them than this plus a tile for every tick since.
   @pack_link 3
+  # The rest of an army is taken to be behind the part of it in sight (`behind/3`) when this many
+  # of its fighters or more are in sight farther than `@behind_away` from their start...
+  @behind_min 4
+  @behind_away 15
+  # ...for this long after we first saw them out: by then a column has walked into sight.
+  @behind_for 15
   # How far from the wave's center enemies count when deciding to pull back.
   @wave_sight 8
   # How close to the rally point an attacker must be to leave with a wave.
@@ -601,6 +607,9 @@ defmodule Swarm.Brain do
       # Enemy fighters we saw in the last `@pack_memory` ticks and didn't see die, id => as last
       # seen, with "seen" and "pack" (see `remember_packs/2`).
       packs: %{},
+      # Player slot => the tick we first saw an army of theirs away from their base, while we
+      # remember any of it (see `behind/3`).
+      behind: %{},
       # The field the army is taking for the workers, %{pos, at}, or nil; and when one was last
       # given up (see `claim/2`).
       claim: nil,
@@ -725,11 +734,12 @@ defmodule Swarm.Brain do
       |> Map.merge(seen)
 
     packs = remember_packs(memory.packs, v)
-    recent = Enum.uniq_by(recent_enemies(v, memory.enemies) ++ pack_unseen(v, packs), & &1["id"])
+    behind = behind_since(Map.get(memory, :behind, %{}), v, packs)
+    recent = Enum.uniq_by(recent_enemies(v, memory.enemies) ++ pack_unseen(v, packs), & &1["id"]) ++ behind(v, packs, behind)
     v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent, together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
-    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers, packs: packs}}
+    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers, packs: packs, behind: behind}}
   end
 
   # An enemy tower that shot at us from the fog (`towerShots` names it and where it stands) is
@@ -804,6 +814,44 @@ defmodule Swarm.Brain do
         spots != [] do
       {x, y} = Enum.min_by(spots, &{View.dist(&1, View.pos(e)), &1})
       e |> Map.delete("pack") |> Map.merge(%{"x" => x, "y" => y})
+    end
+  end
+
+  # A player's fighters in sight that are out of their base: farther than `@behind_away` from
+  # their start. Not Scouts (they go alone).
+  defp out(%View{} = v, owner) do
+    start = Enum.find_value(v.start_owner, fn {start, slot} -> if slot == owner, do: start end)
+    for u <- v.enemy_units, u["owner"] == owner, u["type"] not in ["Worker", "Scout"], start == nil or View.dist(View.pos(u), start) > @behind_away, do: u
+  end
+
+  # Since when each player's army has been out in our sight (`out/2`, `@behind_min` of it or
+  # more): from the first tick of it, for as long as we remember any of their fighters.
+  defp behind_since(since, %View{} = v, packs) do
+    remembered = MapSet.new(Map.values(packs), & &1["owner"])
+    kept = Map.filter(since, fn {owner, _tick} -> MapSet.member?(remembered, owner) end)
+
+    for owner <- Map.keys(v.enemy_survival), length(out(v, owner)) >= @behind_min, not Map.has_key?(kept, owner), into: kept, do: {owner, v.tick}
+  end
+
+  # The rest of an army that is out of its base: what the scoreboard says the player has
+  # (`army_by_score/2`) less every fighter of theirs we remember (`memory.packs`: in sight, or seen
+  # in the last `@pack_memory` ticks, wherever), as Soldiers standing by the one in sight nearest
+  # their start: it is taken to be coming behind the part we see. For `@behind_for` ticks from
+  # when we first saw them out; after that what we have seen of it is what there is.
+  # (Nine Soldiers came into sight by our base in the middle; the scoreboard said about 40. On
+  # +0.93 against nine, 29 of ours went in, and three ticks later it was 34 and 11 Archers.)
+  # Marked "behind": nobody has seen them.
+  defp behind(%View{} = v, packs, since) do
+    soldier = Roles.strength([%{"type" => "Soldier"}])
+
+    for {owner, first} <- since, v.tick - first <= @behind_for, out = out(v, owner), length(out) >= @behind_min, reduce: [] do
+      acc ->
+        known = packs |> Map.values() |> Enum.filter(&(&1["owner"] == owner)) |> Roles.strength()
+        n = trunc(max(army_by_score(v, owner) - known, 0) / soldier)
+        start = Enum.find_value(v.start_owner, fn {start, slot} -> if slot == owner, do: start end)
+        {x, y} = out |> Enum.map(&View.pos/1) |> Enum.min_by(&{if(start, do: View.dist(&1, start), else: 0), &1})
+
+        acc ++ for i <- 1..n//1, do: %{"id" => -(owner * 1000 + i), "owner" => owner, "type" => "Soldier", "x" => x, "y" => y, "seen" => v.tick, "behind" => true}
     end
   end
 
@@ -1559,6 +1607,8 @@ defmodule Swarm.Brain do
         g = groups[id]
         kinds = (v.enemy_units ++ v.recent_enemies) |> Enum.filter(&MapSet.member?(g.ids, &1["id"])) |> Enum.frequencies_by(& &1["type"])
         what = kinds |> Enum.sort() |> Enum.map_join(", ", fn {type, n} -> "#{n} #{type}" end)
+        unseen = Enum.count(v.recent_enemies, &(&1["behind"] == true and MapSet.member?(g.ids, &1["id"])))
+        what = if unseen > 0, do: what <> " (#{unseen} of them not seen: behind these, by the scoreboard)", else: what
         where = if g.raid, do: "raid", else: "fight"
 
         then =
@@ -1776,13 +1826,14 @@ defmodule Swarm.Brain do
   defp looking?(look, owner), do: look != nil and look.owner == owner and look.done == nil
   # A look that came to nothing (no scout got there) is no look: a wave of 19 left on a count 115
   # ticks old after one, into 52 Soldiers, and led them home.
-  # Between two armies: both our neighbors (`Roles.neighbors/1`, with two or more opponents in)
-  # have an army worth `@between_min` Soldiers or more that is over `@between_spent` of ours, by
-  # what we remember of it or the scoreboard (`army_by_score/2`), whichever is more. Then no wave
-  # leaves: whoever of the three fights first is finished by the one that didn't. (We had 84 to
-  # their 81 and 75, traded 55 for 46 with one, and the other walked in with 87 against 41.)
-  # Until one of them has spent its army: on us, at our towers, or on someone else.
-  # `[{player, army}, {player, army}]`, or nil.
+  # Between two armies: two or more of those around us (`Roles.around/1`: our neighbors and anyone
+  # else as near, with two or more opponents in) have an army worth `@between_min` Soldiers or more
+  # that is over `@between_spent` of ours, by what we remember of it or the scoreboard
+  # (`army_by_score/2`), whichever is more. Then no wave leaves: whoever of us fights first is
+  # finished by the one that didn't. (We had 84 to their 81 and 75, traded 55 for 46 with one, and
+  # the other walked in with 87 against 41.) Until all but one of them have spent their armies: on
+  # us, at our towers, or on someone else.
+  # The two biggest, `[{player, army}, {player, army}]`, or nil.
   defp between_armies(v, memory) do
     ours = Roles.strength(Roles.fighters(v))
     soldier = Roles.strength([%{"type" => "Soldier"}])
@@ -1790,10 +1841,10 @@ defmodule Swarm.Brain do
     # (Not one a look has read as a boom, `Swarm.Reads`: by the scoreboard its bases look like an
     # army, and it is the one neighbor to go for early.)
     reads = Map.get(memory, :reads, %{})
-    armies = for {_start, slot} <- Roles.neighbors(v), Reads.kind(reads, slot) != :boom, do: {slot, max(enemy_army(memory, slot), army_by_score(v, slot))}
+    armies = for {_start, slot} <- Roles.around(v), Reads.kind(reads, slot) != :boom, do: {slot, max(enemy_army(memory, slot), army_by_score(v, slot))}
+    armed = Enum.filter(armies, fn {_slot, army} -> army >= @between_min * soldier and army > @between_spent * ours end)
 
-    if length(armies) >= 2 and Enum.all?(armies, fn {_slot, army} -> army >= @between_min * soldier and army > @between_spent * ours end),
-      do: armies
+    if length(armed) >= 2, do: armed |> Enum.sort_by(fn {slot, army} -> {-army, slot} end) |> Enum.take(2)
   end
 
   # Nobody can go and look, now or soon: no scout alive or being trained, no worker to go in its

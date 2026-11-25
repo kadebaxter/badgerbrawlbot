@@ -292,13 +292,32 @@ defmodule Swarm.Roles do
   Our neighbors: the `@neighbors` opponents still in whose starts are nearest our Command Center
   (the map's middle without one), nearest first, as `{start, slot}`. Waves only go after these,
   and scouts watch them most.
-  """
-  def neighbors(%View{} = v) do
-    from = if v.cc, do: View.pos(v.cc), else: {div(v.map_width, 2), div(v.map_height, 2)}
 
-    v.start_owner
-    |> Enum.sort_by(fn {start, slot} -> {View.dist(start, from), slot} end)
-    |> Enum.take(@neighbors)
+  From a corner all three others are as far in steps, the one across the middle too (a diagonal
+  step costs what a straight one does): of those, the nearer in a straight line. By slot, the two
+  were the one across the map and one beside us; the other one beside us was never looked at or
+  counted, the wave went across the map, and that one came with 38 Soldiers.
+  """
+  def neighbors(%View{} = v), do: v |> by_distance() |> Enum.take(@neighbors)
+
+  @doc """
+  Everyone around us: our neighbors (`neighbors/1`) and any other opponent just as many steps
+  away as the farthest of them. An army comes from any of these as soon.
+  """
+  def around(%View{} = v) do
+    from = from(v)
+
+    case neighbors(v) do
+      [] -> []
+      near -> v |> by_distance() |> Enum.take_while(fn {start, _slot} -> View.dist(start, from) <= View.dist(elem(List.last(near), 0), from) end)
+    end
+  end
+
+  defp from(%View{} = v), do: if(v.cc, do: View.pos(v.cc), else: {div(v.map_width, 2), div(v.map_height, 2)})
+
+  defp by_distance(%View{} = v) do
+    {fx, fy} = from = from(v)
+    Enum.sort_by(v.start_owner, fn {{x, y} = start, slot} -> {View.dist(start, from), (x - fx) ** 2 + (y - fy) ** 2, slot} end)
   end
 
   @doc "Every base: the Command Center and the outposts."
