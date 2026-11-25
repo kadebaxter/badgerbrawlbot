@@ -65,6 +65,59 @@ defmodule Swarm.MiddleTest do
       assert Enum.any?(commands, &match?(%{"type" => "Produce", "unitType" => "Soldier"}, &1))
     end
 
+    defp depots(commands), do: for(%{"type" => "Build", "buildingType" => "ResourceDepot", "x" => x, "y" => y} <- commands, do: {x, y})
+    # Four of ours mining the pile at `{x, y}` (deposit `id`), a long walk from any drop-off.
+    defp far_miners(id, x, y), do: for(i <- 1..4, do: unit(150 + i, "Worker", x + 1, y + 1, activity: "Gathering", target_id: id))
+
+    test "a depot in the middle only by a Command Center of ours, while there is ore by our drop-offs" do
+      units = far_miners(30, 26, 26) ++ workers(12) ++ soldiers(12)
+      ore = [@home_ore | field(30, 26, 26)]
+      # Home ore left, no Command Center of ours by the field: no depot there.
+      {_, commands, _} = three(units: units, buildings: [@barracks, @depot], deposits: ore, ore: 300)
+      assert depots(commands) == []
+      # A finished Command Center of ours six tiles from it: one goes up.
+      base = building(60, "CommandCenter", 32, 26)
+      {_, commands, _} = three([units: units, buildings: [@barracks, @depot, base], deposits: ore, ore: 300], %{Brain.new_memory() | bases: [{32, 26}]})
+      assert [spot] = depots(commands)
+      assert View.dist(spot, {27, 26}) <= 3
+      # With one opponent it goes up either way.
+      {_, commands, _} = plan(units: units, buildings: [@barracks, @depot], deposits: ore, ore: 300)
+      assert [_] = depots(commands)
+    end
+
+    test "with no ore left by any drop-off of ours, a depot goes to the middle all the same: that ore is all there is" do
+      # The same, the home ore gone: the miners at the field in the middle are all the income we have.
+      units = far_miners(30, 26, 26) ++ soldiers(12)
+      {_, commands, _} = three(units: units, buildings: [@barracks, @depot], deposits: field(30, 26, 26), ore: 300)
+      assert [spot] = depots(commands)
+      assert View.dist(spot, {27, 26}) <= 3
+    end
+
+    test "a depot by ore our workers walk for comes ahead of the fighters, the research and the rest" do
+      # A field along the edge at (30, 8), out of the middle; two Soldiers (under the army floor),
+      # a free Tech Lab with research to do, and 120 ore: the depot gets it, with three builders or more.
+      lab = building(6, "TechLab", 7, 12)
+      units = far_miners(30, 30, 8) ++ workers(12) ++ soldiers(2)
+      {_, commands, _} = three(units: units, buildings: [@barracks, @depot, lab], deposits: [@home_ore | field(30, 30, 8)], ore: 120)
+      assert [%{"buildingType" => "ResourceDepot", "unitIds" => builders}] = for(%{"type" => type} = c <- commands, type in ["Build", "Research", "Produce"], do: c)
+      assert length(builders) >= 3
+    end
+
+    test "with buildings of theirs on every tile right by the ore, ours goes up a step farther, next to them" do
+      units = far_miners(30, 30, 8) ++ workers(12) ++ soldiers(12)
+      opts = fn more -> [units: units, buildings: [@barracks, @depot] ++ more, deposits: [@home_ore | field(30, 30, 8)], ore: 300] end
+      {_, commands, _} = plan(opts.([]))
+      assert [near] = depots(commands)
+      assert View.dist(near, {30, 8}) == 2
+
+      # Theirs around the pile our miners are at: no open tile two from it is left.
+      theirs = for {{x, y}, i} <- Enum.with_index([{29, 6}, {32, 6}, {29, 10}, {32, 10}, {27, 8}]), do: building(800 + i, "ResourceDepot", x, y, 1)
+      {_, commands, _} = plan(opts.(theirs))
+      assert [spot] = depots(commands)
+      assert View.dist(spot, {30, 8}) == 3
+      assert Enum.all?(theirs, &(View.dist(View.pos(&1), spot) >= 2))
+    end
+
     test "no base farther from home than the middle while every opponent is in" do
       # Only a field along the edge at (40, 10), seen: 33 tiles from home, the middle is 25.
       far = [units: [unit(300, "Scout", 40, 8) | workers(16) ++ soldiers(12)], buildings: [@barracks, @depot], deposits: [@home_ore | field(30, 40, 10)], ore: 1200]

@@ -619,6 +619,27 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    until it is there (`research_first/2`). One on one, a house bot had Weapons2 and Armor2 at
    ticks 385 and 391 and we at 441 and 431, behind two Command Centers and ten towers: 15 of its
    Soldiers killed 22 of ours and 12 workers at our base for 9, on an estimate of +0.5.
+   **Out of ore, we go for whoever is on what is left:** with nothing left for us to mine (we have
+   banked nothing for 100 ticks and nobody is mining, the map not proven empty), the opponent with
+   the most ore we know of within 16 tiles of their start or a building of theirs (1,000 or more)
+   is who the next wave goes after, neighbor or not, if our fighters are 1.5 times what we know
+   they have, towers included. Otherwise the weaker neighbor, as ever. Ore by a
+   living opponent is nowhere we may go: we looked everywhere else, found none, and 57 workers
+   stood idle for 600 ticks with 4,500 ore by the base of one who had eight fighters to our 29;
+   our waves went at another who had none, and a third took that base and mined it.
+   **A depot by ore our workers walk for comes first:** ahead of the research, the first base,
+   the fighters and the Barracks, out of the workers' reserve too, and its 100 is kept until it is
+   there. It is built by the workers mining or walking to that ore, three at least (the closest
+   free ones make up the number). It used to come with the rest of the building, after the army
+   floor: below the floor it got nothing, and one builder was sent alone to a depot fifty workers
+   were waiting on. With three or four players a depot still only goes to a field in the middle
+   within 8 tiles of a Command Center of ours, but not once there is no ore left by any drop-off
+   of ours: then that ore is all there is.
+   A depot goes two tiles from the ore; with a building of theirs within 4 tiles of that ore (seen
+   or remembered) and no drop-off of ours within three, the open tile three from it will do, next
+   to theirs. A tile a building of theirs we remember stands on is not open. One of their depots
+   stood where ours was to go: ours was ordered there three times, and fifty workers walked ten
+   tiles each way for 110 ticks until we had knocked theirs down.
    **A look right after a beaten raid:** when eight or more of a raid's fighters have died at
    our base and none is left in sight, a look done before the raid was last here no longer
    counts as fresh, and a scout goes at once. With 43 Soldiers to their 5 after a raid of 74, the

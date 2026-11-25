@@ -90,4 +90,83 @@ defmodule Swarm.StalledScenarioTest do
     assert t.memory.kill == nil
     refute "Worker" in trained(t)
   end
+
+  describe "stalled, with ore left by an opponent's base" do
+    # Three players: player 1 at (56, 56) and player 2 at (7, 56). 3,000 ore by player 2's base.
+    @by_two for i <- 0..2, do: %{"id" => 70 + i, "x" => 10 + i, "y" => 50, "remaining" => 1000}
+
+    defp three(units, deposits, scores, memory \\ nil) do
+      {one, two} = scores
+      state =
+        state(units: units, buildings: @built, deposits: deposits, ore: 120, tick: 600)
+        |> Map.update!("players", fn [me, them] ->
+          third = %{"slot" => 2, "eliminated" => false, "startPosition" => %{"x" => 7, "y" => 56}}
+          [Map.put(me, "score", %{"economy" => 20_000, "total" => 20_000}),
+           Map.put(them, "score", %{"economy" => 20_000, "total" => 20_000, "survival" => one}),
+           Map.put(third, "score", %{"economy" => 20_000, "total" => 20_000, "survival" => two})]
+        end)
+
+      {v, memory} = Brain.see(View.new(state), memory || %{Brain.new_memory() | map_ore: 72_000, income_at: {20_000, 450}})
+      {strategy, _, _} = Brain.plan(v, memory, terrain())
+      strategy
+    end
+
+    test "that opponent is who we go after, not the weaker neighbor" do
+      # Player 1 is the weaker by score (600 alive to player 2's 900): the usual choice.
+      assert %{target: {56, 56}} = three(idle() ++ soldiers(20), [], {600, 900})
+      # With 3,000 ore by player 2's base and nothing else for us to mine: player 2.
+      assert %{target: {7, 56}} = three(idle() ++ soldiers(20), @by_two, {600, 900})
+    end
+
+    test "not while we are still mining, and not one whose army we couldn't take" do
+      mining = for i <- 1..15, do: unit(100 + i, "Worker", 8, 8, activity: "Gathering", target_id: 4)
+      assert %{target: {56, 56}} = three(mining ++ soldiers(20), @by_two, {600, 900})
+      # Thirty Soldiers of theirs by that ore, seen: not with our twenty.
+      guard = for i <- 1..30, do: unit(900 + i, "Soldier", 9, 54, owner: 2)
+      assert %{target: {56, 56}} = three(idle() ++ soldiers(20) ++ guard, @by_two, {600, 4000})
+    end
+
+    # The same game a hundred ticks on, tick by tick: what the leader plans and what each worker does.
+    defp step(tick, units, deposits, two_out?, memory, buildings \\ @built) do
+      state =
+        state(units: units, buildings: buildings, deposits: deposits, ore: 120, tick: tick)
+        |> Map.update!("players", fn [me, them] ->
+          third = %{"slot" => 2, "eliminated" => two_out?, "startPosition" => %{"x" => 7, "y" => 56}}
+          score = fn p, alive -> Map.put(p, "score", %{"economy" => 20_000, "total" => 20_000, "survival" => alive}) end
+          [score.(me, 3000), score.(them, 600), score.(third, if(two_out?, do: 0, else: 900))]
+        end)
+
+      {v, memory} = Brain.see(View.new(state), memory)
+      {strategy, commands, memory} = Brain.plan(v, memory, terrain())
+      v = UnitBrain.prepare(v, strategy.wave)
+      orders = for w <- View.units_of(v, "Worker"), {cmd, _} = UnitBrain.decide(w["id"], v, strategy), is_map(cmd), into: %{}, do: {w["id"], cmd}
+      %{strategy: strategy, commands: commands, memory: memory, orders: orders}
+    end
+
+    test "the whole of it: we go for them, they fall, our workers go and mine that ore, and a depot goes up by it" do
+      memory = %{Brain.new_memory() | map_ore: 72_000, income_at: {20_000, 450}}
+
+      # 1. Stalled, 3,000 ore by player 2's base: player 2 is the target.
+      t = step(600, idle() ++ soldiers(20), @by_two, false, memory)
+      assert t.strategy.target == {7, 56}
+
+      # 2. Player 2 is out. The ore by their start is ours to take: the idle workers are sent to it.
+      t = step(700, idle() ++ soldiers(20), @by_two, true, t.memory)
+      going = for {_id, %{"type" => "Gather", "targetId" => d}} <- t.orders, d in 70..72, do: d
+      assert length(going) >= 10
+
+      # 3. They are mining it, 45 tiles from our nearest drop-off: a depot is ordered by it, with
+      # three builders or more, though the ore we have (120) is short of everything else.
+      miners = for i <- 1..15, do: unit(100 + i, "Worker", 11, 51, activity: "Gathering", target_id: 70)
+      t = step(760, miners ++ soldiers(20), @by_two, true, t.memory)
+      assert [%{"x" => x, "y" => y, "unitIds" => builders}] = for(%{"type" => "Build", "buildingType" => "ResourceDepot"} = c <- t.commands, do: c)
+      assert View.dist({x, y}, {11, 50}) <= 3
+      assert length(builders) >= 3
+
+      # 4. With the depot up by it, they mine on with no walk: nobody is told to go anywhere else.
+      depot = building(80, "ResourceDepot", x, y)
+      t = step(790, miners ++ soldiers(20), @by_two, true, t.memory, [depot | @built])
+      assert for({_id, %{"type" => type}} <- t.orders, type in ["Move", "Gather"], do: type) == []
+    end
+  end
 end

@@ -273,6 +273,8 @@ defmodule Swarm.Brain do
   @help_chase 3
   @base_slack 4
   @depot_cover 8
+  @ore_reach 16
+  @ore_worth 1000
   # An opponent with this much ore or less alive outside the buildings we know of has no army.
   @no_army_ore 1500
   @help_cover 5
@@ -1045,6 +1047,9 @@ defmodule Swarm.Brain do
       |> with_reserve(reserve, &train_backup_workers(&1, v))
       |> rebuild_workers(v, home_reserve)
       |> finish_sites(v)
+      # (Out of the workers' reserve too: with nothing banked for a hundred ticks, 120 ore and the
+      # reserve kept back, the depot that would have ended the walk was never paid for.)
+      |> with_reserve(reserve, &depot_first(&1, v, terrain))
       |> research_first(v)
       |> first_base(v, terrain)
       |> army_floor(v, memory)
@@ -2714,7 +2719,8 @@ defmodule Swarm.Brain do
     max(army, lately)
   end
 
-  # Who we go after: the opponent the wave out is after, while they are still in; otherwise the
+  # Who we go after: the opponent the wave out is after, while they are still in; otherwise, with
+  # nothing left for us to mine, the one on the ore that is left (`ore_holder/2`); otherwise the
   # weaker of our neighbors (`Swarm.Roles.neighbors/1`; never one across the map). Weaker by survival
   # score, the ore value of everything they have alive, which the server reports for everyone.
   defp opponent(v, memory) do
@@ -2723,19 +2729,50 @@ defmodule Swarm.Brain do
         owner
 
       _ ->
-        from = if v.cc, do: View.pos(v.cc), else: center(v)
-        reads = Map.get(memory, :reads, %{})
+        ore_holder(v, memory) || neighbor(v, memory)
+    end
+  end
 
-        # A neighbor that reads as a boom (`Swarm.Reads`: no army to speak of, bases going up
-        # without towers) comes first, the nearest: by its score it is the strongest of them, and
-        # left alone until it was.
-        v
-        |> Roles.neighbors()
-        |> Enum.min_by(fn {start, slot} -> {Reads.kind(reads, slot) != :boom, Map.get(v.enemy_survival, slot, 0), View.dist(start, from)} end, fn -> nil end)
-        |> case do
-          {_start, slot} -> slot
-          nil -> nil
-        end
+  # With nothing left for us to mine (`View.no_ore`: stalled, the map not proven empty), the
+  # opponent sitting on the ore that is left comes first, neighbor or not: the one with the most
+  # ore we know of within `@ore_reach` of their start or a building of theirs, `@ore_worth` or
+  # more, if our fighters are `@margin` times what we know they have (their towers too). Ore by a
+  # living opponent is nowhere we may go, so we looked everywhere else, found none, and 57 workers
+  # stood idle for 600 ticks with 4,500 ore by the base of one who had eight fighters to our 29;
+  # our waves went at another who had none, and a third took that base and mined it.
+  defp ore_holder(%View{no_ore: no_ore} = v, memory) when no_ore in [:stalled, :nowhere] do
+    ours = Roles.strength(Roles.fighters(v))
+    left = Enum.filter(v.deposits, &((&1["remaining"] || 0) > 0))
+
+    v.start_owner
+    |> Enum.map(fn {start, slot} ->
+      spots = [start | for(b <- v.enemy_buildings ++ v.remembered, b["owner"] == slot, do: View.pos(b))]
+      ore = left |> Enum.filter(fn d -> Enum.any?(spots, &(View.dist(&1, View.pos(d)) <= @ore_reach)) end) |> Enum.sum_by(& &1["remaining"])
+      {ore, slot}
+    end)
+    |> Enum.filter(fn {ore, slot} -> ore >= @ore_worth and ours >= @margin * enemy_strength(v, memory, slot) end)
+    |> Enum.max_by(fn {ore, slot} -> {ore, -slot} end, fn -> nil end)
+    |> case do
+      {_ore, slot} -> slot
+      nil -> nil
+    end
+  end
+
+  defp ore_holder(_v, _memory), do: nil
+
+  defp neighbor(v, memory) do
+    from = if v.cc, do: View.pos(v.cc), else: center(v)
+    reads = Map.get(memory, :reads, %{})
+
+    # A neighbor that reads as a boom (`Swarm.Reads`: no army to speak of, bases going up
+    # without towers) comes first, the nearest: by its score it is the strongest of them, and
+    # left alone until it was.
+    v
+    |> Roles.neighbors()
+    |> Enum.min_by(fn {start, slot} -> {Reads.kind(reads, slot) != :boom, Map.get(v.enemy_survival, slot, 0), View.dist(start, from)} end, fn -> nil end)
+    |> case do
+      {_start, slot} -> slot
+      nil -> nil
     end
   end
 
@@ -3254,9 +3291,12 @@ defmodule Swarm.Brain do
   defp builders(v, free, "ResourceDepot", site) do
     by_id = Map.new(v.deposits, &{&1["id"], &1})
 
+    # Walking to that ore counts (with a long walk most of them are, at any moment), and with
+    # fewer than `@remote_miners` of them the closest free workers make up the number: one was
+    # sent alone to a depot fifty workers were waiting on.
     users =
       for w <- free,
-          w["activity"] in ["Gathering", "Returning"],
+          w["activity"] in ["Gathering", "Returning", "Moving"],
           d = by_id[w["targetId"]],
           d != nil and View.dist(View.pos(d), site) <= View.drop_off_reach(),
           do: w
@@ -3264,8 +3304,13 @@ defmodule Swarm.Brain do
     first? = count(v, "ResourceDepot") == 0
 
     case users do
-      [] -> closest_first(free, site) |> Enum.take(if(first?, do: @first_depot_builders, else: usual_builders(v)))
-      users -> closest_first(users, site) |> Enum.take(@depot_builders)
+      [] ->
+        closest_first(free, site) |> Enum.take(if(first?, do: @first_depot_builders, else: usual_builders(v)))
+
+      users ->
+        users = closest_first(users, site) |> Enum.take(@depot_builders)
+        more = closest_first(free -- users, site) |> Enum.take(max(@remote_miners - length(users), 0))
+        users ++ more
     end
   end
 
@@ -3309,6 +3354,23 @@ defmodule Swarm.Brain do
 
   defp build_cmd(workers, type, {x, y}),
     do: %{"type" => "Build", "unitIds" => Enum.map(workers, & &1["id"]), "buildingType" => type, "x" => x, "y" => y}
+
+  # A depot by ore our workers are walking for (`remote_depot/3`, `conquest_depot/3`) comes ahead
+  # of everything else the ore could go to, research, the first base and the fighters included,
+  # and its 100 is kept until it is there: it is the price of one Soldier, and without it 50
+  # workers walk ten tiles each way. It used to come with the rest of the building, after the
+  # army floor and the Barracks that floor holds the ore for: below the floor it got nothing.
+  defp depot_first({cmds, %{pending: nil} = mem, ore} = acc, %View{cc: cc} = v, terrain) when cc != nil do
+    site = may_expand?(v, mem) && (conquest_depot(v, terrain, mem) || remote_depot(v, terrain, mem))
+
+    cond do
+      !site -> acc
+      ore >= @costs["ResourceDepot"] -> order(acc, v, "ResourceDepot", site)
+      true -> {cmds, mem, ore - @costs["ResourceDepot"]}
+    end
+  end
+
+  defp depot_first(acc, _v, _terrain), do: acc
 
   # A new drop-off if our ore is running out, else the first building we are short of, once we
   # have the workers and prerequisites for it. One we can't find room for is skipped so it
@@ -3580,7 +3642,9 @@ defmodule Swarm.Brain do
          # Center of ours (within `@depot_cover`). "A base of ours in the middle" let one go up 11
          # tiles past the base by our nearest field, which is just inside the middle; the army
          # went out to it, 25 tiles from home.
-         false <- contested?(v) and middle?(v, View.pos(target)) and not by_a_base?(v, View.pos(target)) do
+         # (Not once there is no ore left by any drop-off of ours: that ore is all there is, and
+         # the choice is a depot there or every worker walking the map for it.)
+         false <- contested?(v) and View.near_deposits(v) != [] and middle?(v, View.pos(target)) and not by_a_base?(v, View.pos(target)) do
       right_by(terrain, v, target)
     else
       _ -> nil
@@ -4215,9 +4279,17 @@ defmodule Swarm.Brain do
   # A depot site right by `target` (`@depot_walk`), placed like `by_field/3`; nil when there is no
   # open tile that close. Never a site farther out: its miners would still walk, and the field
   # would keep asking for another depot.
+  #
+  # But with a building of theirs by that ore (within 4 of it, seen or remembered) and no drop-off
+  # of ours within a tile more: the open tile a step farther will do, next to theirs. One of their
+  # depots stood where ours was to go, ours was ordered there three times, and fifty workers
+  # walked ten tiles each way for 110 ticks until we had knocked theirs down.
   defp right_by(terrain, v, target) do
+    pos = View.pos(target)
+    crowded? = Enum.any?(v.enemy_buildings ++ v.remembered, &(View.dist(View.pos(&1), pos) <= 4)) and walk(v, target) > @depot_walk + 1
+
     case by_field(terrain, v, target) do
-      {_, _} = tile -> if View.dist(tile, View.pos(target)) <= @depot_walk, do: tile
+      {_, _} = tile -> if View.dist(tile, pos) <= @depot_walk or (crowded? and View.dist(tile, pos) <= @depot_walk + 1), do: tile
       _ -> nil
     end
   end
@@ -4261,7 +4333,8 @@ defmodule Swarm.Brain do
   defp best_site(terrain, %View{} = v, {cx, cy}, ring, score) do
     height = length(terrain)
     width = if height > 0, do: String.length(hd(terrain)), else: 0
-    buildings = Enum.map(v.my_buildings ++ v.enemy_buildings, &View.pos/1)
+    # Theirs we remember too: a tile one of their buildings stands on, out of sight, is not open.
+    buildings = Enum.map(v.my_buildings ++ v.enemy_buildings ++ v.remembered, &View.pos/1)
     ore = Enum.map(v.deposits, &View.pos/1)
 
     candidates =
