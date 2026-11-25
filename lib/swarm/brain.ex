@@ -1117,9 +1117,12 @@ defmodule Swarm.Brain do
       # (Out of the workers' reserve too: with nothing banked for a hundred ticks, 120 ore and the
       # reserve kept back, the depot that would have ended the walk was never paid for.)
       |> with_reserve(reserve, &depot_first(&1, v, terrain))
+      # With the map mined out no worker will be trained again: what is kept back for them is
+      # kept for a scout instead. (120 Soldiers waited 600 ticks for a look at an opponent with
+      # no army: every scout dead, no worker left to go, and 118 ore of which 100 was the workers'.)
+      |> then(&if(v.no_ore == :mined_out, do: with_reserve(&1, reserve, fn acc -> first_scout(acc, v) end), else: first_scout(&1, v)))
       |> research_first(v)
       |> first_base(v, terrain)
-      |> first_scout(v)
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
       |> found_base(v, terrain)
@@ -1678,6 +1681,14 @@ defmodule Swarm.Brain do
   defp looking?(look, owner), do: look != nil and look.owner == owner and look.done == nil
   # A look that came to nothing (no scout got there) is no look: a wave of 19 left on a count 115
   # ticks old after one, into 52 Soldiers, and led them home.
+  # Nobody can go and look, now or soon: no scout alive or being trained, no worker to go in its
+  # place (`stand_in/1`), and no Barracks we could pay for one at.
+  defp no_look?(v) do
+    barracks = Enum.filter(View.buildings_of(v, "Barracks"), & &1["completed"])
+    queued? = Enum.any?(barracks, fn b -> Enum.any?(b["production"], &(&1["unitType"] == "Scout")) end)
+    View.units_of(v, "Scout") == [] and not queued? and View.units_of(v, "Worker") == [] and (barracks == [] or v.ore < @costs["Scout"])
+  end
+
   defp fresh?(look, owner, v),
     do: look != nil and look.owner == owner and look.done != nil and not Map.get(look, :failed, false) and v.tick - look.done <= @look_fresh
 
@@ -2548,6 +2559,12 @@ defmodule Swarm.Brain do
     left = if no_army?, do: alive * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
     theirs = if no_army?, do: enemy_strength(v, memory, owner) - enemy_army(memory, owner) + min(enemy_army(memory, owner), left), else: theirs
 
+    # Nobody can look (`no_look?/1`): the wave doesn't wait for a look it can't get. It goes on
+    # what we know of their army or what the scoreboard says of it (`army_by_score/2`), whichever
+    # is more.
+    no_look? = owner != nil and no_look?(v)
+    theirs = if no_look? and not no_army?, do: max(theirs, theirs - enemy_army(memory, owner) + army_by_score(v, owner)), else: theirs
+
     early? = early_strike?(v, memory, owner, staged, ours, theirs)
 
     want =
@@ -2599,7 +2616,7 @@ defmodule Swarm.Brain do
         memory.came_home_at && v.tick - memory.came_home_at < @calm_ticks ->
           "the last wave took its player out and is coming home, #{@calm_ticks - (v.tick - memory.came_home_at)} more ticks"
 
-        memory.check_next and not fresh?(memory.look, owner, v) ->
+        memory.check_next and not no_look? and not fresh?(memory.look, owner, v) ->
           "#{waiting}, a look at player #{owner} first: the next one after taking one out"
 
         memory.army_recalled_at && v.tick - memory.army_recalled_at < @calm_ticks ->
@@ -2614,12 +2631,12 @@ defmodule Swarm.Brain do
         (towers = if(early? or party? or open != nil, do: nil, else: towers_short(v, memory))) != nil ->
           "#{waiting}, building the tower square first (#{towers} of #{@big_towers})"
 
-        not counter? and not no_army? and looking?(memory.look, owner) ->
+        not counter? and not no_army? and not no_look? and looking?(memory.look, owner) ->
           "#{waiting}, scout looking at player #{owner} (#{v.tick - memory.look.at} ticks)"
 
         # No wave without a look at them that got there, lately (`fresh?/3`). A counterattack right
         # after a beaten raid and a siege party against no army go without.
-        not counter? and not party? and not no_army? and not fresh?(memory.look, owner, v) ->
+        not counter? and not party? and not no_army? and not no_look? and not fresh?(memory.look, owner, v) ->
           "#{waiting}, no look at player #{owner} lately: none leaves on an old count"
 
         not ready? ->

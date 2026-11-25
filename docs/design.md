@@ -882,6 +882,14 @@ Barracks was full of Soldiers all game and no scout was ever trained: the only o
 was the home field, and when it ran out at tick 270 thirty workers stood for a hundred ticks ten
 tiles from 6,000, with no base, no depot, and (no look at anyone) no wave.
 
+**The last look.** The first scout comes ahead of research and the first base too (those hold
+the ore; it is 75 once). With the map mined out, what is kept back for workers is kept for a
+scout instead: no worker will be trained again. And when nobody can go and look (no scout alive
+or on its way, no worker to go in its place, no Barracks we can pay for one at), the wave
+doesn't wait for a look: it goes on what we know of their army or the scoreboard's count of it,
+whichever is more. 120 Soldiers stood 600 ticks in front of an opponent with no army: every
+scout and worker dead, 118 ore of which 100 was the workers', and "a look first" every tick.
+
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
 outposts, and the army lives at our base nearest their start (the main one if that is nearest).

@@ -408,10 +408,21 @@ defmodule Swarm.BrainTest do
     end
 
     test "with no scout at all, no wave leaves: it waits for one to look" do
-      {s, _, memory} = fresh(units: soldiers(22))
+      # (We have workers: a scout can still be trained, or one of them go in its place.)
+      {s, _, memory} = fresh(units: workers(5) ++ soldiers(22))
       assert %{wave: nil, look: nil} = s
       assert s.hold =~ "no look at player 1 lately"
-      assert {%{wave: nil}, _, _} = fresh([units: soldiers(22), tick: 101], memory)
+      assert {%{wave: nil}, _, _} = fresh([units: workers(5) ++ soldiers(22), tick: 101], memory)
+    end
+
+    test "with nobody who could ever look (no scout, no worker, no ore for one), it doesn't wait" do
+      {s, _, _} = fresh(units: soldiers(22))
+      assert %{wave: %{id: 1}} = s
+
+      # Ore for a scout and a Barracks to train it at: it waits for that one.
+      {s, commands, _} = fresh(units: soldiers(22), buildings: [building(2, "Barracks", 11, 7)], ore: 300, tick: 130)
+      assert s.wave == nil
+      assert Enum.any?(commands, &(&1["unitType"] == "Scout"))
     end
 
     test "a counterattack doesn't wait for one" do

@@ -73,7 +73,7 @@ defmodule Swarm.EndgameTest do
 
     test "the scout dies having seen nothing of them: that is no look" do
       memory = %{Brain.new_memory() | look: %{owner: 1, pos: {56, 56}, at: 120, done: nil, lookers: 1}}
-      assert {%{wave: nil}, _, %{look: %{done: 130, failed: true}}} = Brain.plan(View.new(state(units: soldiers(22), tick: 130)), memory, terrain())
+      assert {%{wave: nil}, _, %{look: %{done: 130, failed: true}}} = Brain.plan(View.new(state(units: workers(5) ++ soldiers(22), tick: 130)), memory, terrain())
     end
 
     test "an opponent the scoreboard shows has no army is gone for without a look, whatever we last counted" do
