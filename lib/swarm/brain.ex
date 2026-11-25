@@ -2049,12 +2049,17 @@ defmodule Swarm.Brain do
   # left fed it to them a few at a time. The reason, or nil.
   defp bleeding(wave, alive) do
     peak = Map.get(wave, :peak, 0)
-    now = Roles.strength(alive)
+    now = plain_strength(alive)
     if peak > 0 and now < (1 - @call_off) * peak, do: "lost #{round(100 * (1 - now / peak))}% of its strength (#{round(now)} of #{round(peak)})"
   end
 
   # The wave with the most it has had so far.
-  defp peaked(wave, alive), do: Map.put(wave, :peak, max(Map.get(wave, :peak, 0), Roles.strength(alive)))
+  defp peaked(wave, alive), do: Map.put(wave, :peak, max(Map.get(wave, :peak, 0), plain_strength(alive)))
+
+  # What a wave has, the serum aside (a Soldier on it counts double, `Roles.serum?/1`): losses are
+  # who died. Measured with it, 118 that left on the serum had "lost 50% of its strength" the tick
+  # it wore off, with nobody dead, and came home.
+  defp plain_strength(units), do: units |> Enum.map(&Map.delete(&1, "effects")) |> Roles.strength()
 
   # Behind on score, every fighter goes, including new ones: near the end, or as soon as the map
   # is mined out and nobody left has an army we couldn't take (`unarmed?/1`). Then nothing changes

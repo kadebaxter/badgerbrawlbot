@@ -35,6 +35,19 @@ defmodule Swarm.CallOffTest do
       assert {%{wave: %{id: 1}}, _, _} = plan([units: out(10)], wave_memory())
     end
 
+    test "not when the serum wears off: its losses are who died, not the doubling" do
+      # All twelve out on the serum: the most it has had is still twelve Soldiers' worth.
+      on = for u <- out(12), do: Map.put(u, "effects", ["serum"])
+      {%{wave: %{id: 1}}, _, memory} = plan([units: on], %{wave_memory() | wave: %{wave_memory().wave | peak: 0}})
+      assert memory.wave.peak == 12 * 990
+
+      # It wears off, nobody dead: the wave stays out.
+      assert {%{wave: %{id: 1}}, _, _} = plan([units: out(12), tick: 101], memory)
+
+      # And on the serum with five dead, it is still called off.
+      assert {%{wave: nil}, _, _} = plan([units: Enum.take(on, 7), tick: 101], memory)
+    end
+
     test "reinforcements count toward the most it has had" do
       {_, _, memory} = plan([units: out(12)], %{wave_memory() | wave: %{wave_memory().wave | peak: 0}})
       assert memory.wave.peak == 12 * 990
