@@ -200,14 +200,14 @@ defmodule Swarm.MiddleTest do
       assert strategy.rally == {31, 31} and memory.home_call == nil
     end
 
-    test "a quarter of the army stays to guard home, never fewer than seven; the rest are the army in the middle" do
+    test "the home guard is the same fixed number, however big the army in the middle is (seven in these tests, nine in a game)" do
       roles = fn n ->
         v = %{View.new(state(units: soldiers(n), buildings: [@barracks, @depot, @middle])) | bases: [{28, 28}]}
         Enum.frequencies(Map.values(Swarm.Roles.home_roles(v, nil)))
       end
 
-      assert roles.(40) == %{guard: 10, attacker: 30}
-      assert roles.(60) == %{guard: 15, attacker: 45}
+      assert roles.(40) == %{guard: 7, attacker: 33}
+      assert roles.(60) == %{guard: 7, attacker: 53}
       assert roles.(20) == %{guard: 7, attacker: 13}
 
       # Without a base in the middle: seven guards, as ever.

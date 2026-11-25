@@ -23,11 +23,9 @@ defmodule Swarm.Roles do
 
   alias Swarm.View
 
-  @guards 7
-  # With the army living at a base of ours in the middle of the map (`View.forward_base/1`), this
-  # share of the fighters at home stays to guard the main base, if that is more than `@guards`:
-  # home must hold a raid until the army is back from twenty tiles away.
-  @home_share 0.25
+  # Nine in a game. (The tests keep the seven their fixtures were written around, `config/test.exs`:
+  # fifty of them count attackers as "soldiers less seven".)
+  @guards Application.compile_env(:swarm, :guards, 9)
   # Our neighbors: the opponents nearest us, whom we attack and watch most closely.
   @neighbors 2
   # Enemy fighters this close to one of our workers are attacking our economy.
@@ -167,14 +165,11 @@ defmodule Swarm.Roles do
         {Map.put(groups, o, taken), newest_first.(away ++ extra)}
       end)
 
-    # 2. The newest of the rest guard the main base: `@guards` of them, or `@home_share` of all the
-    #    fighters at home once the army lives in the middle, if that is more.
-    guard_count =
-      cond do
-        last? -> 0
-        View.forward_base(v) -> max(@guards, round(@home_share * length(home(v, wave))))
-        true -> @guards
-      end
+    # 2. The newest of the rest guard the main base: `@guards` of them.
+    # A fixed `@guards`, the army living at a forward base or not. It used to be a quarter of
+    # all the fighters at home then: 27 of 111 stood at the main base, 30 tiles off, when 92 came
+    # at the forward one. Against an army neither number holds; against a small raid nine do.
+    guard_count = if last?, do: 0, else: @guards
     {guards, pool} = Enum.split(pool, guard_count)
 
     # 3. Each group is filled up from the closest of the rest. One that can't reach
@@ -1197,10 +1192,10 @@ defmodule Swarm.Roles do
   # A tower off to the side counts (`@sideways`): with only towers strictly nearer us than them,
   # 29 of ours ran for the home tower 20 tiles off past four of their own base's six tiles away,
   # and 21 were cut down on the way.
-  defp fallback(v, g, gather, edge) do
+  defp fallback(v, _g, gather, edge) do
     # A base's towers only (`base_towers/1`): a depot's tower is no place to fall back to.
-    tower = if v.cc && Enum.any?(base_towers(v)), do: shelter(v, gather, edge, @sideways, base_towers(v))
-    if tower && clear_of?(g, tower), do: tower
+    # Whether they are near it yet or not: in its reach, everyone fights there (`inside?/2`).
+    if v.cc && Enum.any?(base_towers(v)), do: shelter(v, gather, edge, @sideways, base_towers(v))
   end
 
   @doc "Whether `pos` is out of group `g`'s reach, with 2 tiles to spare."

@@ -169,4 +169,63 @@ defmodule Swarm.StalledScenarioTest do
       assert for({_id, %{"type" => type}} <- t.orders, type in ["Move", "Gather"], do: type) == []
     end
   end
+
+  describe "the map mined out, behind on score" do
+    # Two players, 72,000 ore on the map and 71,500 of it banked. We have 7 Soldiers and 15 idle
+    # workers and 20,000 points to their 30,000; `alive` is the ore value of all they have alive.
+    defp late(alive, tick \\ 800) do
+      state =
+        state(units: idle() ++ soldiers(7), buildings: @built ++ @theirs, deposits: [], ore: 120, tick: tick)
+        |> Map.update!("players", fn [me, them] ->
+          [Map.put(me, "score", %{"economy" => 35_500, "total" => 20_000}),
+           Map.put(them, "score", %{"economy" => 36_000, "total" => 30_000, "survival" => alive})]
+        end)
+
+      {v, memory} = Brain.see(View.new(state), %{Brain.new_memory() | map_ore: 72_000, income_at: {35_500, 450}})
+      {strategy, _commands, _memory} = Brain.plan(v, memory, terrain())
+      v = UnitBrain.prepare(v, strategy.wave)
+      orders = for w <- View.units_of(v, "Worker"), {cmd, _} = UnitBrain.decide(w["id"], v, strategy), is_map(cmd), into: %{}, do: {w["id"], cmd}
+      %{strategy: strategy, orders: orders, log: for({:all_in, text} <- strategy.why, do: text)}
+    end
+
+    test "with nobody left who has an army we couldn't take, everyone goes now, the workers too" do
+      # 1,500 alive: their buildings and workers, no army to speak of.
+      t = late(1500)
+      assert %{all_in: true, members: members} = t.strategy.wave
+      assert length(members) == 7
+      assert [why] = t.log
+      assert why =~ "the map mined out and nobody with an army" and why =~ "15 workers"
+      {tx, ty} = t.strategy.target
+      assert map_size(t.orders) == 15
+      for {_id, cmd} <- t.orders, do: assert(%{"type" => "Attack", "x" => ^tx, "y" => ^ty} = cmd)
+    end
+
+    test "a raid on our base then: the workers by it attack it, through the leader's plan and all" do
+      # The same, with ten of theirs at our Command Center (and an army's worth alive: nobody is sent out).
+      raid = for i <- 1..10, do: unit(900 + i, "Soldier", 9, 9, owner: 1)
+      state =
+        state(units: idle() ++ soldiers(7) ++ raid, buildings: @built ++ @theirs, deposits: [], ore: 120, tick: 800)
+        |> Map.update!("players", fn [me, them] ->
+          [Map.put(me, "score", %{"economy" => 35_500, "total" => 20_000}), Map.put(them, "score", %{"economy" => 36_000, "total" => 30_000, "survival" => 8000})]
+        end)
+
+      {v, memory} = Brain.see(View.new(state), %{Brain.new_memory() | map_ore: 72_000, income_at: {35_500, 450}})
+      {strategy, _commands, _memory} = Brain.plan(v, memory, terrain())
+      assert strategy.no_ore == :mined_out
+      # The view the units get is the one from before the plan: the strategy is what tells them.
+      assert v.no_ore == false
+      v = UnitBrain.prepare(v, strategy.wave)
+      orders = for w <- View.units_of(v, "Worker"), {cmd, _} = UnitBrain.decide(w["id"], v, strategy), is_map(cmd), do: cmd
+      assert length(orders) == 15
+      for cmd <- orders, do: assert(%{"type" => "Attack", "x" => 9, "y" => 9} = cmd)
+    end
+
+    test "not while they still have an army: forty Soldiers' worth alive beyond their buildings and workers" do
+      t = late(8000)
+      assert t.strategy.wave == nil or not Map.get(t.strategy.wave, :all_in, false)
+      assert t.log == []
+      refute Enum.any?(t.orders, fn {_id, cmd} -> cmd["type"] == "Attack" end)
+    end
+  end
+
 end

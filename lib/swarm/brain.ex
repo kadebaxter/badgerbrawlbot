@@ -168,6 +168,8 @@ defmodule Swarm.Brain do
   @vision %{"Scout" => 8, "Archer" => 6, "Trebuchet" => 7, "GuardTower" => 7}
   @default_vision 6
   @all_in_ticks 300
+  # What a worker counts for against a Soldier when everyone goes (`unarmed?/1`).
+  @worker_worth 0.3
   # The most we have known of a player's army counts for this long (`army_seen/3`), whatever we
   # can see of it now: a scout that looks at the wrong spot sees no army, not that there is none.
   # A wave of 16 left against "9,900 known" 37 ticks after a scout had counted 22,770.
@@ -541,6 +543,7 @@ defmodule Swarm.Brain do
           check: %{integer() => pos()},
           fall_back: boolean(),
           spare: spare() | nil,
+          no_ore: false | :mined_out | :stalled | :nowhere,
           survey: pos() | nil,
           regroup: pos() | nil,
           peek: pos() | nil,
@@ -1246,7 +1249,7 @@ defmodule Swarm.Brain do
   defp strategy(%View{cc: nil} = v, memory) do
     target = target_of(v, opponent(v, memory))
     {%{mode: :attack, target: target, rally: nil, post: nil, threat: nil, wave: nil, why: [], hold: nil, look: nil, serum: nil, raze: nil, check: %{},
-       fall_back: false, spare: nil, kill: nil, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
+       fall_back: false, spare: nil, no_ore: false, kill: nil, survey: nil, regroup: nil, peek: nil, help: nil}, memory}
   end
 
   defp strategy(%View{} = v, memory) do
@@ -1345,6 +1348,9 @@ defmodule Swarm.Brain do
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
       spare: spare,
+      # Whether there is nothing left for us to mine (`nothing_to_mine/2`): it is worked out here,
+      # after the view the units are sent, so it goes to them in the strategy.
+      no_ore: v.no_ore,
       # Safe mode: the Command Center id every wave member goes for (`Swarm.UnitBrain`), or nil.
       kill: memory.kill && Map.take(memory.kill, [:id, :pos]),
       # The worker standing in for our scouts (`stand_in/1`), or nil.
@@ -1996,8 +2002,21 @@ defmodule Swarm.Brain do
   # The wave with the most it has had so far.
   defp peaked(wave, alive), do: Map.put(wave, :peak, max(Map.get(wave, :peak, 0), Roles.strength(alive)))
 
-  # Near the end and behind on score: every fighter goes, including new ones.
-  defp all_in?(v), do: v.tick >= v.max_ticks - @all_in_ticks and v.my_score < v.enemy_score
+  # Behind on score, every fighter goes, including new ones: near the end, or as soon as the map
+  # is mined out and nobody left has an army we couldn't take (`unarmed?/1`). Then nothing changes
+  # by waiting: we stood 20,000 points behind for 1,100 ticks with 7 Soldiers and 65 idle workers,
+  # one opponent with no Soldier and 89 workers, the other with nine.
+  defp all_in?(v), do: v.my_score < v.enemy_score and (v.tick >= v.max_ticks - @all_in_ticks or unarmed?(v))
+
+  # The map is mined out and every opponent's army going by the scoreboard (`army_by_score/2`) is
+  # no more than what we would send: our fighters, and our workers at `@worker_worth` of a Soldier
+  # each (they go too, `Swarm.UnitBrain`).
+  defp unarmed?(%View{no_ore: :mined_out} = v) do
+    ours = Roles.strength(Roles.fighters(v)) + @worker_worth * Roles.strength([%{"type" => "Soldier"}]) * length(View.units_of(v, "Worker"))
+    v.start_owner |> Map.values() |> Enum.all?(&(army_by_score(v, &1) <= ours))
+  end
+
+  defp unarmed?(_v), do: false
 
   # Each returns {wave, next wave id, why}.
   defp all_in(v, memory, owner) do
@@ -2009,9 +2028,12 @@ defmodule Swarm.Brain do
         {%{wave | members: members}, memory.next_wave, []}
 
       _ ->
+        when_ = if unarmed?(v), do: "the map mined out and nobody with an army we couldn't take", else: "#{v.max_ticks - v.tick} ticks left"
+        workers = if v.no_ore == :mined_out, do: ", and #{length(View.units_of(v, "Worker"))} workers", else: ""
+
         why =
-          "behind on score (#{v.my_score} vs #{v.enemy_score}) with #{v.max_ticks - v.tick} ticks left: " <>
-            "all #{length(Roles.fighters(v))} fighters and #{length(View.units_of(v, "Trebuchet"))} trebuchet(s) attack"
+          "behind on score (#{v.my_score} vs #{v.enemy_score}) with #{when_}: " <>
+            "all #{length(Roles.fighters(v))} fighters and #{length(View.units_of(v, "Trebuchet"))} trebuchet(s) attack#{workers}"
 
         {%{id: memory.next_wave, members: members, all_in: true, owner: owner}, memory.next_wave + 1, [{:all_in, why}]}
     end

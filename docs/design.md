@@ -592,9 +592,9 @@ Leader's team strategy (`Swarm.Brain`), built in stages:
    width of the center), the fields there come before the safest, the nearest to us. The middle
    holds the most ore, and whoever sits there with an army keeps everyone else off it. With a
    base of ours there the army lives at it: the rally point is three tiles from it, toward the
-   nearest enemy start, and it gets four towers. A quarter of the fighters at home (never
-   fewer than the usual seven) stay as guards at the main base, behind its tower nearest the
-   enemy: it must hold a raid until the army is back. The army is called back (the rally point
+   nearest enemy start, and it gets four towers. The usual nine guards stay at the main base,
+   behind its tower nearest the enemy (it was a quarter of the fighters at home; see **A fixed
+   home guard of nine**). The army is called back (the rally point
    is the main base's again) while enemy fighters come at the main base, within 15 tiles of its
    Command Center and nearer to it than to the forward base, more than those at home and its
    towers can meet, and all of ours with those towers are at least as strong as they are; it
@@ -814,6 +814,22 @@ the fighters of theirs we remember, wherever they are, are half their army as we
 more: with none remembered every base looked clear, and that party left for the base their 70
 stood by.
 
+**Behind on score with the map mined out and nobody armed, everyone goes.** The all-in (every
+fighter attacks, behind on score) used to wait for the last 300 ticks. It now also starts as soon
+as the map is mined out and no opponent's army by the scoreboard is more than our fighters and our
+workers at 0.3 of a Soldier each; the workers go with them to the target. We stood 20,000 points
+behind for 1,100 ticks with 7 Soldiers and 65 idle workers, one opponent with no Soldier and 89
+workers, the other with nine. (Whether the map is mined out is worked out in the leader's plan,
+after the view the units are sent: it goes to them in the strategy, `strategy.no_ore`. Read off
+the view, as it first was, no worker ever fought on a mined-out map.)
+
+**Falling back from an army starts when it is our fight.** A fighter at home falls back from a
+group that would beat us, eight Soldiers' worth or more, once it is within 10 tiles, raid or not
+(a smaller one at two tiles, as ever), to the nearest tower of a base of ours whether they are
+near that tower yet or not: in its reach, everyone fights there. 92 came at a base where 67 of
+ours stood six tiles in front of its towers; nobody moved until they were on them and on the
+serum, and 66 died out there for about 25.
+
 **A depot is not a base.** A tower counts as a base's only within 8 tiles of a finished Command
 Center of ours (`Roles.base_towers/1`). A raid inside a depot's tower's reach is not "inside our
 base": nobody is held there to fight it at a loss, and a fight we would lose is fallen back from
@@ -823,6 +839,13 @@ army lately), not at even. 92 of ours went out at even to a depot in the middle 
 arrived in pieces, were told to fall back to that depot's own tower, and fought there as "inside
 our base": 75 died for about 20. (Against theirs on the serum within six tiles they still stand,
 depot or not: running from a Soldier twice as fast is dying with our backs turned.)
+
+**A fixed home guard of nine.** The newest nine fighters at home guard the main base, the army
+living at a forward base or not (the tests keep seven, `config/test.exs`: their fixtures count
+attackers as "soldiers less seven"). With a forward base it used to be a quarter of all the
+fighters at home: 27 of 111 stood at the main base, 30 tiles off, when 92 came at the forward one.
+Against an army neither number holds; against a small raid nine do, and the army is called home
+when more than that comes (`home_call/3`).
 
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the

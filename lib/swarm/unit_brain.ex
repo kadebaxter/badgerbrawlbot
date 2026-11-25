@@ -68,6 +68,9 @@ defmodule Swarm.UnitBrain do
   @siege_towers 14
   # How near an enemy on the serum has to be for a fighter to stand and fight it whatever the odds.
   @serum_contact 6
+  # How near a group that would beat us a fighter at home falls back from it.
+  @fall_back_at 10
+  @fall_back_worth 8
   @siege_at_hand 8
   # ...after any stack of this many enemy workers or more on one tile in its reach (`worker_stack/2`).
   @stack 3
@@ -302,7 +305,8 @@ defmodule Swarm.UnitBrain do
   #   on us (`Roles.raiders/1`) within `@worker_fight` is attacked. On the game's own engine, 73
   #   Soldiers beat 47 with their 67 workers standing by five times in five, with 24 to 34 left;
   #   with the workers fighting, the 47 won five in five and none of them died (both sides
-  #   Weapons2 and Armor3: a worker hits a Soldier for 4, and takes four hits to kill).
+  #   Weapons2 and Armor3: a worker hits a Soldier for 4, and takes four hits to kill). And with
+  #   everyone sent out (`strategy.wave.all_in`), it goes with them to the target.
   # - a raid we would lose to is inside our base (`Roles.inside?/2`, `Roles.away?/1`) and we have
   #   no other base to go to: 77 and 66 workers died at the main base without a blow.
   # While there is ore and somewhere to go, it runs as ever: 75 workers who were the whole
@@ -310,13 +314,24 @@ defmodule Swarm.UnitBrain do
   defp fighting(unit, v, s) do
     here = View.pos(unit)
 
+    # From the strategy: the leader works it out after the view we are sent (`Swarm.Brain.plan/3`).
+    # Read off the view alone it was never set here, and no worker fought on a mined-out map.
+    mined_out? = Map.get(s, :no_ore, v.no_ore) == :mined_out or v.no_ore == :mined_out
+
     cond do
-      v.no_ore == :mined_out ->
-        Roles.raiders(v)
-        |> Enum.map(&View.pos/1)
-        |> Enum.filter(&(View.dist(&1, here) <= @worker_fight))
-        |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
-        |> then(&(&1 && {:fight, &1}))
+      mined_out? ->
+        raider =
+          Roles.raiders(v)
+          |> Enum.map(&View.pos/1)
+          |> Enum.filter(&(View.dist(&1, here) <= @worker_fight))
+          |> Enum.min_by(&{View.dist(&1, here), &1}, fn -> nil end)
+
+        cond do
+          raider -> {:fight, raider}
+          # Everyone goes (`Swarm.Brain`: behind on score, nobody left with an army): the workers too.
+          match?(%{all_in: true}, s.wave) and s.target != nil -> {:fight, s.target}
+          true -> nil
+        end
 
       View.base_ccs(v) == [] ->
         enemy =
@@ -671,7 +686,14 @@ defmodule Swarm.UnitBrain do
           Roles.inside?(v, group) -> if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
           # Already there: it fights what reaches it.
           enemy && View.dist(here, back) <= 2 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
+          # As soon as it is this fighter's fight (it is within `@fall_back_at` of them), raid or
+          # not, and not once they are two tiles off: 92 came at a base where 67 of ours stood six
+          # tiles in front of its towers, nobody moved until they were on them and on the serum,
+          # and 66 died out there.
+          # (An army, that is: `@fall_back_worth` Soldiers' worth or more. A few of them are
+          # stepped back from at two tiles, as ever.)
           group.raid or Roles.dist_to(group, here) <= group.reach + 2 -> {:move, back}
+          group.worth >= @fall_back_worth * Roles.strength([%{"type" => "Soldier"}]) and Roles.dist_to(group, here) <= @fall_back_at -> {:move, back}
           true -> nil
         end
     end
@@ -688,7 +710,9 @@ defmodule Swarm.UnitBrain do
   # the rally point, else the Command Center, whichever is first out of its reach.
   defp fallback(v, s, group) do
     cc = v.cc && View.pos(v.cc)
-    Enum.find([group.fallback, s.rally, cc], &(&1 != nil and Roles.clear_of?(group, &1))) || s.rally || cc || group.gather
+    # A base's tower (`group.fallback`) whether they are near it yet or not: once they are in its
+    # reach everyone fights there (`Roles.inside?/2`).
+    group.fallback || Enum.find([s.rally, cc], &(&1 != nil and Roles.clear_of?(group, &1))) || s.rally || cc || group.gather
   end
 
   # To help at `spot`: an attack-move once near (`@help_near`), a plain move until then. An

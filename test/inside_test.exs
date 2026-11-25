@@ -184,6 +184,23 @@ defmodule Swarm.InsideTest do
       assert View.dist(g.fallback, {42, 39}) <= 1
     end
 
+    test "from an army coming, as soon as it is our fight: back to the base's tower before they are on us" do
+      # A base of ours at (30, 44) with its tower at (30, 40); four of ours six tiles in front of
+      # the tower; twelve of theirs eight tiles farther on, in the open (no raid yet).
+      base = [building(50, "GuardTower", 30, 40), building(60, "CommandCenter", 30, 44)]
+      ours = for i <- 1..4, do: unit(200 + i, "Soldier", 30, 34)
+      army = for i <- 1..12, do: unit(900 + i, "Soldier", 30, 26, owner: 1)
+      v = View.new(state(units: ours ++ army, buildings: base))
+      g = Roles.group_for(v, nil, hd(ours))
+      assert Roles.away?(g) and not g.raid
+      assert {%{"type" => "Move", "x" => x, "y" => y}, _} = UnitBrain.decide(201, v, @defend)
+      assert View.dist({x, y}, {30, 40}) <= 1
+
+      # Three of them aren't an army: nobody walks back from that at eight tiles.
+      few = View.new(state(units: ours ++ Enum.take(army, 3), buildings: base))
+      refute match?({%{"type" => "Move", "x" => 30, "y" => 41}, _}, UnitBrain.decide(201, few, @defend))
+    end
+
     test "not to a depot's tower: one with no Command Center of ours by it is no base" do
       # The same tower six tiles west with a depot by it, not a Command Center: the base to the south.
       g = field([building(50, "GuardTower", 42, 39), building(62, "ResourceDepot", 40, 41)] ++ @south)
