@@ -433,6 +433,16 @@ defmodule Swarm.Roles do
   end
 
   @doc """
+  Whether `pos` is at a base of ours: within `@base_radius` of a finished Command Center of ours,
+  or in reach of one's Guard Tower (`base_towers/1`, its range plus one). A depot away from every
+  Command Center is no base, and neither are workers out in the field.
+  """
+  def at_base?(%View{} = v, pos) do
+    Enum.any?(View.buildings_of(v, "CommandCenter"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= @base_radius)) or
+      Enum.any?(base_towers(v), &(View.dist(View.pos(&1), pos) <= range(&1) + 1))
+  end
+
+  @doc """
   What can meet `raiders` without the wave: our fighters and Trebuchets not in it within
   `@defend_reach` of a raider, and our finished towers that can reach one (by `strength/1`, like
   everything). Defenders elsewhere, at another base, don't count.
@@ -447,22 +457,32 @@ defmodule Swarm.Roles do
   end
 
   @doc """
-  Should the wave come home? When what is hitting us, anywhere (the main base, an outpost, our
-  workers), is stronger than what is home to meet it. We only attack a neighbor, so home is never
+  Is home hit harder than it can hold? When what is hitting us, anywhere (the main base, an
+  outpost, our workers), is stronger than what is home to meet it. We only attack a neighbor, so home is never
   far. `{raiders' strength, home's strength}` if so, else nil.
   """
-  def recall(%View{} = v, wave) when wave != nil do
-    case raiders(v) do
-      [] ->
-        nil
+  def recall(%View{} = v, wave) when wave != nil, do: recall_for(v, wave, raiders(v))
+  def recall(_v, nil), do: nil
 
-      raiders ->
-        {theirs, ours} = {strength(raiders), home_strength(v, wave, raiders)}
-        if theirs > ours, do: {theirs, ours}
-    end
+  @doc """
+  Should a wave that is out come home? Like `recall/2`, but only for what is hitting a base of
+  ours (`at_base?/2`: a Command Center or its towers) or shelling our buildings. Not for a depot
+  on its own or workers in the field: raiders by a depot in the middle called 35 home from a fight
+  they were winning, into the 78 those raiders were the front of. (No wave leaves while those are
+  there, though: that is still `recall/2`.)
+  """
+  def base_recall(%View{} = v, wave) when wave != nil do
+    recall_for(v, wave, Enum.filter(raiders(v), &(at_base?(v, View.pos(&1)) or siege_on_us?(v, &1))))
   end
 
-  def recall(_v, nil), do: nil
+  def base_recall(_v, nil), do: nil
+
+  defp recall_for(_v, _wave, []), do: nil
+
+  defp recall_for(v, wave, raiders) do
+    {theirs, ours} = {strength(raiders), home_strength(v, wave, raiders)}
+    if theirs > ours, do: {theirs, ours}
+  end
 
   @doc """
   Raiders (`raiders/1`) that none of our finished Guard Towers reaches, Trebuchets aside (a sortie
@@ -922,7 +942,8 @@ defmodule Swarm.Roles do
   A group is enemy fighters in sight (or just out of it, `View`'s `recent_enemies`) within
   `@group_link` of each other. Our fighters in its fight: those within `@involved` of it, each in
   the nearest group's; and home attackers, wherever they are, in the nearest raid's (a group in a
-  base or by our workers, `at_home?/2`) worth `@raid_worth` Soldiers or more.
+  base or by our workers, `at_home?/2`) worth `@raid_worth` Soldiers or more, unless it is an army
+  (`@evacuate_worth` Soldiers' worth or more) at no base of ours (`at_base?/2`).
 
   Each group has:
 
@@ -934,6 +955,7 @@ defmodule Swarm.Roles do
   - `fallback`: by our tower nearest the gather spot on our side, out of its reach, or nil: where
     ours stay out of it when it would beat us
   - `raid`: whether it is in a base or by our workers
+  - `base`: whether it is at a base of ours (`at_base?/2`), or shelling our buildings
 
   Returns `%{groups: id => group, of: our fighter id => its group's id, by_enemy: enemy id => its group's id}`.
   """
@@ -1099,7 +1121,11 @@ defmodule Swarm.Roles do
     ours = fighters(v)
     roles = home_roles(v, wave)
     in_wave = MapSet.new(members(wave))
-    raids = Enum.filter(groups, &(&1.raid and &1.worth >= @raid_worth * @soldier))
+    # An army (worth `@evacuate_worth` Soldiers or more) that is at no base of ours pulls nobody
+    # from wherever they are: our workers leave it (`evacuations/2`), it is for those near it, and
+    # for help if home can clearly take it (`Swarm.Brain`). 45 of ours ran 20 tiles to a depot in
+    # the middle to gather next to 78.
+    raids = Enum.filter(groups, &(&1.raid and &1.worth >= @raid_worth * @soldier and (&1.base or &1.worth < @evacuate_worth * @soldier)))
 
     # Each of our fighters: {it, its group, how far it is from it}.
     attacker? = fn o -> not MapSet.member?(in_wave, o["id"]) and Map.get(roles, o["id"], :attacker) == :attacker end
@@ -1132,6 +1158,9 @@ defmodule Swarm.Roles do
     end
   end
 
+  @doc "Enemy fighters within `@group_link` of each other, as lists: one per group (a chain counts)."
+  def clusters(enemies), do: cluster(enemies)
+
   # Enemy fighters within `@group_link` of each other, one group (a chain counts).
   defp cluster(enemies) do
     enemies
@@ -1151,6 +1180,7 @@ defmodule Swarm.Roles do
       spots: Enum.map(members, &View.pos/1),
       reach: members |> Enum.map(&range/1) |> Enum.max(),
       raid: Enum.any?(members, &(at_home?(v, View.pos(&1)) or siege_on_us?(v, &1))),
+      base: Enum.any?(members, &(at_base?(v, View.pos(&1)) or siege_on_us?(v, &1))),
       worth: strength(members)
     }
   end

@@ -215,6 +215,11 @@ defmodule Swarm.Brain do
   @forget_after 300
   # Enemy fighters out of sight still count as danger this many ticks after we last saw them.
   @recent_enemy_ticks 5
+  # Fighters seen together are one pack (`remember_packs/2`). One of a pack out of sight still
+  # counts with those of it in sight for this long (`pack_unseen/2`), unless we saw it die...
+  @pack_memory 40
+  # ...and it was last seen no farther from them than this plus a tile for every tick since.
+  @pack_link 3
   # How far from the wave's center enemies count when deciding to pull back.
   @wave_sight 8
   # How close to the rally point an attacker must be to leave with a wave.
@@ -574,6 +579,9 @@ defmodule Swarm.Brain do
       wave: nil,
       next_wave: 1,
       enemies: %{},
+      # Enemy fighters we saw in the last `@pack_memory` ticks and didn't see die, id => as last
+      # seen, with "seen" and "pack" (see `remember_packs/2`).
+      packs: %{},
       pending: nil,
       helpers: %{},
       ore_short_since: nil,
@@ -693,10 +701,12 @@ defmodule Swarm.Brain do
       |> Map.reject(fn {id, d} -> not Map.has_key?(seen, id) and View.in_sight?(v, View.pos(d)) end)
       |> Map.merge(seen)
 
-    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent_enemies(v, memory.enemies), together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
+    packs = remember_packs(memory.packs, v)
+    recent = Enum.uniq_by(recent_enemies(v, memory.enemies) ++ pack_unseen(v, packs), & &1["id"])
+    v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent, together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
-    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers}}
+    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers, packs: packs}}
   end
 
   # An enemy tower that shot at us from the fog (`towerShots` names it and where it stands) is
@@ -728,6 +738,50 @@ defmodule Swarm.Brain do
         v.tick - e["seen"] <= @recent_enemy_ticks,
         not View.in_sight?(v, View.pos(e)),
         do: e
+  end
+
+  # Enemy fighters seen together (within a group's link of each other, `Roles.clusters/1`) are one
+  # pack, and stay one: a pack is every fighter that has been in a group with any of the others.
+  # Each is kept as last seen for `@pack_memory` ticks, and dropped when we see it die. Unlike
+  # `memory.enemies`, not when we see the spot it was at without it: it walked on, with the rest.
+  # (63 Soldiers came through the middle; six ticks later 11 of them were in sight, and 45 of ours
+  # went in against "11", then against the 72 behind them.)
+  defp remember_packs(packs, %View{} = v) do
+    killed = for e <- v.events, e["kind"] == "UnitKilled", do: e["entityId"]
+    packs = packs |> Map.drop(killed) |> Map.reject(fn {_id, e} -> v.tick - e["seen"] > @pack_memory end)
+
+    v.enemy_units
+    |> Enum.reject(&(&1["type"] == "Worker"))
+    |> Roles.clusters()
+    |> Enum.reduce(packs, fn members, packs ->
+      ids = Enum.map(members, & &1["id"])
+      old = for id <- ids, e = packs[id], do: e["pack"]
+      label = Enum.min(old ++ ids)
+      joined = MapSet.new(old)
+      packs = Map.new(packs, fn {id, e} -> {id, if(MapSet.member?(joined, e["pack"]), do: Map.put(e, "pack", label), else: e)} end)
+
+      Enum.reduce(members, packs, fn u, packs ->
+        Map.put(packs, u["id"], u |> Map.take(["id", "owner", "type", "hp", "x", "y", "effects"]) |> Map.merge(%{"seen" => v.tick, "pack" => label}))
+      end)
+    end)
+  end
+
+  # The fighters of a pack that are out of sight while others of it are in sight: each stands, for
+  # the count, by the one in sight nearest where it was last seen, if it could have walked there
+  # with them (`@pack_link` and a tile a tick). So a group is what we have seen of it less what we
+  # killed, not what the fog shows this tick; two Soldiers that left their army 40 tiles back
+  # are still two.
+  defp pack_unseen(%View{} = v, packs) do
+    visible = MapSet.new(v.enemy_units, & &1["id"])
+    anchors = for u <- v.enemy_units, e = packs[u["id"]], do: {e["pack"], View.pos(u)}
+
+    for {id, e} <- packs,
+        not MapSet.member?(visible, id),
+        spots = for({pack, pos} <- anchors, pack == e["pack"], View.dist(pos, View.pos(e)) <= @pack_link + v.tick - e["seen"], do: pos),
+        spots != [] do
+      {x, y} = Enum.min_by(spots, &{View.dist(&1, View.pos(e)), &1})
+      e |> Map.delete("pack") |> Map.merge(%{"x" => x, "y" => y})
+    end
   end
 
   @doc """
@@ -1267,7 +1321,7 @@ defmodule Swarm.Brain do
     {spare, spare_why, memory} = spare(v, memory, memory.wave)
     killing? = memory.kill != nil
     # Called home to defend this tick (all in, or in safe mode, nothing comes home).
-    home_recall? = memory.wave != nil and not all_in?(v) and not killing? and Roles.recall(v, memory.wave) != nil
+    home_recall? = memory.wave != nil and not all_in?(v) and not killing? and Roles.base_recall(v, memory.wave) != nil
     recalled_at = if home_recall?, do: v.tick, else: memory.recalled_at
     # Called home for an army near home: no new wave for `@calm_ticks` either, counterattack or
     # not: the army is still about, and a wave leaving into it was called straight back.
@@ -2061,7 +2115,7 @@ defmodule Swarm.Brain do
       wave_owner_out?(v, wave) ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: player #{wave.owner} is out, coming home"}], nil}
 
-      home = Roles.recall(v, wave) ->
+      home = Roles.base_recall(v, wave) ->
         {theirs, ours} = home
         why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
         {nil, memory.next_wave, [{:wave_recalled, why}], nil}
@@ -2372,7 +2426,10 @@ defmodule Swarm.Brain do
     # while 50 more came into sight, and the serum was gone when they got there.
     turns_it? =
       Enum.any?(Roles.groups(on, wave).groups, fn {_id, g} ->
-        g.size > 0 and g.worth >= @serum_raid and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
+        # ...and the fight is on (`in_contact?/3`): taken with the raid 20 tiles from our army, a
+        # third of it was spent walking, and ours arrived in two lumps.
+        g.size > 0 and g.worth >= @serum_raid and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1)) and
+          in_contact?(v, g, g.ids)
       end)
 
     # (It was also taken whatever the odds once a raid was inside a base of ours with eight of our
@@ -2399,10 +2456,11 @@ defmodule Swarm.Brain do
       (met? or (raiders != [] and raid >= @serum_raid and overrun? and turns_it?))
   end
 
-  # `@serum_soldiers` of our Soldiers or more within `@serum_contact` of a fighter of group `g` on
-  # the serum: the fight is on, not just in sight. Taken on sight, ours ran for 30 ticks before a blow.
-  defp in_contact?(v, g, on_serum) do
-    theirs = for e <- v.enemy_units, MapSet.member?(on_serum, e["id"]), MapSet.member?(g.ids, e["id"]), do: View.pos(e)
+  # `@serum_soldiers` of our Soldiers or more within `@serum_contact` of a fighter of group `g`
+  # among `these` (those on the serum, or all of it): the fight is on, not just in sight. Taken on
+  # sight, ours ran for 30 ticks before a blow.
+  defp in_contact?(v, g, these) do
+    theirs = for e <- v.enemy_units, MapSet.member?(these, e["id"]), MapSet.member?(g.ids, e["id"]), do: View.pos(e)
     Enum.count(View.units_of(v, "Soldier"), fn u -> Enum.any?(theirs, &(View.dist(&1, View.pos(u)) <= @serum_contact)) end) >= @serum_soldiers
   end
 

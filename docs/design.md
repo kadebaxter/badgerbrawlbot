@@ -847,6 +847,31 @@ fighters at home: 27 of 111 stood at the main base, 30 tiles off, when 92 came a
 Against an army neither number holds; against a small raid nine do, and the army is called home
 when more than that comes (`home_call/3`).
 
+**An army is what we have seen of it, less what we killed.** Enemy fighters seen together
+(within three tiles of each other, a chain counts) are one pack, and stay one
+(`Swarm.Brain.remember_packs/2`). While any of a pack is in sight, the ones out of sight count
+with them, standing for the estimate by the one in sight nearest where they were last seen
+(`View.recent_enemies`, so the fight's estimate, help and the serum all see them): for 40 ticks
+after they were last seen, unless we saw them die, and only if they could have walked there with
+the rest (three tiles and one for every tick since; two that left their army 40 tiles back are
+two). 78 came through the middle; the count in sight went 5, 12, 17, 63, 12, 11, 72 inside ten
+ticks, and the call flipped with it: "gather next to them", "stay out", "go in" against 11, "go
+in" against 72. 64 Soldiers became 9 in 20 ticks, for 27.
+
+**A depot on its own calls nobody.** A wave that is out comes home only for what hits a base of
+ours (within 10 of a finished Command Center, or in reach of its towers: `Roles.at_base?/2`,
+`Roles.base_recall/2`) or shells our buildings; not for raiders by a depot on its own or by
+workers in the field (no new wave leaves while those are there, `Roles.recall/2` as before). And
+an army (eight Soldiers' worth or more) at no base of ours pulls no attacker from home into its
+fight: the workers leave it (`Roles.evacuations/2`), it is for those within ten tiles of it, and
+for help only where home can clearly take it. A few raiders in the field are still gathered for
+and met. In that game five Soldiers by a depot in the middle called 35 home from the Economist's
+base, to gather next to the 78 they were the front of.
+
+**The serum for a raid waits for the fight.** Like the answer to theirs, ours for a raid is only
+taken once eight of our Soldiers are within six tiles of that raid. It was taken with the raid
+in sight and the army 20 tiles off: a third of it was spent walking.
+
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
 outposts, and the army lives at our base nearest their start (the main one if that is nearest).

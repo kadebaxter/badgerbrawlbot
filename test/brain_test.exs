@@ -569,10 +569,10 @@ defmodule Swarm.BrainTest do
       assert why =~ "home under attack"
     end
 
-    test "comes home for our workers out in the field too, not only the base" do
+    test "stays out for our workers out in the field: only a base calls it home" do
       {ours, memory} = wave_out()
       miners = for i <- 1..4, do: unit(100 + i, "Worker", 30, 8)
-      assert {%{mode: :defend, threat: nil, wave: nil}, _, _} = plan([units: ours ++ miners ++ raiders(10, 31, 8)], memory)
+      assert {%{mode: :defend, threat: nil, wave: %{id: 1}}, _, _} = plan([units: ours ++ miners ++ raiders(10, 31, 8)], memory)
     end
 
     test "stays out for a raid home can hold" do

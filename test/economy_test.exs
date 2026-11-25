@@ -155,9 +155,14 @@ defmodule Swarm.EconomyTest do
       strategy = @gather |> Map.put(:fall_back, true) |> Map.put(:help, {27, 7})
       v = View.new(state(units: units, buildings: [@tower]))
       {x, y} = @by_tower
-      assert {%{"type" => "Move", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, strategy)
+      # (An army by workers in the field pulls nobody into its fight: it goes there as home's
+      # fall-back, ready to fight what follows.)
+      assert {%{"type" => "Attack", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, strategy)
 
-      # Even told to help: alone against eight, it stays by the tower.
+      # Even told to help: alone against eight, once it is near enough to be in that fight (ten
+      # tiles) it comes back to the tower. (The leader only sends help home can clearly take.)
+      near = miners() ++ raid(8) ++ [unit(201, "Soldier", 18, 7) | tl(home(8, 5, 5))]
+      v = View.new(state(units: near, buildings: [@tower]))
       assert {%{"type" => "Move", "x" => ^x, "y" => ^y}, _} = UnitBrain.decide(201, v, Map.put(@gather, :help, {27, 7}))
     end
 
