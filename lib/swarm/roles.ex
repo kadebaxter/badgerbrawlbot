@@ -90,6 +90,8 @@ defmodule Swarm.Roles do
   # Workers leave a base ahead of a raid this big (in Soldiers) once it is this near (`evacuations/2`).
   @evacuate_worth 8
   @evacuate 16
+  # Their units within this of the field we are taking (`View.claim`) are chased by home's attackers.
+  @claim_reach 8
   @sideways 4
 
   # From the bot guide's unit table. The tower's cooldown isn't listed; 1 is a guess. A
@@ -774,6 +776,8 @@ defmodule Swarm.Roles do
       (in_wave? or
          Enum.any?(places, &(View.dist(View.pos(enemy), &1) <= @base_radius)) or
          (not building? and Enum.any?(View.units_of(v, "Worker"), &(View.dist(View.pos(&1), View.pos(enemy)) <= @worker_cover))) or
+         # ...and so are their units on the field we are taking for our workers (`View.claim`).
+         (not building? and v.claim != nil and View.dist(View.pos(enemy), v.claim) <= @claim_reach) or
          siege_on_us?(v, enemy))
   end
 

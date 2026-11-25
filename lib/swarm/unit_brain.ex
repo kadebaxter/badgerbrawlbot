@@ -94,6 +94,10 @@ defmodule Swarm.UnitBrain do
   # Ore with an enemy fighter this close is unsafe to mine: archers shoot from 4, so a pack a few
   # tiles off the deposit kills miners on the way there, not only at it.
   @unsafe_ore 8
+  # A field the army is taking (`claimed_ore/1`): its ore is within this of the spot, and it is
+  # mined once this many of our fighters are that close to it.
+  @claim_cover 6
+  @claim_escort 5
   # An enemy fighter this close to a miner out of our towers' reach, when we are losing there or
   # falling back, sends it to cover.
   @worker_alarm 6
@@ -232,7 +236,7 @@ defmodule Swarm.UnitBrain do
         end
 
       nil ->
-        stand_in(unit, s) || search(unit, s) || worker(unit, v)
+        stand_in(unit, s) || search(unit, s) || worker(unit, %{v | claim: Map.get(s, :claim)})
 
       enemy ->
         {x, y} = spot = retreat(v, s, enemy) || refuge(unit, v, enemy) || rally
@@ -476,7 +480,7 @@ defmodule Swarm.UnitBrain do
       case {Enum.reject(home, &unsafe?(&1, v)), Enum.reject(near, &unsafe?(&1, v))} do
         {[_ | _] = safe_home, _} -> safe_home
         {[], [_ | _] = safe} -> safe
-        {[], []} -> far_ore(v, near)
+        {[], []} -> with [] <- far_ore(v, near), do: claimed_ore(v)
       end
 
     move? =
@@ -556,6 +560,19 @@ defmodule Swarm.UnitBrain do
     end
   end
 
+  # The ore of the field our army is taking for us (`strategy.claim`, `Swarm.Brain`), once
+  # `@claim_escort` of our fighters stand within `@claim_cover` of it: enemy ground or not, with
+  # no enemy fighter by it and in no tower's reach (`unsafe?/2`). Until they are there, nothing.
+  defp claimed_ore(%View{claim: nil}), do: []
+
+  defp claimed_ore(%View{claim: claim} = v) do
+    there = Enum.count(Roles.fighters(v), &(View.dist(View.pos(&1), claim) <= @claim_cover))
+
+    if there >= @claim_escort,
+      do: Enum.filter(v.deposits, &(View.dist(View.pos(&1), claim) <= @claim_cover and (&1["remaining"] || 0) > 0 and not unsafe?(&1, v))),
+      else: []
+  end
+
   # An idle worker with nothing safe to do stands by the tower closest to it, not out in the open;
   # if an enemy reaches that, by the closest drop-off none does.
   defp take_cover(%{"activity" => "Idle"} = unit, v) do
@@ -590,6 +607,8 @@ defmodule Swarm.UnitBrain do
   end
 
   defp intent(unit, v, s) do
+    # The field we are taking, for whom may be chased there (`Roles.leftover_target/3`).
+    v = %{v | claim: Map.get(s, :claim)}
     role = if s.rally, do: Roles.role(v, s.wave, unit["id"]), else: :wave
     group = Roles.group_for(v, s.wave, unit)
 

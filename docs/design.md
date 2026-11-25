@@ -890,6 +890,20 @@ doesn't wait for a look: it goes on what we know of their army or the scoreboard
 whichever is more. 120 Soldiers stood 600 ticks in front of an opponent with no army: every
 scout and worker dead, 118 ore of which 100 was the workers', and "a look first" every tick.
 
+**Out of ore we will mine, the army takes a field.** Workers only mine ore by our drop-offs, on
+our side of the map, or clear of every enemy building; with all of that gone they stand under
+our towers whatever is left elsewhere. After 10 ticks with nothing banked and no worker mining
+or walking to ore (and ore still known: with none known they go looking, above), the leader
+claims a field (`Swarm.Brain.claim/2`, `strategy.claim`): the known ore nearest a Command Center
+of ours that is in no enemy tower's reach, not at an enemy's start, and that home can take.
+Home's attackers go there (it is where they help when nothing else needs it), their units within
+8 tiles of it are fair game, and they stay. Once five of ours are within 6 tiles of it the
+workers mine it, enemy ground or not, and a depot goes up by it, in the middle too. No wave
+leaves meanwhile and one that is out comes home. It holds while the field has ore; it is given
+up when what is there is 1.3 times what home can bring, and then not taken again for 60 ticks.
+53 workers stood for 110 ticks with 3,188 ore 12 tiles from our second base: another player's
+28 workers were on it, unguarded, while 16 of our 30 Soldiers walked to the far corner.
+
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
 outposts, and the army lives at our base nearest their start (the main one if that is nearest).

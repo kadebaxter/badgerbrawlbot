@@ -80,6 +80,10 @@ defmodule Swarm.MiddleTest do
       {_, commands, _} = three([units: units, buildings: [@barracks, @depot, base], deposits: ore, ore: 300], %{Brain.new_memory() | bases: [{32, 26}]})
       assert [spot] = depots(commands)
       assert View.dist(spot, {27, 26}) <= 3
+      # No Command Center by it, but it is the field our army is taking for the workers: one goes up.
+      {_, commands, _} = three([units: units, buildings: [@barracks, @depot], deposits: ore, ore: 300], %{Brain.new_memory() | claim: %{pos: {27, 26}, at: 90}})
+      assert [spot] = depots(commands)
+      assert View.dist(spot, {27, 26}) <= 3
       # With one opponent it goes up either way.
       {_, commands, _} = plan(units: units, buildings: [@barracks, @depot], deposits: ore, ore: 300)
       assert [_] = depots(commands)

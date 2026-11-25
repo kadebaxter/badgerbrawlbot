@@ -32,6 +32,8 @@ defmodule Swarm.View do
     # Where the last opponent's Command Center we leave standing is (set by `Swarm.Brain.plan/3`),
     # or nil: no tower of ours goes up in reach of it.
     spared: nil,
+    # The field our army is taking for the workers (set by `Swarm.Brain.plan/3`), or nil.
+    claim: nil,
     # In sight, plus remembered ones once `with_known_ore/2` has run (those have a "seen" tick).
     deposits: [],
     enemy_starts: [],
@@ -377,6 +379,9 @@ defmodule Swarm.View do
     home = dist(pos, pos(cc))
     Enum.all?(v.enemy_starts, &(home < dist(pos, &1)))
   end
+
+  @doc "How far from an enemy's start or building ground has to be to be free for us (`claimable?/2`)."
+  def enemy_clear, do: @enemy_clear
 
   @doc """
   Whether ore at `pos` is free for us to take: on our side (`ours?/2`), or at least

@@ -208,6 +208,14 @@ defmodule Swarm.Brain do
   #   and nothing banked for `@ore_blind` ticks: the home field ran out at tick 270 with nothing
   #   else ever seen, and the workers stood until the hundred ticks were up.
   @ore_blind 10
+  # Taking a field (`claim/2`): with ore known but none our workers will mine, after `@claim_idle`
+  # ticks of nobody mining or walking to ore, the army goes to the nearest field we can take and
+  # the workers mine it with the army there. A field is the ore within `@claim_radius` of a spot;
+  # it is given up when what is there is `@help_give_up` times what home can bring, and not taken
+  # again for `@claim_rest` ticks.
+  @claim_idle 10
+  @claim_radius 5
+  @claim_rest 60
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
   # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
   # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
@@ -589,6 +597,10 @@ defmodule Swarm.Brain do
       # Enemy fighters we saw in the last `@pack_memory` ticks and didn't see die, id => as last
       # seen, with "seen" and "pack" (see `remember_packs/2`).
       packs: %{},
+      # The field the army is taking for the workers, %{pos, at}, or nil; and when one was last
+      # given up (see `claim/2`).
+      claim: nil,
+      claim_off_at: nil,
       pending: nil,
       helpers: %{},
       ore_short_since: nil,
@@ -1074,9 +1086,12 @@ defmodule Swarm.Brain do
     {help, memory, helped} = help(v, memory, strategy)
     {search, memory, searching} = ore_search(v, memory, terrain, Map.get(strategy, :worker_scout))
 
+    # With nowhere else to help, home's attackers go to the field we are taking.
     strategy =
-      %{strategy | survey: survey, regroup: regroup, help: help, why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
+      %{strategy | survey: survey, regroup: regroup, help: help || Map.get(strategy, :claim), why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
       |> Map.put(:search, search)
+
+    v = %{v | claim: Map.get(strategy, :claim)}
     memory = settle_pending(memory, v)
     memory = settle_base(memory, v)
     memory = settle_barracks(memory, v)
@@ -1196,6 +1211,67 @@ defmodule Swarm.Brain do
       end
 
     {state, note}
+  end
+
+  # Taking a field. Our workers only mine ore by our drop-offs, on our side of the map, or clear
+  # of every enemy building (`Swarm.UnitBrain`); with all of that gone they stand under our towers,
+  # whatever is left elsewhere. Then the army goes and gets them a field: the known ore nearest a
+  # Command Center of ours that is in no enemy tower's reach, not at an enemy's start, and that
+  # home can take (`Roles.can_take?/3`). Home's attackers go there (`strategy.help`), kill what is
+  # on it, and stay; the workers mine it while they stand there, and a depot goes up by it. No
+  # wave leaves meanwhile, and one that is out comes home.
+  #
+  # It starts after `@claim_idle` ticks with nothing banked and no worker mining or on its way to
+  # ore, and holds while the field has ore: until it is mined out, the map is, or what is there
+  # is too much for home (`@help_give_up`; then none for `@claim_rest` ticks).
+  # (53 workers stood for 110 ticks with 3,188 ore 12 tiles from our second base: another
+  # player's 28 workers were on it, unguarded, with a depot of a third's seven tiles off, which
+  # made it enemy ground. The stall that sends the army for ore took a hundred ticks to call and
+  # wanted an army half again the size of theirs.)
+  # Returns {memory, notes for the decision log}.
+  defp claim(v, memory) do
+    workers = View.units_of(v, "Worker")
+    ore = MapSet.new(v.deposits, & &1["id"])
+    busy? = Enum.any?(workers, &(&1["activity"] in ["Gathering", "Returning"] or (&1["activity"] == "Moving" and MapSet.member?(ore, &1["targetId"]))))
+    {_ore, grew_at} = memory.income_at
+    left = fn pos -> v.deposits |> Enum.filter(&(View.dist(View.pos(&1), pos) <= @claim_radius)) |> Enum.sum_by(&(&1["remaining"] || 0)) end
+    resting? = memory.claim_off_at != nil and v.tick - memory.claim_off_at < @claim_rest
+
+    case memory.claim do
+      %{pos: pos} = claim ->
+        {ours, theirs} = Roles.help_odds(v, nil, pos)
+
+        cond do
+          v.no_ore == :mined_out or workers == [] or left.(pos) == 0 ->
+            {%{memory | claim: nil}, [{:claim, "the field at #{fmt(pos)} is done: nothing left to mine there"}]}
+
+          theirs > @help_give_up * ours ->
+            {%{memory | claim: nil, claim_off_at: v.tick}, [{:claim, "the field at #{fmt(pos)} is given up: #{round(theirs)} there against #{round(ours)} home can bring"}]}
+
+          true ->
+            {%{memory | claim: claim}, []}
+        end
+
+      nil ->
+        idle? = length(workers) >= @rebuild_workers and not busy? and v.tick - grew_at >= @claim_idle and v.no_ore != :mined_out
+
+        with true <- idle? and not resting? and not all_in?(v),
+             ccs = for(b <- View.buildings_of(v, "CommandCenter"), b["completed"], do: View.pos(b)),
+             [_ | _] <- ccs,
+             from = fn pos -> ccs |> Enum.map(&View.dist(&1, pos)) |> Enum.min() end,
+             %{} = d <-
+               v.deposits
+               |> Enum.filter(&((&1["remaining"] || 0) > 0))
+               |> Enum.reject(&(Roles.under_tower?(v, View.pos(&1)) or Enum.any?(v.enemy_starts, fn s -> View.dist(s, View.pos(&1)) < View.enemy_clear() end)))
+               |> Enum.sort_by(&{from.(View.pos(&1)), &1["id"]})
+               |> Enum.find(&Roles.can_take?(v, nil, View.pos(&1))) do
+          pos = View.pos(d)
+          why = "our workers have had nothing to mine for #{v.tick - grew_at} ticks: the army takes the field at #{fmt(pos)} (#{left.(pos)} ore known there), and they mine it with the army there"
+          {%{memory | claim: %{pos: pos, at: v.tick}}, [{:claim, why}]}
+        else
+          _ -> {memory, []}
+        end
+    end
   end
 
   # We know of no ore with anything left in it.
@@ -1355,7 +1431,9 @@ defmodule Swarm.Brain do
     checked = checked ++ peeked
     memory = %{memory | look: look, check: check, peek: peek, check_rest: check_rest}
     memory_wave = memory.wave
+    {memory, claim_why} = claim(v, memory)
     {wave, next_wave, why, hold} = wave(v, memory, rally, calm?, owner, target)
+    why = claim_why ++ why
     # A raid answered with a counterattack is done with.
     raid = if memory.wave == nil and wave != nil, do: nil, else: memory.raid
     # A strike goes for its tower, a sortie for the siege; a sortie under way ends the check.
@@ -1425,6 +1503,9 @@ defmodule Swarm.Brain do
       kill: memory.kill && Map.take(memory.kill, [:id, :pos]),
       # The worker standing in for our scouts (`stand_in/1`), or nil.
       worker_scout: stand_in && stand_in["id"],
+      # The field the army is taking for the workers (`claim/2`), or nil: home's attackers go
+      # there, and the workers mine it once they are there (`Swarm.UnitBrain`).
+      claim: memory.claim && memory.claim.pos,
       survey: nil,
       regroup: nil,
       help: nil
@@ -2144,6 +2225,12 @@ defmodule Swarm.Brain do
       wave_owner_out?(v, wave) ->
         {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: player #{wave.owner} is out, coming home"}], nil}
 
+      # Our workers have nothing to mine and the army is taking a field for them (`claim/2`): a
+      # wave across the map is no use to that. 16 of our 30 Soldiers walked to the far corner
+      # while 53 workers stood idle 12 tiles from 3,000 ore with nobody guarding it.
+      memory.claim != nil ->
+        {nil, memory.next_wave, [{:wave_recalled, "wave #{wave.id}: our workers have nothing to mine, coming home to take the field at #{fmt(memory.claim.pos)}"}], nil}
+
       home = Roles.base_recall(v, wave) ->
         {theirs, ours} = home
         why = "wave #{wave.id}: home under attack, strength #{round(theirs)} vs #{round(ours)} at home"
@@ -2607,6 +2694,9 @@ defmodule Swarm.Brain do
 
     hold =
       cond do
+        memory.claim != nil ->
+          "our workers have nothing to mine: the army takes the field at #{fmt(memory.claim.pos)} first"
+
         not calm? and not counter? ->
           "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"
 
@@ -3765,7 +3855,10 @@ defmodule Swarm.Brain do
          # went out to it, 25 tiles from home.
          # (Not once there is no ore left by any drop-off of ours: that ore is all there is, and
          # the choice is a depot there or every worker walking the map for it.)
-         false <- contested?(v) and View.near_deposits(v) != [] and middle?(v, View.pos(target)) and not by_a_base?(v, View.pos(target)) do
+         # (Nor at the field our army is taking for the workers, `claim/2`: it stands there.)
+         false <-
+           contested?(v) and View.near_deposits(v) != [] and middle?(v, View.pos(target)) and not by_a_base?(v, View.pos(target)) and
+             not (v.claim != nil and View.dist(v.claim, View.pos(target)) <= @claim_radius) do
       right_by(terrain, v, target)
     else
       _ -> nil
