@@ -585,13 +585,17 @@ defmodule Swarm.UnitBrain do
     # while 34 Soldiers fought 49 alone.
     verdict = if Map.get(s, :serum) == :take and Map.get(group, :was_in, false), do: :go, else: Roles.verdict(group, unit)
 
-    # The serum is a fight, ours or theirs. With ours on, nobody stays out of a fight they are in:
-    # it was taken at tick 434 with 82 coming into sight, the call that tick was "stay out", and 56
-    # Soldiers walked back to the towers with it on; it got 5 kills. And theirs on, within
+    # The serum is a fight, ours or theirs. With ours on, nobody stays out of a fight that isn't
+    # against all of ours in it by the estimate (the usual call waits for more than even before
+    # going back in): it was taken at tick 434 with 82 coming into sight, the call that tick was
+    # "stay out", and 56 Soldiers walked back to the towers with it on; it got 5 kills. A fight the
+    # estimate has us losing with it on is still stayed out of: 61 stood against 86 at -0.68 and
+    # 75 died for 45. And theirs on, within
     # `@serum_contact` of us: a Soldier on it is twice as fast as ours, so falling back is dying
     # with our backs turned. 98 of ours by a base of ours with 91 on it at hand were told to stay
     # out and killed about 25 for all 98.
-    stand? = v.serum_on or Map.get(s, :serum) == :take or serum_at_hand?(v, group, here)
+    ours_on? = v.serum_on or Map.get(s, :serum) == :take
+    stand? = serum_at_hand?(v, group, here) or (ours_on? and group.all >= 0)
 
     case if(stand?, do: :stand, else: verdict) do
       :stand ->

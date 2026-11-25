@@ -272,6 +272,7 @@ defmodule Swarm.Brain do
   @army_floor_ticks 100
   @help_chase 3
   @base_slack 4
+  @depot_cover 8
   # An opponent with this much ore or less alive outside the buildings we know of has no army.
   @no_army_ore 1500
   @help_cover 5
@@ -2344,18 +2345,10 @@ defmodule Swarm.Brain do
         g.size > 0 and g.worth >= @serum_raid and g.all >= 0 and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
       end)
 
-    # Or the fight is joined whatever the odds: a raid worth it is inside our base
-    # (`Roles.inside?/2`), where everyone fights it (`Swarm.UnitBrain`), with `@serum_soldiers`
-    # of ours or more in it. That is the fight the serum is for; kept for a fight it would turn
-    # by the estimate, it was taken on fights we were staying out of, or not at all.
-    joined? =
-      Enum.any?(Roles.groups(v, wave).groups, fn {_id, g} ->
-        g.size >= @serum_soldiers and g.worth >= @serum_raid and Roles.inside?(v, g) and Enum.any?(g.ids, &MapSet.member?(raider_ids, &1))
-      end)
-
-    # Or they have taken theirs: raiders on the serum (the server marks each, `Roles.serum?/1`,
-    # and they count double in `raid` above) are answered with ours, whatever the odds.
-    answer? = Enum.any?(raiders, &Roles.serum?/1)
+    # (It was also taken whatever the odds once a raid was inside a base of ours with eight of our
+    # Soldiers in the fight, and against raiders on theirs in sight. Inside the towers of a depot
+    # in the middle that was 61 of ours against 86 at -0.68: with it on they stood, and 75 died
+    # for 45.) Whatever the odds only against theirs, below.
 
     # Wherever the fight is, raid or not: a group worth it with fighters on the serum and
     # `@serum_soldiers` of ours or more in its fight. 64 of ours met 47 a few tiles off a depot of
@@ -2370,7 +2363,7 @@ defmodule Swarm.Brain do
         end)
 
     length(View.units_of(v, "Soldier")) >= @serum_soldiers and
-      (met? or (raiders != [] and ((raid >= @serum_raid and overrun? and turns_it?) or joined? or answer?)))
+      (met? or (raiders != [] and raid >= @serum_raid and overrun? and turns_it?))
   end
 
   # `@serum_soldiers` of our Soldiers or more within `@serum_contact` of a fighter of group `g` on
@@ -3187,13 +3180,6 @@ defmodule Swarm.Brain do
   # Three or four players: two or three opponents around a middle everyone wants.
   defp contested?(%View{players: players}), do: players in 3..4
 
-  # Where our base Command Center in the middle stands, finished or going up, or nil.
-  defp middle_base(v) do
-    Enum.find_value(View.buildings_of(v, "CommandCenter"), fn b ->
-      if View.base?(v, b) and middle?(v, View.pos(b)), do: View.pos(b)
-    end)
-  end
-
   # Our first base comes ahead of the army floor (`army_floor/3`), and the ore is kept for it while
   # we are short of its price: with the floor at their army and our income theirs, nothing was ever
   # left for one. We ended on 43 workers and one base against 64 on four.
@@ -3590,12 +3576,20 @@ defmodule Swarm.Brain do
          true <- Enum.count(far, &(View.dist(View.pos(&1), View.pos(target)) <= 4)) >= @remote_miners,
          true <- field_ore(v, target) >= @depot_ore,
          false <- Enum.any?(avoid, &(View.dist(&1, View.pos(target)) <= 4)),
-         # The middle gets a base with towers, not a bare depot.
-         false <- contested?(v) and middle?(v, View.pos(target)) and middle_base(v) == nil do
+         # The middle gets a base with towers, not a bare depot: a depot there only by a Command
+         # Center of ours (within `@depot_cover`). "A base of ours in the middle" let one go up 11
+         # tiles past the base by our nearest field, which is just inside the middle; the army
+         # went out to it, 25 tiles from home.
+         false <- contested?(v) and middle?(v, View.pos(target)) and not by_a_base?(v, View.pos(target)) do
       right_by(terrain, v, target)
     else
       _ -> nil
     end
+  end
+
+  # A finished Command Center of ours within `@depot_cover` of `pos`.
+  defp by_a_base?(v, pos) do
+    Enum.any?(View.buildings_of(v, "CommandCenter"), &(&1["completed"] and View.dist(View.pos(&1), pos) <= @depot_cover))
   end
 
   # The ore left in the field around `target` (the deposits a depot by it serves, see `by_field/3`).

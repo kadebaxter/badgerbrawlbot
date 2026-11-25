@@ -48,12 +48,10 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil, serum_on: false}, _, _} = plan(units: soldiers(10) ++ raiders(30))
     end
 
-    test "taken once the raid is inside our base, where everyone fights it, whatever the odds" do
-      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(16, 9))
-      assert {%{serum: :take, serum_on: true}, _, _} = plan(units: soldiers(10) ++ raiders(30, 9))
-      # Not for a couple of raiders, and not with fewer than eight Soldiers of ours in it.
+    test "inside our base too, only for a fight it turns: not whatever the odds" do
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ raiders(16, 9))
+      assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ raiders(30, 9))
       assert {%{serum: nil}, _, _} = plan(units: soldiers(10) ++ raiders(2, 9))
-      assert {%{serum: nil}, _, _} = plan(units: soldiers(7) ++ raiders(30, 9))
     end
 
     test "theirs on, in a fight eight of ours or more are in, is answered with ours wherever that is" do
@@ -118,14 +116,21 @@ defmodule Swarm.TurnaroundTest do
       assert attacks?.(261, on, Map.put(strategy, :serum_on, true))
     end
 
-    test "with ours on, nobody stays out of a fight they are in, whatever the estimate" do
-      raid = for i <- 1..30, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
-      ours = for i <- 1..5, do: unit(200 + i, "Soldier", 20, 12)
+    test "with ours on, nobody stays out of a fight the estimate doesn't have us losing; one it does is still stayed out of" do
       strategy = %{mode: :defend, target: {56, 56}, rally: {10, 10}, post: {9, 9}, threat: nil, wave: nil}
-      v = View.new(state(units: ours ++ raid))
       attacks? = fn v, s -> match?({%{"type" => "Attack"}, _}, UnitBrain.decide(201, v, s)) end
+      ours = for i <- 1..10, do: unit(200 + i, "Soldier", 20, 12)
+
+      # Fourteen of theirs: lost plain, ours with it on. We were staying out last tick, and the
+      # usual call would wait for more than even before going back in.
+      raid = for i <- 1..14, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+      v = %{View.new(state(units: ours ++ raid)) | staying_out: MapSet.new([901])}
       refute attacks?.(v, strategy)
       assert attacks?.(%{v | serum_on: true}, strategy)
+
+      # Forty: against us with it on too. Stayed out of.
+      many = for i <- 1..40, do: unit(900 + i, "Soldier", 14, 12, owner: 1)
+      refute attacks?.(%{View.new(state(units: ours ++ many)) | serum_on: true}, strategy)
     end
 
     test "theirs on and at hand, ours stand and fight: a Soldier on it is twice as fast as one running" do
@@ -161,8 +166,8 @@ defmodule Swarm.TurnaroundTest do
       take = Map.put(strategy, :serum, :take)
       assert attacks?.(201, was_in, take)
       assert attacks?.(261, was_in, take)
-      # Nor one we weren't going into: taking the serum is going in.
-      assert attacks?.(261, %{was_in | going_in: MapSet.new()}, take)
+      # A fight we weren't going into, and are losing by the estimate, isn't started by it.
+      refute attacks?.(261, %{was_in | going_in: MapSet.new()}, take)
     end
   end
 

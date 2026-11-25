@@ -793,19 +793,26 @@ a base of ours that isn't the main one, and another finished Command Center of o
 fight where they are, as inside any base of ours. For a while they left too: 98 of them by a base
 with towers, with 91 on the serum at hand, walked for the main base and killed about 25 for all 98.
 
-**The serum is a fight, ours or theirs.** With ours on, nobody stays out of a fight they are in,
-whatever the estimate, until it wears off: it was taken with 82 coming into sight, the call that
-tick was "stay out", 56 Soldiers walked back to the towers with it on, and it got 5 kills. With
-theirs on within six tiles of a fighter of ours, that fighter stands and fights: a Soldier on the
-serum is twice as fast as one running. And theirs is only answered with ours once eight of our
-Soldiers are within six tiles of their fighters on it, not when they come into sight.
+**The serum is a fight, ours or theirs.** Ours is taken for a raid worth it that is an even
+fight or worse without it and not against us with it (the fight's own estimate, worked out with
+it on), or against theirs: once eight of our Soldiers are within six tiles of their fighters on
+it. With ours on, nobody stays out of a fight the estimate doesn't have us losing (the usual call
+waits for more than even before going back into one): it was taken with 82 coming into sight, the
+call that tick was "stay out", 56 Soldiers walked back to the towers with it on, and it got 5
+kills. A fight we would lose with it on is still stayed out of, and it isn't taken for one. For a
+while it was taken whatever the odds once a raid was inside a base of ours, and everyone stood
+with it on: inside the towers of a depot in the middle that was 61 of ours against 86 at -0.68,
+and 75 died for 45. With theirs on within six tiles of a fighter of ours, that fighter stands and
+fights whatever the odds: a Soldier on the serum is twice as fast as one running.
 
 **Three or four players: the nearest field first.** The next base goes by the field worth one
 nearest our own Command Center, the middle like any other, and by none farther from home than the
 middle is (by 4 tiles) while every opponent is still in. It waits until a scout has seen that
 field (with no scout alive, any field seen lately, as in other games). Only our first base comes
 ahead of the army floor; the next ones wait until our army is theirs. A base's towers are ordered
-while it is still going up, and no depot goes to a field in the middle before a base does.
+while it is still going up, and a depot only goes to a field in the middle within 8 tiles of a
+finished Command Center of ours (the base by our nearest field is just inside the middle, and "a
+base of ours in the middle" let a depot go up 11 tiles past it: the army went out to it).
 (The middle used to come first, its Command Center and four towers ahead of the fighters for 120
 ticks, and any other base with them. Two house bots each took the field nine tiles from their
 base. We took the middle 25 tiles off, then a field 41 tiles off, with the one nine tiles from
