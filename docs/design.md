@@ -872,6 +872,16 @@ base, to gather next to the 78 they were the front of.
 taken once eight of our Soldiers are within six tiles of that raid. It was taken with the raid
 in sight and the army 20 tiles off: a third of it was spent walking.
 
+**There is always a scout, and no ore known is a stall at once.** From tick 120, with no scout
+alive or on its way and a Barracks up, one is trained ahead of the army floor, in the shortest
+queue, and the ore waits for it if we are short (`first_scout/2`); the second still comes from
+what is left over. And with no ore known at all, nobody mining and nothing banked for 10 ticks,
+we are stalled whatever the tick (`nothing_to_mine/2`): workers go looking (`ore_search/3`)
+without waiting out the hundred ticks. Among two bigger armies the floor was never met, every
+Barracks was full of Soldiers all game and no scout was ever trained: the only ore we ever saw
+was the home field, and when it ran out at tick 270 thirty workers stood for a hundred ticks ten
+tiles from 6,000, with no base, no depot, and (no look at anyone) no wave.
+
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
 outposts, and the army lives at our base nearest their start (the main one if that is nearest).

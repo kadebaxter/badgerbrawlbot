@@ -99,6 +99,8 @@ defmodule Swarm.ReadsTest do
     defp five(opts, alive \\ 1500), do: %{three(opts, alive) | players: 5}
 
     # Whether the first thing the ore goes to is a fighter.
+    # (After the one scout there always is: `first_scout/2`.)
+    defp army_first?([%{"type" => "Produce", "unitType" => "Scout"} | rest]), do: army_first?(rest)
     defp army_first?([%{"type" => "Produce", "unitType" => type} | _]), do: type in ["Soldier", "Archer"]
     defp army_first?(_commands), do: false
 

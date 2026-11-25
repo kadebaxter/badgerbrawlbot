@@ -49,6 +49,9 @@ defmodule Swarm.Brain do
   @max_workers 80
   # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
   @scouts 2
+  # From this tick on there is always one, ahead of the army floor (`first_scout/2`): the first
+  # Soldiers come before it, and it is out well before the home field runs low (around tick 250).
+  @first_scout_from 120
   @first_wave 15
   # Every wave, counterattacks too, needs at least this many attackers: a handful sent at a
   # neighbor gets turned back and picked off. In a big game (`@big_game` players or more), where
@@ -201,6 +204,10 @@ defmodule Swarm.Brain do
   #   and none of them mining. Whatever is left, we aren't getting it.
   @ore_dregs 0.02
   @ore_stall 100
+  # - and at once, whatever the tick, when we know of no ore at all (`blind?/1`) with nobody mining
+  #   and nothing banked for `@ore_blind` ticks: the home field ran out at tick 270 with nothing
+  #   else ever seen, and the workers stood until the hundred ticks were up.
+  @ore_blind 10
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
   # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
   # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
@@ -1112,6 +1119,7 @@ defmodule Swarm.Brain do
       |> with_reserve(reserve, &depot_first(&1, v, terrain))
       |> research_first(v)
       |> first_base(v, terrain)
+      |> first_scout(v)
       |> army_floor(v, memory)
       |> then(&if(catch_up?, do: more_barracks(&1, v, terrain, true), else: &1))
       |> found_base(v, terrain)
@@ -1159,13 +1167,15 @@ defmodule Swarm.Brain do
 
     {state, why} =
       cond do
-        v.tick < @stand_in_from ->
-          {false, nil}
-
-        left != nil and left <= @ore_dregs * memory.map_ore ->
+        left != nil and left <= @ore_dregs * memory.map_ore and v.tick >= @stand_in_from ->
           {:mined_out, "the map is mined out: #{memory.map_ore} ore on it, #{v.mined_all} banked by everyone"}
 
-        length(workers) >= @rebuild_workers and not mining? and v.tick - grew_at >= @ore_stall ->
+        # No ore known at all and nobody mining: that is a stall now, not in `@ore_stall` ticks
+        # (`@ore_blind` is for the tick or two between the last pile going and the next being seen).
+        length(workers) >= @rebuild_workers and not mining? and blind?(v) and v.tick - grew_at >= @ore_blind ->
+          {:stalled, "no ore known and nobody is mining" <> if(left, do: " (at most #{left} left on the map)", else: "")}
+
+        length(workers) >= @rebuild_workers and not mining? and v.tick >= @stand_in_from and v.tick - grew_at >= @ore_stall ->
           {:stalled,
            "we have banked nothing for #{v.tick - grew_at} ticks and nobody is mining" <>
              if(left, do: " (at most #{left} left on the map)", else: "")}
@@ -1184,6 +1194,9 @@ defmodule Swarm.Brain do
 
     {state, note}
   end
+
+  # We know of no ore with anything left in it.
+  defp blind?(v), do: not Enum.any?(v.deposits, &((&1["remaining"] || 0) > 0))
 
   # Stalled (`nothing_to_mine/2`), we go and find the ore: idle workers, up to `@searchers`, each
   # to the nearest place we haven't looked at that nobody else is going to. The places: where the
@@ -4116,6 +4129,27 @@ defmodule Swarm.Brain do
 
   defp research_cmd(lab, upgrade), do: %{"type" => "Research", "buildingId" => lab["id"], "upgrade" => upgrade}
 
+  # From tick `@first_scout_from`, with no scout at all (none alive, none being trained) and a
+  # finished Barracks, one comes ahead
+  # of the army floor, in the shortest queue, and the ore waits for it if we are short (not while
+  # nothing is coming in). The rest are trained from what is left over (`train_scout/2`), which
+  # under the floor is nothing: among two bigger armies every Barracks was full of Soldiers all
+  # game, no scout was ever trained, the only ore we ever saw was the home field, and when that
+  # ran out 30 workers stood idle for a hundred ticks ten tiles from 6,000. No look at anyone
+  # either, so no wave left.
+  defp first_scout({cmds, mem, ore} = acc, v) do
+    barracks = Enum.filter(View.buildings_of(v, "Barracks"), & &1["completed"])
+    queued? = Enum.any?(barracks, fn b -> Enum.any?(b["production"], &(&1["unitType"] == "Scout")) end)
+    shortest = barracks |> Enum.filter(&(length(&1["production"]) < 5)) |> Enum.min_by(&{length(&1["production"]), &1["id"]}, fn -> nil end)
+
+    cond do
+      v.tick < @first_scout_from or Roles.neighbors(v) == [] or View.units_of(v, "Scout") != [] or queued? or shortest == nil -> acc
+      ore >= @costs["Scout"] -> {[%{"type" => "Produce", "buildingId" => shortest["id"], "unitType" => "Scout"} | cmds], mem, ore - @costs["Scout"]}
+      v.no_ore -> acc
+      true -> {cmds, mem, 0}
+    end
+  end
+
   # `@scouts` scouts while anyone is left to watch, counting ones being trained. From
   # the first free Barracks, one a tick.
   defp train_scout({cmds, mem, ore} = acc, v) do
@@ -4125,7 +4159,9 @@ defmodule Swarm.Brain do
 
     wanted = if Roles.neighbors(v) == [], do: 0, else: @scouts
 
-    if length(View.units_of(v, "Scout")) + length(queued) < wanted and free != nil and ore >= @costs["Scout"] do
+    ordered = Enum.count(cmds, &(&1["type"] == "Produce" and &1["unitType"] == "Scout"))
+
+    if length(View.units_of(v, "Scout")) + length(queued) + ordered < wanted and free != nil and ore >= @costs["Scout"] do
       cmd = %{"type" => "Produce", "buildingId" => free["id"], "unitType" => "Scout"}
       {[cmd | cmds], mem, ore - @costs["Scout"]}
     else

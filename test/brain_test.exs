@@ -189,7 +189,7 @@ defmodule Swarm.BrainTest do
 
   test "below the army floor, the Barracks train before anything is built" do
     {_, [first | _] = commands, _} =
-      plan(units: workers(10), buildings: [building(2, "Barracks", 11, 7)], ore: 350, tick: 300)
+      plan(units: [unit(300, "Scout", 20, 20) | workers(10)], buildings: [building(2, "Barracks", 11, 7)], ore: 350, tick: 300)
 
     assert %{"type" => "Produce", "unitType" => "Soldier"} = first
     assert Enum.any?(commands, &(&1["buildingType"] == "ResourceDepot"))

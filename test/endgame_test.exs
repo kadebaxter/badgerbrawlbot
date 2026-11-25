@@ -177,7 +177,8 @@ defmodule Swarm.EndgameTest do
 
     test "or we have banked nothing for 100 ticks with nobody mining, however much the count says is left" do
       memory = %{Brain.new_memory() | map_ore: 72_000, income_at: {30_000, 500}}
-      opts = [buildings: [@barracks, @depot], deposits: [], ore: 500]
+      # A pile we know of that nobody is mining (no ore known at all is a stall at once, below).
+      opts = [buildings: [@barracks, @depot], deposits: [@pile], ore: 500]
 
       # Ore mined and never banked still counts as left: 12,000 here, and none of it is there.
       {strategy, commands, _} = plan_banked([units: idle(10) ++ soldiers(10), tick: 600] ++ opts, 30_000, 30_000, memory)
@@ -202,8 +203,28 @@ defmodule Swarm.EndgameTest do
       assert economy(strategy) == ["mining again: workers are trained as usual"]
       assert memory.income_at == {30_010, 700} and "Worker" in trains(commands)
 
-      early = [units: idle(10), buildings: [@depot], deposits: [], ore: 500, tick: 250]
+      early = [units: idle(10), buildings: [@depot], deposits: [@pile], ore: 500, tick: 250]
       {strategy, _, _} = plan_banked(early, 0, 0, %{Brain.new_memory() | map_ore: 72_000})
+      assert economy(strategy) == []
+    end
+
+    test "with no ore known at all and nobody mining it is a stall at once, at any tick: workers go looking" do
+      # The home field ran out at tick 270 and nothing else had ever been seen.
+      memory = %{Brain.new_memory() | map_ore: 72_000, income_at: {9_000, 270}}
+      opts = [buildings: [@barracks, @depot], deposits: [], ore: 100]
+
+      {strategy, commands, _} = plan_banked([units: idle(10) ++ soldiers(10), tick: 280] ++ opts, 9_000, 30_000, memory)
+      assert [text, search] = economy(strategy)
+      assert text =~ "no ore known and nobody is mining" and text =~ "at most 33000 left"
+      assert search =~ "4 worker(s) go looking for ore"
+      refute "Worker" in trains(commands)
+
+      # Not in the tick or two after the last pile goes; not with a pile known; not while anyone mines.
+      {strategy, _, _} = plan_banked([units: idle(10) ++ soldiers(10), tick: 275] ++ opts, 9_000, 30_000, memory)
+      assert economy(strategy) == []
+      {strategy, _, _} = plan_banked([units: idle(10) ++ soldiers(10), tick: 280] ++ Keyword.put(opts, :deposits, [@pile]), 9_000, 30_000, memory)
+      assert economy(strategy) == []
+      {strategy, _, _} = plan_banked([units: mining(1) ++ tl(idle(10)) ++ soldiers(10), tick: 280] ++ opts, 9_000, 30_000, memory)
       assert economy(strategy) == []
     end
 

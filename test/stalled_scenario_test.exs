@@ -37,7 +37,7 @@ defmodule Swarm.StalledScenarioTest do
     # It knows the map isn't proven empty: 3,000 may be left. It says why it is acting.
     assert t.memory.map_ore - t.v.mined_all == 3000
     assert [stalled, search] = t.log
-    assert stalled =~ "banked nothing for 150 ticks" and stalled =~ "at most 3000 left"
+    assert stalled =~ "no ore known and nobody is mining" and stalled =~ "at most 3000 left"
     assert search =~ "4 worker(s) go looking for ore"
 
     # No more workers while nothing is coming in.
