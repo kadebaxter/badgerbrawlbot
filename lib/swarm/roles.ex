@@ -1038,18 +1038,21 @@ defmodule Swarm.Roles do
   @doc """
   The bases our workers leave ahead of a raid, as `[{the raid's spots, where they go}]`: for every
   group worth `@evacuate_worth` Soldiers or more within `@evacuate` tiles of a Command Center of
-  ours that isn't the main one, the nearest Command Center of ours farther than that from the
-  group. Whether we would win the fight or not: workers at a base that is fought at die in it.
+  ours that isn't the main one, or of a depot of ours, the nearest Command Center of ours farther
+  than that from the group. Whether we would win the fight or not: workers at a base that is fought at die in it.
   None from the main base, and none with nowhere to go.
   """
   def evacuations(%View{cc: cc} = v, wave) when cc != nil do
     main = View.pos(cc)
     bases = View.base_ccs(v)
+    # A depot of ours is left the same way: nobody fights for one at a loss any more
+    # (`base_towers/1`), so its workers don't wait by its tower either.
+    depots = for b <- View.buildings_of(v, "ResourceDepot"), b["completed"], do: View.pos(b)
 
     for {_id, g} <- groups(v, wave).groups,
         g.worth >= @evacuate_worth * @soldier,
         dist_to(g, main) > @evacuate,
-        base = Enum.find(bases, &(dist_to(g, &1) <= @evacuate)),
+        base = Enum.find(bases ++ depots, &(dist_to(g, &1) <= @evacuate)),
         base != nil,
         to = [main | bases] |> Enum.filter(&(dist_to(g, &1) > @evacuate)) |> Enum.min_by(&{View.dist(&1, base), &1}, fn -> nil end),
         to != nil,

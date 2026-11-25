@@ -142,6 +142,18 @@ defmodule Swarm.InsideTest do
       assert {%{"type" => "Move", "x" => 20, "y" => 20}, _} = UnitBrain.decide(101, v, @defend)
     end
 
+    test "from a depot of ours too: its workers go to a Command Center the raid is far from" do
+      # A depot and its tower in the middle at (30, 30), twelve of theirs ten tiles from it; home at (7, 7).
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 40, 30, owner: 1)
+      miner = unit(101, "Worker", 29, 31, activity: "Gathering")
+      v = View.new(state(units: [miner | raid], buildings: [building(62, "ResourceDepot", 30, 30), building(50, "GuardTower", 31, 31)]))
+      assert [{_spots, {7, 7}}] = Roles.evacuations(v, nil)
+      assert {%{"type" => "Move", "unitIds" => [101], "x" => 7, "y" => 7}, _} = UnitBrain.decide(101, v, @defend)
+      # Five raiders isn't a big raid: it mines on (they are ten tiles off).
+      few = %{v | enemy_units: Enum.take(v.enemy_units, 5)}
+      assert Roles.evacuations(few, nil) == []
+    end
+
     test "not for a few raiders, and not from the main base" do
       few = lost(2, {40, 40})
       few = %{few | enemy_units: Enum.take(few.enemy_units, 5)}

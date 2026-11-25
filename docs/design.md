@@ -796,8 +796,8 @@ middle 20 tiles from our nearest tower; their serum went on in a fight a few til
 12 ticks later with 38 dead, and 87 Soldiers died for 28.
 
 **Workers leave a base ahead of a big raid, win or lose.** When a group worth eight Soldiers or
-more is within 16 tiles of a Command Center of ours that isn't the main one (and farther than that
-from the main one), every worker within 16 tiles of that group goes to the nearest Command Center
+more is within 16 tiles of a Command Center of ours that isn't the main one, or of a depot of ours
+(and farther than that from the main one), every worker within 16 tiles of that group goes to the nearest Command Center
 of ours the group is farther than 16 from, and the ore by the base they left isn't walked back to
 while the raid is there (`Roles.evacuations/2`). Whatever the estimate says: three games went on
 one raid at the base every worker mined at, 75, 61 and 60 of them, the last in a fight we won 69
