@@ -214,6 +214,10 @@ defmodule Swarm.Brain do
   # it is given up when what is there is `@help_give_up` times what home can bring, and not taken
   # again for `@claim_rest` ticks.
   @claim_idle 10
+  # Between two armies (`between_armies/2`): each at least this many Soldiers' worth, and over
+  # this share of ours.
+  @between_min 6
+  @between_spent 0.5
   @claim_radius 5
   @claim_rest 60
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
@@ -1255,7 +1259,17 @@ defmodule Swarm.Brain do
       nil ->
         idle? = length(workers) >= @rebuild_workers and not busy? and v.tick - grew_at >= @claim_idle and v.no_ore != :mined_out
 
-        with true <- idle? and not resting? and not all_in?(v),
+        # Idle for want of ore, that is, not hiding: no raid on us now or in the last `@claim_idle`
+        # ticks, home not fallen back to the towers, no base left by its workers. (They fell back
+        # from 69 raiders, ten ticks later that was "nothing to mine", and the army was sent to a
+        # field in the middle with 87 a few tiles from it.)
+        quiet? =
+          Roles.raiders(v) == [] and not memory.fall_back and
+            (memory.fall_back_at == nil or v.tick - memory.fall_back_at >= @fall_back_hold + @claim_idle) and
+            (memory.raid == nil or v.tick - memory.raid.at >= @claim_idle) and
+            Roles.evacuations(v, memory.wave) == []
+
+        with true <- idle? and quiet? and not resting? and not all_in?(v),
              ccs = for(b <- View.buildings_of(v, "CommandCenter"), b["completed"], do: View.pos(b)),
              [_ | _] <- ccs,
              from = fn pos -> ccs |> Enum.map(&View.dist(&1, pos)) |> Enum.min() end,
@@ -1762,6 +1776,26 @@ defmodule Swarm.Brain do
   defp looking?(look, owner), do: look != nil and look.owner == owner and look.done == nil
   # A look that came to nothing (no scout got there) is no look: a wave of 19 left on a count 115
   # ticks old after one, into 52 Soldiers, and led them home.
+  # Between two armies: both our neighbors (`Roles.neighbors/1`, with two or more opponents in)
+  # have an army worth `@between_min` Soldiers or more that is over `@between_spent` of ours, by
+  # what we remember of it or the scoreboard (`army_by_score/2`), whichever is more. Then no wave
+  # leaves: whoever of the three fights first is finished by the one that didn't. (We had 84 to
+  # their 81 and 75, traded 55 for 46 with one, and the other walked in with 87 against 41.)
+  # Until one of them has spent its army: on us, at our towers, or on someone else.
+  # `[{player, army}, {player, army}]`, or nil.
+  defp between_armies(v, memory) do
+    ours = Roles.strength(Roles.fighters(v))
+    soldier = Roles.strength([%{"type" => "Soldier"}])
+
+    # (Not one a look has read as a boom, `Swarm.Reads`: by the scoreboard its bases look like an
+    # army, and it is the one neighbor to go for early.)
+    reads = Map.get(memory, :reads, %{})
+    armies = for {_start, slot} <- Roles.neighbors(v), Reads.kind(reads, slot) != :boom, do: {slot, max(enemy_army(memory, slot), army_by_score(v, slot))}
+
+    if length(armies) >= 2 and Enum.all?(armies, fn {_slot, army} -> army >= @between_min * soldier and army > @between_spent * ours end),
+      do: armies
+  end
+
   # Nobody can go and look, now or soon: no scout alive or being trained, no worker to go in its
   # place (`stand_in/1`), and no Barracks we could pay for one at.
   defp no_look?(v) do
@@ -2696,6 +2730,13 @@ defmodule Swarm.Brain do
       cond do
         memory.claim != nil ->
           "our workers have nothing to mine: the army takes the field at #{fmt(memory.claim.pos)} first"
+
+        (between = between_armies(v, memory)) != nil ->
+          [{a, at_a}, {b, at_b}] = between
+          soldier = Roles.strength([%{"type" => "Soldier"}])
+
+          "#{waiting}, between two armies (player #{a} with #{round(at_a / soldier)} Soldiers' worth, player #{b} with #{round(at_b / soldier)}): " <>
+            "none leaves until one of them is down to half of ours"
 
         not calm? and not counter? ->
           "back from a recall for home, #{@calm_ticks - (v.tick - memory.recalled_at)} more ticks"

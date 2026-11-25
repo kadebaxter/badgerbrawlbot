@@ -904,6 +904,17 @@ up when what is there is 1.3 times what home can bring, and then not taken again
 53 workers stood for 110 ticks with 3,188 ore 12 tiles from our second base: another player's
 28 workers were on it, unguarded, while 16 of our 30 Soldiers walked to the far corner.
 
+**Between two armies no wave leaves.** With two or more opponents in, when both our neighbors
+have an army of six Soldiers' worth or more that is over half of ours (by what we remember or
+the scoreboard, whichever is more; not a neighbor a look has read as a boom), no wave leaves
+(`between_armies/2`): whoever of the three fights first is finished by the one that didn't. We
+had 84 Soldiers to their 81 and 75, traded 55 for 46 with one, and the other walked in with 87
+against 41. It lifts when one of them has spent its army, on us or on anyone. And taking a field
+(above) is for want of ore, not for hiding: it doesn't start with raiders on us or within ten
+ticks of them, with home fallen back to the towers (or 25 ticks after), or with a base left by
+its workers. They fell back from 69 raiders, ten ticks later that read as "nothing to mine", and
+the army was sent to a field in the middle with 87 a few tiles from it.
+
 **Down to one opponent, the army is in one place.** In a game that began with three players or
 more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
 outposts, and the army lives at our base nearest their start (the main one if that is nearest).

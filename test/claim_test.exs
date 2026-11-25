@@ -146,3 +146,87 @@ defmodule Swarm.ClaimTest do
     assert tick(481, [scout() | idle() ++ home()], t.memory).strategy.claim == {34, 34}
   end
 end
+
+defmodule Swarm.BetweenTest do
+  @moduledoc """
+  From the game lost between the two Formics: a raid is not "nothing to mine", and with an army
+  on each side no wave leaves until one of them has spent its own.
+  """
+  use ExUnit.Case, async: true
+  import Swarm.Test.GameState
+  alias Swarm.{Brain, View}
+
+  @built [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(5, "GuardTower", 11, 11)]
+  @field for {id, x, y} <- [{31, 34, 34}, {32, 35, 34}], into: %{}, do: {id, %{"id" => id, "x" => x, "y" => y, "remaining" => 800, "seen" => 300}}
+
+  defp idle, do: for(i <- 1..10, do: unit(100 + i, "Worker", 8, 8))
+  defp scout, do: unit(300, "Scout", 10, 12)
+  defp start, do: %{Brain.new_memory() | map_ore: 72_000, income_at: {9_000, 380}, ore: @field}
+
+  defp claim(tick, units, memory) do
+    {v, memory} = Brain.see(View.new(state(units: units, buildings: @built, deposits: [], tick: tick)), memory)
+    {strategy, _, memory} = Brain.plan(v, looked(memory, 1, tick), terrain())
+    {strategy.claim, memory}
+  end
+
+  describe "taking a field is for want of ore, not for hiding" do
+    test "not while raiders are on us, nor in the ticks after they have gone" do
+      # Twenty raiders in the base: the workers aren't mining because of them.
+      raid = for i <- 1..20, do: unit(900 + i, "Soldier", 13, 9, owner: 1)
+      {claim, memory} = claim(400, [scout() | idle() ++ soldiers(20)] ++ raid, start())
+      assert claim == nil
+
+      # Gone five ticks: still not. Twenty ticks: now it is for want of ore.
+      {claim, memory} = claim(405, [scout() | idle() ++ soldiers(20)], memory)
+      assert claim == nil
+      {claim, _} = claim(425, [scout() | idle() ++ soldiers(20)], memory)
+      assert claim == {34, 34}
+    end
+
+    test "not while home has fallen back to the towers, nor just after" do
+      fallen = %{start() | fall_back: true, fall_back_at: 399}
+      assert {nil, _} = claim(400, [scout() | idle() ++ soldiers(20)], fallen)
+      assert {nil, _} = claim(420, [scout() | idle() ++ soldiers(20)], %{start() | fall_back_at: 399})
+      assert {{34, 34}, _} = claim(430, [scout() | idle() ++ soldiers(20)], %{start() | fall_back_at: 399})
+    end
+  end
+
+  describe "between two armies" do
+    # Three players: neighbors at (56, 7) and (7, 56), each with `alive` on the scoreboard beyond
+    # their buildings. Twenty-two of ours at the rally point, a fresh look at player 1.
+    defp three(alive_1, alive_2, opts \\ []) do
+      s = state([units: [unit(300, "Scout", 10, 12) | workers(10) ++ soldiers(22)], buildings: [building(2, "Barracks", 11, 7)], tick: 300] ++ opts)
+      other = fn slot, x, y, alive -> %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}, "score" => %{"survival" => alive, "economy" => 5000, "total" => 9000}} end
+      View.new(%{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ [other.(1, 56, 7, alive_1), other.(2, 7, 56, alive_2)]})
+    end
+
+    defp plan(v, memory \\ Brain.new_memory()), do: Brain.plan(v, looked(memory, 1, 300), terrain())
+
+    test "an army on each side: no wave leaves, and it says who and how many" do
+      # Each has some 14 Soldiers' worth alive beyond buildings and workers: over half our 22.
+      {strategy, _, _} = plan(three(3_000, 3_000))
+      assert strategy.wave == nil
+      assert strategy.hold =~ "between two armies" and strategy.hold =~ "none leaves until one of them is down to half of ours"
+    end
+
+    test "one of them spent: the wave goes as it would" do
+      {strategy, _, _} = plan(three(1_200, 3_000))
+      assert %{wave: %{owner: 1}} = strategy
+      refute to_string(strategy.hold) =~ "between two armies"
+    end
+
+    test "it holds tick after tick while both stand, and lifts the tick one is spent" do
+      {s1, _, memory} = plan(three(3_000, 3_000))
+      {s2, _, memory} = plan(three(3_000, 3_000, tick: 301), memory)
+      assert s1.wave == nil and s2.wave == nil
+      assert s1.hold =~ "between two armies" and s2.hold =~ "between two armies"
+      {s3, _, _} = plan(three(1_200, 3_000, tick: 302), memory)
+      assert %{wave: %{owner: 1}} = s3
+    end
+
+    test "with one opponent there is no between" do
+      {strategy, _, _} = Brain.plan(View.new(state(units: [unit(300, "Scout", 10, 12) | workers(10) ++ soldiers(22)], buildings: [building(2, "Barracks", 11, 7)], tick: 300)), looked(Brain.new_memory(), 1, 300), terrain())
+      refute to_string(strategy.hold) =~ "between two armies"
+    end
+  end
+end
