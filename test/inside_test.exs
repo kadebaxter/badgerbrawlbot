@@ -154,15 +154,75 @@ defmodule Swarm.InsideTest do
   end
 
   describe "falling back from a fight we'd lose" do
-    test "to our tower nearest us, one off to the side included, not the home one far behind" do
-      # Ours at (48, 39) with theirs six tiles north; a base tower of ours six tiles west, as far from
-      # them as from us, and the home tower fourteen tiles south.
+    # Ours at (48, 39) with theirs six tiles north; a base of ours six tiles west, as far from
+    # them as from us, and another fourteen tiles south. Each tower stands by its Command Center.
+    defp field(buildings) do
       raid = for i <- 1..12, do: unit(900 + i, "Soldier", 48, 33, owner: 1)
       ours = for i <- 1..4, do: unit(200 + i, "Soldier", 48, 39)
-      v = View.new(state(units: ours ++ raid, buildings: [building(50, "GuardTower", 42, 39), building(51, "GuardTower", 48, 53)]))
-      g = Roles.group_for(v, nil, hd(ours))
+      v = View.new(state(units: ours ++ raid, buildings: buildings))
+      Roles.group_for(v, nil, hd(ours))
+    end
+
+    @west [building(50, "GuardTower", 42, 39), building(60, "CommandCenter", 40, 41)]
+    @south [building(51, "GuardTower", 48, 53), building(61, "CommandCenter", 48, 56)]
+
+    test "to the tower of a base of ours nearest us, one off to the side included, not the one far behind" do
+      g = field(@west ++ @south)
       assert Roles.away?(g)
       assert View.dist(g.fallback, {42, 39}) <= 1
     end
+
+    test "not to a depot's tower: one with no Command Center of ours by it is no base" do
+      # The same tower six tiles west with a depot by it, not a Command Center: the base to the south.
+      g = field([building(50, "GuardTower", 42, 39), building(62, "ResourceDepot", 40, 41)] ++ @south)
+      assert View.dist(g.fallback, {48, 53}) <= 1
+    end
+
+    test "theirs inside a depot's tower's reach aren't inside our base: nobody is held there to fight" do
+      raid = for i <- 1..12, do: unit(900 + i, "Soldier", 30, 30, owner: 1)
+      ours = for i <- 1..4, do: unit(200 + i, "Soldier", 27, 30)
+      depot = [building(50, "GuardTower", 28, 28), building(62, "ResourceDepot", 26, 28)]
+      v = View.new(state(units: ours ++ raid, buildings: depot))
+      g = Roles.group_for(v, nil, hd(ours))
+      assert Roles.away?(g) and not Roles.inside?(v, g)
+      refute match?({%{"type" => "Attack"}, _}, UnitBrain.decide(201, v, @defend))
+      # With a Command Center of ours there, it is a base: they fight.
+      v = View.new(state(units: ours ++ raid, buildings: [building(63, "CommandCenter", 25, 30) | depot]))
+      assert Roles.inside?(v, Roles.group_for(v, nil, hd(ours)))
+      assert {%{"type" => "Attack"}, _} = UnitBrain.decide(201, v, @defend)
+    end
   end
+
+
+  describe "down to one opponent, in a game that began with three or more" do
+    # Us at (7, 7); player 1 at (56, 56); player 2 at (7, 56), out or not. A base of ours at (50, 30).
+    defp late(two_out?) do
+      s = state(units: soldiers(20), buildings: [building(60, "CommandCenter", 50, 30)])
+      third = %{"slot" => 2, "eliminated" => two_out?, "startPosition" => %{"x" => 7, "y" => 56}}
+      %{View.new(%{s | "players" => s["players"] ++ [third]}) | bases: [{50, 30}]}
+    end
+
+    test "nobody is left to guard home, and the army lives at our base nearest them" do
+      v = late(true)
+      assert View.last_one(v) == {56, 56}
+      assert View.forward_base(v) == {50, 30}
+      refute :guard in Map.values(Roles.home_roles(v, nil))
+      {%{rally: rally}, _, _} = Swarm.Brain.plan(v, %{Swarm.Brain.new_memory() | bases: [{50, 30}]}, terrain())
+      assert View.dist(rally, {50, 30}) <= 3
+    end
+
+    test "with two opponents in, home keeps its guards and the army its place, as ever" do
+      v = late(false)
+      assert View.last_one(v) == nil
+      assert View.forward_base(v) == nil
+      assert Enum.count(Map.values(Roles.home_roles(v, nil)), &(&1 == :guard)) == 7
+    end
+
+    test "a game of two is as it was" do
+      v = %{View.new(state(units: soldiers(20), buildings: [building(60, "CommandCenter", 50, 30)])) | bases: [{50, 30}]}
+      assert View.last_one(v) == nil
+      assert Enum.count(Map.values(Roles.home_roles(v, nil)), &(&1 == :guard)) == 7
+    end
+  end
+
 end

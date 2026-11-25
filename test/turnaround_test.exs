@@ -68,6 +68,16 @@ defmodule Swarm.TurnaroundTest do
       assert {%{serum: nil}, _, _} = plan(units: Enum.take(ours, 7) ++ juiced)
     end
 
+    test "theirs isn't answered in a fight we are winning with theirs on: ours is kept for one we aren't" do
+      # Thirty of ours against nine of theirs on it, at hand: ours stays in the bank.
+      ours = for i <- 1..30, do: unit(200 + i, "Soldier", 30, 30)
+      few = for i <- 1..9, do: unit(900 + i, "Soldier", 33, 30, owner: 1) |> Map.put("effects", ["serum"])
+      assert {%{serum: nil}, _, _} = plan(units: ours ++ few)
+      # Forty of theirs on it: now it is against us, and ours answers.
+      many = for i <- 1..40, do: unit(900 + i, "Soldier", 33, 30, owner: 1) |> Map.put("effects", ["serum"])
+      assert {%{serum: :take}, _, _} = plan(units: ours ++ many)
+    end
+
     test "a Soldier on the serum counts for two, theirs or ours, in strength and in the fight's estimate" do
       plain = unit(901, "Soldier", 14, 14, owner: 1)
       juiced = Map.put(plain, "effects", ["serum"])

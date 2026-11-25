@@ -814,6 +814,22 @@ the fighters of theirs we remember, wherever they are, are half their army as we
 more: with none remembered every base looked clear, and that party left for the base their 70
 stood by.
 
+**A depot is not a base.** A tower counts as a base's only within 8 tiles of a finished Command
+Center of ours (`Roles.base_towers/1`). A raid inside a depot's tower's reach is not "inside our
+base": nobody is held there to fight it at a loss, and a fight we would lose is fallen back from
+to a base's tower, never a depot's. And home only goes out to help away from every Command Center
+of ours when it is clearly stronger (1.3 times what is there, and what we have known of their
+army lately), not at even. 92 of ours went out at even to a depot in the middle against 94,
+arrived in pieces, were told to fall back to that depot's own tower, and fought there as "inside
+our base": 75 died for about 20. (Against theirs on the serum within six tiles they still stand,
+depot or not: running from a Soldier twice as fast is dying with our backs turned.)
+
+**Down to one opponent, the army is in one place.** In a game that began with three players or
+more, with one opponent left (`View.last_one/1`): no guard is left at home and no escorts at the
+outposts, and the army lives at our base nearest their start (the main one if that is nearest).
+With 92 fighters to their 89, 22 were at home and the rest strung through the middle when the 89
+came.
+
 **A lost base is left for the next one, by its workers.** When a raid we would lose to is inside
 a base of ours that isn't the main one, and another finished Command Center of ours is more than
 10 tiles from it, the workers there go to the nearest such one (`Roles.retreat/2`). The fighters
@@ -823,7 +839,9 @@ with towers, with 91 on the serum at hand, walked for the main base and killed a
 **The serum is a fight, ours or theirs.** Ours is taken for a raid worth it that is an even
 fight or worse without it and not against us with it (the fight's own estimate, worked out with
 it on), or against theirs: once eight of our Soldiers are within six tiles of their fighters on
-it. With ours on, nobody stays out of a fight the estimate doesn't have us losing (the usual call
+it, in a fight that is against us with theirs on (13 of theirs on it raided a base where we had
+17 and were winning at +0.73: ours went on for six kills, and 400 ticks later the other house
+bot's 94 came on theirs with ours gone). With ours on, nobody stays out of a fight the estimate doesn't have us losing (the usual call
 waits for more than even before going back into one): it was taken with 82 coming into sight, the
 call that tick was "stay out", 56 Soldiers walked back to the towers with it on, and it got 5
 kills. A fight we would lose with it on is still stayed out of, and it isn't taken for one. For a

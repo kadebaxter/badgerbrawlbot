@@ -163,12 +163,18 @@ defmodule Swarm.CallOffTest do
       # Our workers by our tower at (25, 9); six raiders there (5940) against home's four (3960):
       # only the tower (2970) makes it takeable. It must not be called off the next tick (without
       # the tower, 5940 is over 1.3 x 3960).
+      # (A Command Center of ours by them: at a depot it would take clearly more than even.)
       tower = building(40, "GuardTower", 25, 9)
+      base = building(41, "CommandCenter", 23, 6)
       units = field_miners() ++ field_raid(6) ++ for(i <- 1..4, do: unit(200 + i, "Soldier", 10, 10))
-      {s, _, memory} = plan(units: units, buildings: [tower])
+      {s, _, memory} = plan(units: units, buildings: [tower, base])
       assert s.help == {27, 7}
-      assert {%{help: {27, 7}, why: why}, _, _} = plan([units: units, buildings: [tower], tick: 101], memory)
+      assert {%{help: {27, 7}, why: why}, _, _} = plan([units: units, buildings: [tower, base], tick: 101], memory)
       refute Enum.any?(why, &match?({:help, _}, &1))
+
+      # With only the tower there (a depot's): even isn't enough to go out for.
+      {s, _, _} = plan(units: units, buildings: [tower])
+      assert s.help == nil
     end
 
     test "is called off when what is there gets well beyond what home can bring" do

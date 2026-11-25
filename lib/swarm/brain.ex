@@ -920,7 +920,10 @@ defmodule Swarm.Brain do
     by_score = if map_size(v.start_owner) >= 2, do: owners |> Enum.map(&army_by_score(v, &1)) |> Enum.max(fn -> 0 end), else: 0
     theirs = max(theirs, by_score)
     theirs = max(theirs, lately)
-    if near_last?, do: ours >= @help_give_up * theirs, else: ours >= theirs
+    # Away from every Command Center of ours (a depot and its tower), only clearly as well: at
+    # even, 92 of ours went out to a depot in the middle against 94 and arrived in pieces.
+    depot? = not Enum.any?(View.buildings_of(v, "CommandCenter"), &(View.dist(View.pos(&1), spot) <= @help_cover))
+    if near_last? or depot?, do: ours >= @help_give_up * theirs, else: ours >= theirs
   end
 
   # Our finished Command Center that isn't the main one, or nil.
@@ -2363,7 +2366,10 @@ defmodule Swarm.Brain do
     met? =
       MapSet.size(on_serum) > 0 and
         Enum.any?(Roles.groups(v, wave).groups, fn {_id, g} ->
-          g.size >= @serum_soldiers and g.worth >= @serum_raid and Enum.any?(g.ids, &MapSet.member?(on_serum, &1)) and
+          # ...and only a fight that is against us with theirs on: 13 of theirs on it raided a base
+          # where we had 17 and were winning at +0.73; ours went on for six kills, and 400 ticks
+          # later the other house bot's 94 came on theirs with ours gone.
+          g.size >= @serum_soldiers and g.worth >= @serum_raid and g.all < 0 and Enum.any?(g.ids, &MapSet.member?(on_serum, &1)) and
             in_contact?(v, g, on_serum)
         end)
 

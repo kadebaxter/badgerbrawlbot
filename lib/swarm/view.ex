@@ -317,8 +317,27 @@ defmodule Swarm.View do
   stays to guard home (`Swarm.Roles.home_roles/2`).
   """
   def forward_base(%__MODULE__{} = v) do
-    v |> base_ccs() |> Enum.filter(&middle?(v, &1)) |> Enum.min_by(&{dist(&1, center(v)), &1}, fn -> nil end)
+    case last_one(v) do
+      nil ->
+        v |> base_ccs() |> Enum.filter(&middle?(v, &1)) |> Enum.min_by(&{dist(&1, center(v)), &1}, fn -> nil end)
+
+      # Down to one opponent: the base of ours nearest their start, if that isn't the main one.
+      start ->
+        main = if v.cc, do: dist(pos(v.cc), start), else: 0
+        v |> base_ccs() |> Enum.filter(&(dist(&1, start) < main)) |> Enum.min_by(&{dist(&1, start), &1}, fn -> nil end)
+    end
   end
+
+  @doc """
+  The start of the one opponent left in a game that began with three players or more, or nil.
+  Nothing comes from anywhere else then: the whole army lives at our base nearest them, with no
+  guard left at home and no escorts (`Swarm.Roles.home_roles/2`). With 92 fighters to their 89,
+  22 were at home and the rest strung through the middle when the 89 came: 75 against 94.
+  """
+  def last_one(%__MODULE__{players: players, start_owner: starts}) when players >= 3 and map_size(starts) == 1,
+    do: starts |> Map.keys() |> hd()
+
+  def last_one(%__MODULE__{}), do: nil
 
   @doc """
   Our finished Command Centers other than the main one: backups, kept secret. Nobody mines by one

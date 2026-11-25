@@ -87,6 +87,8 @@ defmodule Swarm.Roles do
   @inside 3
   # How far from a group a base of ours has to be to fall back to (`retreat/2`).
   @retreat_clear 10
+  # How near a Command Center of ours a tower has to stand to be one of a base's (`base_towers/1`).
+  @base_tower 8
   # Workers leave a base ahead of a raid this big (in Soldiers) once it is this near (`evacuations/2`).
   @evacuate_worth 8
   @evacuate 16
@@ -153,7 +155,9 @@ defmodule Swarm.Roles do
   def home_roles(%View{} = v, wave) do
     newest_first = &Enum.sort_by(&1, fn u -> u["id"] end, :desc)
     # Keeping together (`View.together`: their army is the bigger one), nobody escorts an outpost.
-    manned = if v.together, do: [], else: Enum.filter(outposts(v), &(miners(v, &1) > 0))
+    # Nor with one opponent left (`View.last_one/1`): everyone lives at one base.
+    last? = View.last_one(v) != nil
+    manned = if v.together or last?, do: [], else: Enum.filter(outposts(v), &(miners(v, &1) > 0))
 
     # 1. Fighters already at an outpost (with miners) stay, up to a full group.
     {groups, pool} =
@@ -165,7 +169,12 @@ defmodule Swarm.Roles do
 
     # 2. The newest of the rest guard the main base: `@guards` of them, or `@home_share` of all the
     #    fighters at home once the army lives in the middle, if that is more.
-    guard_count = if View.forward_base(v), do: max(@guards, round(@home_share * length(home(v, wave)))), else: @guards
+    guard_count =
+      cond do
+        last? -> 0
+        View.forward_base(v) -> max(@guards, round(@home_share * length(home(v, wave))))
+        true -> @guards
+      end
     {guards, pool} = Enum.split(pool, guard_count)
 
     # 3. Each group is filled up from the closest of the rest. One that can't reach
@@ -252,6 +261,14 @@ defmodule Swarm.Roles do
 
   @doc "Our finished Guard Towers."
   def our_towers(%View{} = v), do: View.cached(v, :our_towers, fn -> Enum.filter(View.buildings_of(v, "GuardTower"), & &1["completed"]) end)
+
+  @doc "Our finished Guard Towers within `@base_tower` of a finished Command Center of ours: a base's towers, not a depot's."
+  def base_towers(%View{} = v) do
+    View.cached(v, :base_towers, fn ->
+      ccs = for b <- View.buildings_of(v, "CommandCenter"), b["completed"], do: View.pos(b)
+      Enum.filter(our_towers(v), fn t -> Enum.any?(ccs, &(View.dist(&1, View.pos(t)) <= @base_tower)) end)
+    end)
+  end
 
   @doc "Ids of the guards."
   def guards(%View{} = v, wave) do
@@ -508,9 +525,9 @@ defmodule Swarm.Roles do
   it (closer to `from` than to the enemy, or farther by `slack` tiles at most), so the way there
   doesn't go past it. The Command Center with no such tower; nil without one.
   """
-  def shelter(%View{} = v, from, away_from \\ nil, slack \\ 0) do
+  def shelter(%View{} = v, from, away_from \\ nil, slack \\ 0, of \\ nil) do
     towers =
-      for t <- View.buildings_of(v, "GuardTower"),
+      for t <- of || View.buildings_of(v, "GuardTower"),
           t["completed"],
           pos = View.pos(t),
           away_from == nil or View.dist(pos, from) < View.dist(pos, away_from) + slack,
@@ -987,14 +1004,16 @@ defmodule Swarm.Roles do
 
   @doc """
   Whether group `g` is inside our base: one of them within reach of a finished Guard Tower of ours
-  (its range plus one), or within `@inside` of our Command Center. There is nowhere left to stay
+  that stands by a Command Center of ours (`base_towers/1`; its range plus one), or within
+  `@inside` of our Command Center. A depot's own tower is no base: 75 of ours fought 94 inside the
+  towers of a depot in the middle, 20 tiles from the base they should have met them at. There is nowhere left to stay
   out of its way then.
   """
   def inside?(%View{} = v, g) do
     cc = v.cc && View.pos(v.cc)
 
     Enum.any?(g.spots, fn spot ->
-      (cc != nil and View.dist(spot, cc) <= @inside) or Enum.any?(our_towers(v), &(View.dist(View.pos(&1), spot) <= range(&1) + 1))
+      (cc != nil and View.dist(spot, cc) <= @inside) or Enum.any?(base_towers(v), &(View.dist(View.pos(&1), spot) <= range(&1) + 1))
     end)
   end
 
@@ -1176,7 +1195,8 @@ defmodule Swarm.Roles do
   # 29 of ours ran for the home tower 20 tiles off past four of their own base's six tiles away,
   # and 21 were cut down on the way.
   defp fallback(v, g, gather, edge) do
-    tower = if v.cc && Enum.any?(our_towers(v)), do: shelter(v, gather, edge, @sideways)
+    # A base's towers only (`base_towers/1`): a depot's tower is no place to fall back to.
+    tower = if v.cc && Enum.any?(base_towers(v)), do: shelter(v, gather, edge, @sideways, base_towers(v))
     if tower && clear_of?(g, tower), do: tower
   end
 
