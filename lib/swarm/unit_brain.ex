@@ -71,6 +71,9 @@ defmodule Swarm.UnitBrain do
   # How near a group that would beat us a fighter at home falls back from it.
   @fall_back_at 10
   @fall_back_worth 8
+  # Caught (`caught?/1`): half of ours in a fight or more are in the enemy's reach, eight of ours
+  # or more, and the fight is no worse than this for all of us. Then nobody walks away from it.
+  @caught_odds -0.7
   @siege_at_hand 8
   # ...after any stack of this many enemy workers or more on one tile in its reach (`worker_stack/2`).
   @stack 3
@@ -719,6 +722,13 @@ defmodule Swarm.UnitBrain do
           # the estimate. Walking to a spot out of its reach, 45 fighters by five towers killed 16
           # of 39 Soldiers and were down to 3 in twenty ticks.
           Roles.inside?(v, group) -> if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
+          # Caught: they are on us, and they walk as fast as we do. Falling back is dying with our
+          # backs turned: 57 told to stay out of 67 at -0.47, twelve tiles from a tower, walked for
+          # it and 54 died for 19. Everyone in the fight stands and fights. (With a tower of ours
+          # in reach of them it is the fight above already.)
+          caught?(group) ->
+            if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
+
           # Already there: it fights what reaches it.
           enemy && View.dist(here, back) <= 2 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
           # As soon as it is this fighter's fight (it is within `@fall_back_at` of them), raid or
@@ -732,6 +742,14 @@ defmodule Swarm.UnitBrain do
           true -> nil
         end
     end
+  end
+
+  # Whether we are caught in the fight with `group`: half or more of ours in it are within its
+  # reach (`group.engaged`), there are `@fall_back_worth` of us or more, and all of us
+  # together are not hopelessly behind (`@caught_odds`).
+  defp caught?(group) do
+    engaged = Map.get(group, :engaged, 0)
+    group.size >= @fall_back_worth and 2 * engaged >= group.size and group.all >= @caught_odds
   end
 
   # Whether an enemy of `group` on the serum is within `@serum_contact` of `here`.

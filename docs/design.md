@@ -945,6 +945,28 @@ home to be a match for the bigger of them too, whatever is at the spot, and is c
 that one grows to 1.3 times it (`army_around/4`). A field is not claimed with nobody at home to
 guard it.
 
+**Caught in the open, an army stands; and a second push is counted like the first.** Two armies
+were lost walking away from a fight the estimate said to stay out of: 57 from 67 at -0.47,
+twelve tiles from a tower (54 died for 19), and 66 from 70 six tiles from one. They walk as fast
+as we do. So when half or more of ours in a fight are already in the enemy's reach, there are
+eight of us or more, and all of us together are no worse than -0.7, everyone in it stands and
+fights (`UnitBrain.caught?/1`, `group.engaged` from `Roles.estimate/3`); not yet caught, or
+hopelessly behind, they fall back as before. The second of those armies should not have been
+there: the rest of an army counted behind the part in sight (above) only ever worked on a
+player's first push, because "since when they have been out" was kept for as long as we
+remembered any fighter of theirs, and a scout at their base remembers one all game. It is now
+`{first, last}` seen out, and fifteen ticks without seeing them out makes the next coming out a
+new one (`behind_since/3`): ten in sight are sixty again, eleven ticks sooner, and the fall-back
+to the towers at ten tiles has time to happen.
+
+**Research: the first tier of each, then nothing more until tick 320.** Harvesting1, Weapons1,
+Armor1; Harvesting2, Armor2, Weapons2 and Armor3 (`@research_late`) not before tick 320
+(`@research_late_from`), and their ore is not kept back meanwhile. In six four-player games we
+had five upgrades done by tick 320 (850 ore) to each Formics' three or four (400 to 600), four
+or five towers to their two, and 34 to 42 fighters to their 40 to 54 when the first push came
+at ticks 300 to 330. Their Weapons1 was in 40 to 70 ticks before ours, and Harvesting2 had
+bought nothing by then: the home field's 9,000 is mined by tick 300 with it or without.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the

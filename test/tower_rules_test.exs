@@ -121,7 +121,7 @@ defmodule Swarm.TowerRulesTest do
       base = ["Harvesting1", "Weapons1", "Armor1", "SiegeEngineering", "Harvesting2", "Weapons2", "Armor2"]
 
       research = fn upgrades, researching ->
-        v = state(units: soldiers(30), buildings: [lab], ore: 2000) |> put_in(["you", "upgrades"], upgrades) |> put_in(["you", "researching"], researching) |> View.new()
+        v = state(units: soldiers(30), buildings: [lab], ore: 2000, tick: 400) |> put_in(["you", "upgrades"], upgrades) |> put_in(["you", "researching"], researching) |> View.new()
         {_, commands, _} = Brain.plan(v, looked(nil, 1, v.tick), terrain())
         Enum.find_value(commands, &(&1["type"] == "Research" && &1["upgrade"]))
       end

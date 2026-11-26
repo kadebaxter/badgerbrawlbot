@@ -1255,7 +1255,7 @@ defmodule Swarm.Roles do
     # The members themselves stay out: this goes to every unit, and the view carries them already.
     g
     |> Map.delete(:members)
-    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), gather: gather, fallback: fallback(v, g, gather, edge), was_in: was_in, was_out: was_out})
+    |> Map.merge(%{all: all, ready: ready_adv, size: length(ours), engaged: Enum.count(ours, fn {_o, d} -> d <= g.reach end), gather: gather, fallback: fallback(v, g, gather, edge), was_in: was_in, was_out: was_out})
   end
 
   # By our tower nearest the gather spot on our side, if it is out of the group's reach; else nil.

@@ -559,8 +559,17 @@ defmodule Swarm.Brain do
   # we ever have. The house bots had the first at ticks 122 and 128 and we at 164, and for those
   # 40 ticks they mined 750 to 860 ore in 20 ticks to our 510 on the same workers; the second they
   # had at tick 251, and we after all the Weapons, the Armor and SiegeEngineering.
-  @research ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
-  @research_first ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
+  #
+  # That order was changed after six four-player games: Harvesting1, then Weapons1 and Armor1, and
+  # no second tier of anything (`@research_late`) before tick `@research_late_from`. By tick 320 we
+  # had five of these done (850 ore) to each Formics' three or four (400 to 600), and 34 to 42
+  # fighters to their 40 to 54 when the first push came, at ticks 300 to 330; their Weapons1 was
+  # in 40 to 70 ticks before ours. And Harvesting2 bought nothing by then: everyone has mined the
+  # home field's 9,000 by tick 300 with it or without.
+  @research ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
+  @research_first ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3"]
+  @research_late ["Harvesting2", "Armor2", "Weapons2", "Armor3"]
+  @research_late_from 320
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 
   @type pos :: {integer, integer}
@@ -616,8 +625,8 @@ defmodule Swarm.Brain do
       # Enemy fighters we saw in the last `@pack_memory` ticks and didn't see die, id => as last
       # seen, with "seen" and "pack" (see `remember_packs/2`).
       packs: %{},
-      # Player slot => the tick we first saw an army of theirs away from their base, while we
-      # remember any of it (see `behind/3`).
+      # Player slot => {the tick we first saw an army of theirs away from their base, the last
+      # tick we saw it out} (see `behind/3`).
       behind: %{},
       # The field the army is taking for the workers, %{pos, at, guard: the ids of the fighters
       # holding it, seen: {the most the enemy had there, when}}, or nil; and when one was last
@@ -837,12 +846,21 @@ defmodule Swarm.Brain do
   end
 
   # Since when each player's army has been out in our sight (`out/2`, `@behind_min` of it or
-  # more): from the first tick of it, for as long as we remember any of their fighters.
-  defp behind_since(since, %View{} = v, packs) do
-    remembered = MapSet.new(Map.values(packs), & &1["owner"])
-    kept = Map.filter(since, fn {owner, _tick} -> MapSet.member?(remembered, owner) end)
+  # more), as `{first tick, last tick}`: one coming out lasts while they are seen out again within
+  # `@behind_for` ticks, and the next one after that is a new one, counted anew. Forgotten after
+  # `@pack_memory` ticks of none. (It was kept for as long as we remembered any fighter of theirs,
+  # anywhere: with a scout at their base that is all game. The rule worked on a player's first
+  # push and never again; the second time 10 in sight were 10, 65 of ours stood six tiles from
+  # their towers for eleven ticks, and the other 60 came round the corner.)
+  defp behind_since(since, %View{} = v, _packs) do
+    kept = Map.filter(since, fn {_owner, {_first, last}} -> v.tick - last <= @pack_memory end)
 
-    for owner <- Map.keys(v.enemy_survival), length(out(v, owner)) >= @behind_min, not Map.has_key?(kept, owner), into: kept, do: {owner, v.tick}
+    for owner <- Map.keys(v.enemy_survival), length(out(v, owner)) >= @behind_min, into: kept do
+      case Map.get(kept, owner) do
+        {first, last} when v.tick - last <= @behind_for -> {owner, {first, v.tick}}
+        _ -> {owner, {v.tick, v.tick}}
+      end
+    end
   end
 
   # The rest of an army that is out of its base: what the scoreboard says the player has
@@ -856,7 +874,7 @@ defmodule Swarm.Brain do
   defp behind(%View{} = v, packs, since) do
     soldier = Roles.strength([%{"type" => "Soldier"}])
 
-    for {owner, first} <- since, v.tick - first <= @behind_for, out = out(v, owner), length(out) >= @behind_min, reduce: [] do
+    for {owner, {first, _last}} <- since, v.tick - first <= @behind_for, out = out(v, owner), length(out) >= @behind_min, reduce: [] do
       acc ->
         known = packs |> Map.values() |> Enum.filter(&(&1["owner"] == owner)) |> Roles.strength()
         n = trunc(max(army_by_score(v, owner) - known, 0) / soldier)
@@ -4420,7 +4438,7 @@ defmodule Swarm.Brain do
         needs = @research_needs[u]
 
         u not in v.upgrades and u not in v.researching and u not in upgrades and (needs == nil or needs in v.upgrades) and
-          (u != "SiegeEngineering" or siege_time?(v))
+          (u != "SiegeEngineering" or siege_time?(v)) and (u not in @research_late or v.tick >= @research_late_from)
       end)
 
     if lab && upgrade, do: {lab, upgrade, @costs[upgrade]}

@@ -155,7 +155,7 @@ defmodule Swarm.BehindTest do
       counts = Enum.reverse(counts)
       assert Enum.all?(counts, fn {worth, _} -> worth == 40 end)
       assert hd(counts) == {40, 31} and List.last(counts) == {40, 0}
-      assert memory.behind == %{1 => 300}
+      assert memory.behind == %{1 => {300, 320}}
     end
 
     test "nine that are alone: after fifteen ticks of watching them, they are nine" do
@@ -176,13 +176,33 @@ defmodule Swarm.BehindTest do
       assert behind(v) == []
     end
 
+    test "a second push, with a scout watching their base all the while: counted anew" do
+      # The first, at tick 300; watched for 20 ticks, then they go home. We see them there every tick.
+      {_, memory} = see([watcher() | theirs(1..9, 30, 30)], 300)
+      memory = Enum.reduce(301..320, memory, fn tick, memory -> elem(see([watcher() | theirs(1..9, 30, 30)], tick, memory), 1) end)
+      {v, memory} = see([watcher() | theirs(1..9, 30, 30)], 321, memory)
+      assert behind(v) == []
+
+      memory =
+        Enum.reduce(322..359, memory, fn tick, memory ->
+          {v, memory} = see([unit(202, "Scout", 44, 50) | theirs(1..9, 48, 50)], tick, memory)
+          assert behind(v) == []
+          memory
+        end)
+
+      # Tick 360: ten of them are out again. The other 30 are taken to be behind them.
+      {v, memory} = see([watcher() | theirs(1..10, 30, 30)], 360, memory)
+      assert length(behind(v)) == 30
+      assert memory.behind == %{1 => {360, 360}}
+    end
+
     test "forgotten and out again much later: a new army, counted anew" do
       {_, memory} = see([watcher() | theirs(1..9, 30, 30)], 300)
       {_, memory} = see([watcher()], 345, memory)
       assert memory.behind == %{}
 
       {v, memory} = see([watcher() | theirs(1..9, 30, 30)], 400, memory)
-      assert length(behind(v)) == 31 and memory.behind == %{1 => 400}
+      assert length(behind(v)) == 31 and memory.behind == %{1 => {400, 400}}
     end
 
     test "the leader's note on the fight says how many nobody has seen" do
