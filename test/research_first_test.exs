@@ -32,7 +32,7 @@ defmodule Swarm.ResearchFirstTest do
   end
 
   defp next_at(tick, upgrades, ore \\ 1000) do
-    s = state(units: [unit(300, "Scout", 10, 12) | workers(15) ++ soldiers(10)], buildings: @buildings, ore: ore, tick: tick) |> done(upgrades)
+    s = state(units: [unit(300, "Scout", 10, 12) | workers(15) ++ soldiers(15)], buildings: @buildings, ore: ore, tick: tick) |> done(upgrades)
     {_, commands, _} = Brain.plan(View.new(s), looked(Brain.new_memory(), 1, tick), terrain())
     {Enum.find_value(commands, &(&1["type"] == "Research" && &1["upgrade"])), commands}
   end
@@ -44,6 +44,8 @@ defmodule Swarm.ResearchFirstTest do
 
   test "before tick 320 no second tier is researched, and its ore is not kept back: it is spent on the rest as usual" do
     for tick <- [200, 319] do
+      # (Not SiegeEngineering or a Fortify in their place either: fifteen Soldiers and 1,000 ore here.)
+      assert {nil, _} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1"], 1000)
       assert {nil, commands} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1"], 300)
       assert Enum.any?(commands, &(&1["type"] in ["Build", "Produce"]))
     end

@@ -1,4 +1,5 @@
 defmodule Swarm.Metrics do
+  require Logger
   @moduledoc """
   Numbers for Prometheus, served at `/metrics` on every node (port `SWARM_METRICS_PORT`, 9568).
 
@@ -85,7 +86,16 @@ defmodule Swarm.Metrics do
   how many units were asked and answered, and how long the tick took.
   """
   def record_tick(%{view: v, strategy: s, memory: m} = info) do
-    if started?(), do: record(v, s, m, info)
+    # Figures are never worth the game: this runs in the leader's tick, and a crash here is the
+    # game loop's. A job it had no name for (`{:field, pos}`, the guard of a field we hold) killed
+    # the loop every tick a field was held, in three matches: 25 restarts in 106 ticks in one,
+    # with the workers dying and 1,136 ore unspent.
+    try do
+      if started?(), do: record(v, s, m, info)
+    rescue
+      e -> Logger.warning("metrics: tick #{v.tick} not recorded: #{Exception.message(e)}")
+    end
+
     :ok
   end
 
@@ -131,7 +141,8 @@ defmodule Swarm.Metrics do
     |> Enum.frequencies()
   end
 
-  defp role_name({:escort, _}), do: "escort"
+  # A job with something to it (`{:escort, outpost}`, `{:field, pos}`) by its name alone.
+  defp role_name(role) when is_tuple(role), do: role |> elem(0) |> to_string()
   defp role_name(role), do: to_string(role)
 
   @doc "The Prometheus text format, with this node's own figures added at the time of asking."

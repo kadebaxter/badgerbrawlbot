@@ -568,7 +568,9 @@ defmodule Swarm.Brain do
   # home field's 9,000 by tick 300 with it or without.
   @research ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
   @research_first ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3"]
-  @research_late ["Harvesting2", "Armor2", "Weapons2", "Armor3"]
+  # (Everything but the first tier: with only the second tiers held back, the lab's next was
+  # SiegeEngineering and Fortify1, at ticks 248 and 253, and that was the 350 ore again.)
+  @research_late ["Harvesting2", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
   @research_late_from 320
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 

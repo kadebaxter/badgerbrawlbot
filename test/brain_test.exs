@@ -1452,7 +1452,7 @@ defmodule Swarm.BrainTest do
 
     test "SiegeEngineering comes after Weapons2 and all the Armor, once we have fifteen fighters" do
       first = ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Armor2", "Weapons2", "Armor3"]
-      early = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], first)) end
+      early = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000, tick: 400), ["you", "upgrades"], first)) end
       next = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
       assert next.(elem(Brain.plan(early.(workers(20) ++ soldiers(14)), nil, terrain()), 1)) == "Fortify1"
       assert next.(elem(Brain.plan(early.(workers(20) ++ soldiers(15)), nil, terrain()), 1)) == "SiegeEngineering"
@@ -1460,7 +1460,7 @@ defmodule Swarm.BrainTest do
 
     test "SiegeEngineering is skipped in the research order until then" do
       done = ["Harvesting1", "Harvesting2", "Weapons1", "Armor1", "Weapons2", "Armor2", "Armor3"]
-      v = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000), ["you", "upgrades"], done)) end
+      v = fn units -> View.new(put_in(state(units: units, buildings: built(), ore: 1000, tick: 400), ["you", "upgrades"], done)) end
       research = fn cmds -> Enum.find_value(cmds, &(&1["type"] == "Research" && &1["upgrade"])) end
 
       {_, commands, _} = Brain.plan(v.(workers(20) ++ soldiers(10)), nil, terrain())

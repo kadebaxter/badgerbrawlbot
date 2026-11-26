@@ -960,12 +960,18 @@ new one (`behind_since/3`): ten in sight are sixty again, eleven ticks sooner, a
 to the towers at ten tiles has time to happen.
 
 **Research: the first tier of each, then nothing more until tick 320.** Harvesting1, Weapons1,
-Armor1; Harvesting2, Armor2, Weapons2 and Armor3 (`@research_late`) not before tick 320
+Armor1; everything else (`@research_late`: the second tiers, Armor3, SiegeEngineering, the Fortifys) not before tick 320
 (`@research_late_from`), and their ore is not kept back meanwhile. In six four-player games we
 had five upgrades done by tick 320 (850 ore) to each Formics' three or four (400 to 600), four
 or five towers to their two, and 34 to 42 fighters to their 40 to 54 when the first push came
 at ticks 300 to 330. Their Weapons1 was in 40 to 70 ticks before ours, and Harvesting2 had
 bought nothing by then: the home field's 9,000 is mined by tick 300 with it or without.
+
+**Figures never take the game down.** `Swarm.Metrics.record_tick/1` runs inside the leader's
+tick; it had no name for the job `{:field, pos}`, and for every tick a field was held the game
+loop crashed and restarted (25 times in 106 ticks in one match, lost with the workers dying and
+1,136 ore unspent). Any job with something to it is named by its first part now, and whatever
+else goes wrong in there is logged and the tick goes on.
 
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one

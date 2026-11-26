@@ -37,4 +37,25 @@ defmodule Swarm.MetricsTest do
     Metrics.clear_game()
     refute Metrics.render() =~ "swarm_ore"
   end
+
+  test "every job at home has a name: a tick with a field's guard out is recorded like any other" do
+    v = %{View.new(state(units: workers(3) ++ soldiers(22), ore: 420, tick: 300)) | claim: {34, 34}, claim_guard: [201, 202, 203]}
+    assert Swarm.Roles.home_roles(v, nil)[201] == {:field, {34, 34}}
+    {strategy, _, memory} = Brain.plan(v, looked(nil, 1, 300), terrain())
+    assert :ok = Metrics.record_tick(%{view: v, strategy: strategy, memory: memory, asked: 25, answered: 25, seconds: 0.1})
+
+    text = Metrics.render()
+    assert text =~ ~s(swarm_roles{role="field"} 3\n)
+    assert text =~ "swarm_game_tick 300\n"
+  end
+
+  test "figures that can't be worked out never take the tick down with them" do
+    import ExUnit.CaptureLog
+    v = View.new(state(units: workers(3) ++ soldiers(22), ore: 420, tick: 300))
+    {strategy, _, memory} = Brain.plan(v, looked(nil, 1, 300), terrain())
+    broken = %{strategy | mode: {:not, :a, :name}}
+
+    log = capture_log(fn -> assert :ok = Metrics.record_tick(%{view: v, strategy: broken, memory: memory, asked: 25, answered: 25, seconds: 0.1}) end)
+    assert log =~ "metrics: tick 300 not recorded"
+  end
 end
