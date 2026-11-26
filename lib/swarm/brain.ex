@@ -229,6 +229,17 @@ defmodule Swarm.Brain do
   @claim_guard_min 10
   # Help within this of where the army lives is help at home: no neighbor's army is weighed for it (`army_around/4`).
   @help_home 12
+  # A player's army by the scoreboard (`army_by_score/2`) is what they have alive less their
+  # buildings and workers, which we can't see: no more workers than this are taken off, and of our
+  # own towers (theirs are taken to be worth ours) no more than this many.
+  @their_workers 40
+  @their_towers 2
+  # Looking for what is left of a player (`sweep/4`): a grid this far apart over the whole map
+  # (a Soldier sees four tiles round it), each place given up on after this long, and this many
+  # idle workers looking too once the map is mined out.
+  @sweep_grid 6
+  @sweep_timeout 60
+  @sweepers 8
   # Stalled, we go and find the ore (`ore_search/3`): up to `@searchers` idle workers walk to the
   # places we haven't looked at, each to its own, until we bank again or there is nowhere left to
   # look. A worker gets `@search_timeout` ticks for a place (it may not be able to get there).
@@ -674,6 +685,10 @@ defmodule Swarm.Brain do
       together: false,
       # Opponents' starts we have seen with no Command Center of theirs on them (see `last_cc/2`).
       empty_starts: [],
+      # Looking for what is left of a player still in whose buildings we know none of:
+      # %{owner, done: places seen, goal: where the wave is going, at: since when, jobs: worker id
+      # => place}, or nil (see `sweep/4`).
+      sweep: nil,
       # The spots blocked last tick, for logging each once.
       blocked: [],
       recalled_at: nil,
@@ -1208,7 +1223,9 @@ defmodule Swarm.Brain do
     # (The field we are taking has its own guard, `claim/2`: the rest stay home.)
     strategy =
       %{strategy | survey: survey, regroup: regroup, help: help, why: ore_note ++ strategy.why ++ surveyed ++ regrouped ++ helped ++ searching}
-      |> Map.put(:search, search)
+      # Workers looking for what is left of a player (`sweep/4`) go the same way as those
+      # looking for ore.
+      |> Map.put(:search, Map.merge(search, (memory.sweep && memory.sweep.jobs) || %{}))
 
     v = %{v | claim: Map.get(strategy, :claim)}
     memory = settle_pending(memory, v)
@@ -1588,6 +1605,7 @@ defmodule Swarm.Brain do
     # is what keeps it out.
     memory = forget_kill(v, memory)
     memory = %{memory | empty_starts: empty_starts(v, memory)}
+    {target, memory, sweep_why} = sweep(v, memory, owner, target)
     {spare, spare_why, memory} = spare(v, memory, memory.wave)
     killing? = memory.kill != nil
     # Called home to defend this tick (all in, or in safe mode, nothing comes home).
@@ -1631,7 +1649,7 @@ defmodule Swarm.Brain do
         true -> target
       end
 
-    why = read_why ++ home_why ++ spare_why ++ why
+    why = read_why ++ home_why ++ sweep_why ++ spare_why ++ why
 
     strike_back_at =
       if memory_wave && Map.get(memory_wave, :kind) == :strike && wave == nil, do: v.tick, else: memory.strike_back_at
@@ -1883,10 +1901,15 @@ defmodule Swarm.Brain do
     # Their buildings we haven't seen: taken to be worth what ours are, at least. Counted as army,
     # three Command Centers of theirs we never saw were twelve Soldiers we trained to match, and
     # no base of ours went up all game.
-    own = v.my_buildings |> Enum.filter(&(&1["completed"] != false)) |> Enum.sum_by(&Map.get(@costs, &1["type"], 0))
+    # Not our towers past the `@their_towers` a house bot builds, though, nor more workers than
+    # `@their_workers`: taken to have what we have, the more we built the smaller their army read.
+    # With 68 workers and eight towers to a Formics' 37 and two, its 64 fighters read as 37; that
+    # was half of ours, the hold between two armies lifted, and 47 left for a third player.
+    {towers, rest} = v.my_buildings |> Enum.filter(&(&1["completed"] != false)) |> Enum.split_with(&(&1["type"] == "GuardTower"))
+    own = Enum.sum_by(rest ++ Enum.take(towers, @their_towers), &Map.get(@costs, &1["type"], 0))
     buildings = max(buildings, own)
 
-    workers = @costs["Worker"] * length(View.units_of(v, "Worker"))
+    workers = @costs["Worker"] * min(length(View.units_of(v, "Worker")), @their_workers)
     max(alive - buildings - workers, 0) * Roles.strength([%{"type" => "Soldier"}]) / @costs["Soldier"]
   end
 
@@ -3193,6 +3216,78 @@ defmodule Swarm.Brain do
     |> case do
       {_start, slot} -> slot
       nil -> nil
+    end
+  end
+
+  # Looking for what is left of `owner`: they are still in, we know of no building of theirs, and
+  # we have seen their start with no Command Center on it (`memory.empty_starts`). Their start is
+  # no target then. The wave goes over the whole map instead, place by place (`@sweep_grid`
+  # apart, the nearest we haven't seen since we began), and with the map mined out up to
+  # `@sweepers` idle workers each go to one too (`strategy.search`); anything of ours seeing a
+  # place does for it, and one nobody has reached in `@sweep_timeout` ticks is given up on. When
+  # we have been everywhere, again from the start. What turns up is the target the usual way
+  # (`target_of/2`: the server remembers a building once seen), and the looking is over.
+  # (We razed the last base of theirs we knew of at tick 1375, behind on score. They had another
+  # in a corner 50 tiles off, built at tick 576. The wave stood on their empty start, with 55 idle
+  # workers at home, for 425 ticks, and they won on the clock.)
+  # Returns {target, memory, notes for the decision log}.
+  defp sweep(v, memory, owner, target) do
+    start = Enum.find_value(v.start_owner, fn {pos, slot} -> if slot == owner, do: pos end)
+    known? = Enum.any?(v.enemy_buildings ++ v.remembered, &(&1["owner"] == owner))
+
+    if owner != nil and start != nil and not known? and start in memory.empty_starts do
+      half = div(@sweep_grid, 2)
+      grid = for x <- half..(v.map_width - 1)//@sweep_grid, y <- half..(v.map_height - 1)//@sweep_grid, do: {x, y}
+
+      {sweep, notes} =
+        case memory.sweep do
+          %{owner: ^owner} = sweep ->
+            {sweep, []}
+
+          _ ->
+            {%{owner: owner, done: [], goal: nil, at: v.tick, jobs: %{}},
+             [{:sweep, "nothing left of player #{owner} that we know of, and they are still in: looking for the rest of them, #{length(grid)} places"}]}
+        end
+
+      timed_out = if sweep.goal != nil and v.tick - sweep.at > @sweep_timeout, do: [sweep.goal], else: []
+      seen = for p <- grid, p not in sweep.done, View.in_sight?(v, p), do: p
+      done = Enum.uniq(sweep.done ++ seen ++ timed_out)
+      # Been everywhere: they are somewhere we have been. Again.
+      done = if grid -- done == [], do: [], else: done
+      left = grid -- done
+
+      from =
+        case Enum.filter(Roles.fighters(v), &(&1["id"] in ((memory.wave && memory.wave.members) || []))) do
+          [] -> if(v.cc, do: View.pos(v.cc), else: center(v))
+          out -> out |> Enum.min_by(& &1["id"]) |> View.pos()
+        end
+
+      {goal, at} =
+        if sweep.goal in left,
+          do: {sweep.goal, sweep.at},
+          else: {Enum.min_by(left, &{View.dist(&1, from), &1}), v.tick}
+
+      # Idle workers look too, once there is nothing left for them to mine: each keeps its place
+      # while it wants looking at, and the rest of them go to the nearest nobody is going to.
+      idle = if v.no_ore == :mined_out, do: v |> View.units_of("Worker") |> Enum.filter(&(&1["activity"] in ["Idle", "Moving"])) |> Enum.sort_by(& &1["id"]), else: []
+      alive = MapSet.new(idle, & &1["id"])
+      kept = for {id, pos} <- sweep.jobs, MapSet.member?(alive, id), pos in left, pos != goal, into: %{}, do: {id, pos}
+
+      {jobs, _taken} =
+        idle
+        |> Enum.reject(&is_map_key(kept, &1["id"]))
+        |> Enum.take(max(@sweepers - map_size(kept), 0))
+        |> Enum.reduce({kept, MapSet.new([goal | Map.values(kept)])}, fn w, {jobs, taken} ->
+          case left |> Enum.reject(&MapSet.member?(taken, &1)) |> Enum.min_by(&{View.dist(&1, View.pos(w)), &1}, fn -> nil end) do
+            nil -> {jobs, taken}
+            spot -> {Map.put(jobs, w["id"], spot), MapSet.put(taken, spot)}
+          end
+        end)
+
+      {goal, %{memory | sweep: %{sweep | done: done, goal: goal, at: at, jobs: jobs}}, notes}
+    else
+      notes = if memory.sweep != nil and known?, do: [{:sweep, "found what is left of player #{memory.sweep.owner}: the wave goes for it"}], else: []
+      {target, %{memory | sweep: nil}, notes}
     end
   end
 

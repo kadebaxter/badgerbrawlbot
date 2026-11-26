@@ -973,6 +973,24 @@ loop crashed and restarted (25 times in 106 ticks in one match, lost with the wo
 1,136 ore unspent). Any job with something to it is named by its first part now, and whatever
 else goes wrong in there is logged and the tick goes on.
 
+**Their army by the scoreboard doesn't shrink as we build.** `army_by_score/2` is what a player
+has alive less their buildings and workers, neither of which we can see; both were taken to be
+what we have. With 68 workers and eight towers to a Formics' 37 and two, its 64 fighters read as
+37, which was half of ours: the hold between two armies lifted, 47 left for a third player, met
+82 in the middle on the way home, and 73 were 9. No more than 40 workers are taken off now, and
+of our own towers no more than two (what the house bots have): the error is toward a bigger
+army, against a real boomer by some twenty Soldiers.
+
+**A player still in with nothing we know of is looked for.** We razed the last base of theirs we
+knew at tick 1375, behind on score; they had another in a corner 50 tiles away, built at tick
+576. The wave's target fell back to their start, one Soldier stood on it for 425 ticks with 55
+idle workers at home, and they won on the clock. Now, with no building of theirs known and
+their start seen empty, the wave's target is the nearest place on a six-tile grid over the whole
+map that nothing of ours has seen since the looking began (`sweep/4`, `memory.sweep`); a place
+not reached in 60 ticks is given up on; with the map mined out eight idle workers each take a
+place too (`strategy.search`, like the search for ore); been everywhere, it starts again. What
+turns up is remembered by the server and is the target the usual way.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the

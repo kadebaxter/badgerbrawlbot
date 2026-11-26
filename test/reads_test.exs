@@ -152,10 +152,15 @@ defmodule Swarm.ReadsTest do
       opts = fn more -> [units: workers(20) ++ soldiers(12), buildings: labs_busy(barracks ++ [building(20, "TechLab", 10, 12)] ++ more), ore: 450] end
       {_, commands, _} = Brain.plan(three(opts.([]), 4000), Brain.new_memory(), terrain())
       assert army_first?(commands)
-      # With 1,250 more in buildings of our own (ten towers), theirs are taken to have as much: under eight.
+      # With 1,250 more in buildings of our own (depots and a second Tech Lab), theirs are taken to have as much: under eight.
+      more = [building(59, "TechLab", 2, 16) | for(i <- 1..11, do: building(60 + i, "ResourceDepot", 2 + i, 14))]
+      {_, commands, _} = Brain.plan(three(opts.(more), 4000), Brain.new_memory(), terrain())
+      refute army_first?(commands)
+      # Our towers past two are not taken to be theirs as well (a house bot builds two): ten of
+      # ours leave their army where it was.
       towers = for i <- 1..10, do: building(60 + i, "GuardTower", 2 + i, 14)
       {_, commands, _} = Brain.plan(three(opts.(towers), 4000), Brain.new_memory(), terrain())
-      refute army_first?(commands)
+      assert army_first?(commands)
     end
 
     test "catching up, another Barracks as soon as every one is training at all, up to the fourteen there may be" do

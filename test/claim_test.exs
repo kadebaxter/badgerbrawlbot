@@ -228,6 +228,22 @@ defmodule Swarm.BetweenTest do
       assert %{wave: %{owner: 1}} = s3
     end
 
+    test "out-building them doesn't shrink their armies: 68 workers and eight towers of ours, and the hold stays" do
+      # Each has 64 Soldiers' worth, 37 workers and 2,550 in buildings: 10,800 alive. We have 80 Soldiers.
+      ours = [unit(300, "Scout", 10, 12) | (for i <- 1..68, do: unit(400 + i, "Worker", 8, 8, activity: "Gathering", target_id: 4)) ++ soldiers(80)]
+      built = [building(2, "Barracks", 11, 7), building(3, "CommandCenter", 20, 20) | for(i <- 1..8, do: building(60 + i, "GuardTower", 2 + i, 14))] ++ for(i <- 1..5, do: building(80 + i, "Barracks", 2 + 3 * i, 18))
+      s = state(units: ours, buildings: built, tick: 400)
+      other = fn slot, x, y -> %{"slot" => slot, "eliminated" => false, "startPosition" => %{"x" => x, "y" => y}, "score" => %{"survival" => 10_800, "economy" => 15_000, "total" => 20_000}} end
+      v = View.new(%{s | "players" => Enum.filter(s["players"], &(&1["slot"] == 0)) ++ [other.(1, 56, 7), other.(2, 7, 56)]})
+
+      {strategy, _, _} = Brain.plan(v, looked(Brain.new_memory(), 1, 400), terrain())
+      assert strategy.wave == nil
+      assert [_, a, b] = Regex.run(~r/between two armies \(player \d with (\d+) Soldiers' worth, player \d with (\d+)\)/, strategy.hold)
+      # Within a few of the 64 they have. (Taken to have our workers too it is 54, and our towers
+      # as well 47: under 60% of ours.)
+      assert String.to_integer(a) in 64..72 and String.to_integer(b) in 64..72
+    end
+
     test "with one opponent there is no between" do
       {strategy, _, _} = Brain.plan(View.new(state(units: [unit(300, "Scout", 10, 12) | workers(10) ++ soldiers(22)], buildings: [building(2, "Barracks", 11, 7)], tick: 300)), looked(Brain.new_memory(), 1, 300), terrain())
       refute to_string(strategy.hold) =~ "between two armies"
