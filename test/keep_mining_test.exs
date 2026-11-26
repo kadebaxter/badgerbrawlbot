@@ -89,10 +89,10 @@ defmodule Swarm.KeepMiningTest do
       {_, commands, _} = plan(units: workers(20), buildings: [barracks], deposits: @home, ore: 2000)
       assert trains_worker?(commands)
 
-      # 9000 ore: sixty. Never more.
-      {_, commands, _} = plan(units: workers(59), buildings: [barracks], deposits: @home, ore: 2000)
+      # 9000 ore: sixty. Never more. (With an army to match: one on one the workers don't outnumber it.)
+      {_, commands, _} = plan(units: workers(59) ++ soldiers(60), buildings: [barracks], deposits: @home, ore: 2000)
       assert trains_worker?(commands)
-      {_, commands, _} = plan(units: workers(60), buildings: [barracks], deposits: @home, ore: 2000)
+      {_, commands, _} = plan(units: workers(60) ++ soldiers(61), buildings: [barracks], deposits: @home, ore: 2000)
       refute trains_worker?(commands)
 
       # Half of it mined: thirty.

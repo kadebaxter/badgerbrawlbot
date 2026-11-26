@@ -29,11 +29,16 @@ defmodule Swarm.MiddleTest do
     test "with one of ours in the middle already, the next goes to the safest again" do
       middle = building(60, "CommandCenter", 28, 28)
       more = field(50, 34, 26)
-      opts = [units: @seeing ++ [unit(302, "Scout", 34, 24)] ++ workers(30) ++ soldiers(12), buildings: [@barracks, @depot, middle],
+      opts = [units: @seeing ++ [unit(302, "Scout", 34, 24)] ++ workers(30) ++ soldiers(31), buildings: [@barracks, @depot, middle],
               deposits: [@home_ore | more ++ field(40, 6, 22)], ore: 1200]
       {_, commands, _} = plan(opts, %{Brain.new_memory() | bases: [{28, 28}]})
       assert [%{"x" => x, "y" => y}] = ccs(commands)
       assert View.dist({x, y}, {7, 22}) <= 4
+
+      # One on one, with the workers ahead of the army (thirty to twelve), no further base yet.
+      lean = Keyword.put(opts, :units, @seeing ++ [unit(302, "Scout", 34, 24)] ++ workers(30) ++ soldiers(12))
+      {_, commands, _} = plan(lean, %{Brain.new_memory() | bases: [{28, 28}]})
+      assert ccs(commands) == []
     end
   end
 

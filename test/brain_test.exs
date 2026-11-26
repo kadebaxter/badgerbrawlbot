@@ -495,12 +495,12 @@ defmodule Swarm.BrainTest do
     end
 
     test "no wave leaves into a stronger army we can see on the way" do
-      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(22) ++ army(3, 20, 30, 30, 900))
+      assert {%{wave: nil, hold: hold}, _, _} = plan(units: soldiers(22) ++ army(3, 20, 33, 33, 900))
       assert hold =~ "player 3's army is in the way (19800 vs our 14850)"
     end
 
     test "but two weaker ones on the way, likely fighting each other, don't stop it" do
-      assert {%{wave: %{id: 1}}, _, _} = plan(units: soldiers(22) ++ army(2, 10, 30, 30, 900) ++ army(3, 10, 31, 31, 950))
+      assert {%{wave: %{id: 1}}, _, _} = plan(units: soldiers(22) ++ army(2, 10, 33, 33, 900) ++ army(3, 10, 34, 34, 950))
     end
   end
 
@@ -1026,7 +1026,8 @@ defmodule Swarm.BrainTest do
     # A wave of ten soldiers out at (45, 45); ten more at home by the rally point.
     defp wave_at_front, do: for(s <- soldiers(10), do: %{s | "x" => 45, "y" => 45})
     defp at_home, do: for(i <- 11..20, do: unit(200 + i, "Soldier", 10, 10))
-    defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum}
+    # (Their serum is spent, `serum_theirs`: against an army that still has it, ours goes first.)
+    defp wave_memory(serum \\ nil), do: %{looked(nil) | wave: %{id: 1, members: Enum.to_list(201..210), released: true}, next_wave: 2, serum: serum, serum_theirs: [1]}
     defp raiders(n), do: for(i <- 1..n, do: unit(900 + i, "Soldier", 12, 9, owner: 1))
 
     test "with the wave far off: taken once the raid is as strong as home, an even fight or worse" do

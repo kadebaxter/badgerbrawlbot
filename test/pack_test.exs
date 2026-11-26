@@ -83,16 +83,18 @@ defmodule Swarm.PackTest do
   end
 
   describe "the serum for a raid" do
-    defp plan(opts, memory \\ Brain.new_memory()),
+    defp plan(opts, memory),
       do: Brain.plan(View.new(state(opts)), looked(memory, 1, Keyword.get(opts, :tick, 100)), terrain())
 
     test "waits until eight of ours are within six tiles of it" do
       # Ten of ours against fourteen in the base: ours with the serum. Nine tiles off, all ten are
       # in that fight already, but it isn't on yet: not taken. Five tiles off, it is.
+      # (Their own serum is spent here: with it still to come, ours goes first, at nine tiles.)
+      spent = %{Brain.new_memory() | serum_theirs: [1]}
       far = for i <- 1..10, do: unit(200 + i, "Soldier", 5, 5)
-      assert {%{serum: nil}, _, _} = plan(units: far ++ theirs(1..14, 14, 14))
+      assert {%{serum: nil}, _, _} = plan([units: far ++ theirs(1..14, 14, 14)], spent)
       near = for i <- 1..10, do: unit(200 + i, "Soldier", 9, 9)
-      assert {%{serum: :take}, _, _} = plan(units: near ++ theirs(1..14, 14, 14))
+      assert {%{serum: :take}, _, _} = plan([units: near ++ theirs(1..14, 14, 14)], spent)
     end
   end
 

@@ -991,6 +991,32 @@ not reached in 60 ticks is given up on; with the map mined out eight idle worker
 place too (`strategy.search`, like the search for ore); been everywhere, it starts again. What
 turns up is remembered by the server and is the target the usual way.
 
+**One on one.** Three things, from two games lost to a Formics: level at tick 300 (38 to 42,
+40 to 43), then 72 workers, four Command Centers and nine towers to its 50, 3 and 2 by tick 390,
+when it came with everything it had, 54 to our 51, and after that 80 workers and 33 fighters to
+its 77. *The workers don't outnumber the fighters* (`lean?/1`): with 30 workers or more and as
+many as we have fighters, no worker is trained, no base after the first is founded and nothing
+past the first tier is researched, until the fighters have caught up. Not "below their army by
+the scoreboard": against a Formics that booms, one on one, the scoreboard read 109 Soldiers'
+worth when it had 58 (its ten Barracks and 86 workers are taken to be what we have), and that
+would have kept us at the floor all game. *Up to 110 workers* (`@duel_max_workers`; 80 with
+more players): two players share the map's 72,000, and a house bot goes to 115. *The wave is
+weighed against the scoreboard* here as everywhere (`army_by_score/2` in the launch): a look at
+its base counted the 10 at home, 31 left on "19 known" for 50, and 14 came back. That number
+errs high one on one, as said: waves leave late or not at all against a boomer.
+
+**The serum first, and everyone at the fight.** A Formics' 54 were seen coming for fifteen
+ticks at a base of ours with three towers; we had 60 fighters and met them with 45, their serum
+came on as they arrived and ours two ticks later (an order for it takes two ticks), and 46 died
+for 11: those two ticks of 54 hitting twice as hard were ten of ours, and the fight. So, *first*
+(`serum_moment?/3`): an army at a base of ours worth three quarters of all of home or more,
+whose player we have not seen on theirs (`memory.serum_theirs`), gets ours when it is nine tiles
+from eight of our Soldiers, if the fight with it on is ours. They are coming to us, so nothing
+of it is spent walking; with theirs spent there is no race and the older measures hold. And
+*one on one, nobody stays at a post* (`Roles.mustering?/1`): with enemy fighters worth eight
+Soldiers or more within 24 tiles of a base of ours, there are no guards at the main base and no
+escorts at the outposts (one opponent has one army, and it is there), and no wave leaves.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the

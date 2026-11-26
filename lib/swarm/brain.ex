@@ -47,6 +47,12 @@ defmodule Swarm.Brain do
   # again in what it buys.
   @ore_per_worker 150
   @max_workers 80
+  # One on one there is twice the ore for each of us (36,000 of the map's 72,000, not 18,000), and
+  # a house bot goes to 115 workers on it: this many at most there.
+  @duel_max_workers 110
+  # And one on one the only opponent brings everything it has at once, at about tick 380: the
+  # workers don't outnumber the fighters past this many (`lean?/1`).
+  @duel_workers 30
   # Scouts: one per neighbor, waiting halfway to them (see `Swarm.UnitBrain`).
   @scouts 2
   # From this tick on there is always one, ahead of the army floor (`first_scout/2`): the first
@@ -72,6 +78,10 @@ defmodule Swarm.Brain do
   # without one, the raid must be at least this many times what home has.
   @help_eta 15
   @serum_margin 1.0
+  # Taken first (`serum_moment?/3`): against an army at a base of ours worth this much of all of
+  # home or more, whose player we have not seen on theirs, once it is this near our Soldiers.
+  @serum_first 0.75
+  @serum_first_contact 9
   # A strike at an enemy tower by our base: at least this many fighters (eight soldiers take a tower
   # down in about nine ticks), as strong as the tower plus `@margin` times the strongest player's
   # units by it (`Swarm.Roles.strength/1`, the one measure); given up after `@strike_ticks`, and
@@ -638,6 +648,8 @@ defmodule Swarm.Brain do
       # Enemy fighters we saw in the last `@pack_memory` ticks and didn't see die, id => as last
       # seen, with "seen" and "pack" (see `remember_packs/2`).
       packs: %{},
+      # The players we have seen a Soldier of on the serum: theirs is spent (`serum_moment?/3`).
+      serum_theirs: [],
       # Player slot => {the tick we first saw an army of theirs away from their base, the last
       # tick we saw it out} (see `behind/3`).
       behind: %{},
@@ -777,7 +789,8 @@ defmodule Swarm.Brain do
     v = %{v | regroup: memory.regroup && memory.regroup.pos, recent_enemies: recent, together: memory.together, bases: memory.bases, going_in: MapSet.new(memory.going_in), staying_out: MapSet.new(Map.get(memory, :staying_out, [])), serum_on: match?({:until, last} when last >= v.tick, memory.serum)}
     shot_towers = shot_towers(v, memory.shot_towers)
     v = %{v | remembered: v.remembered ++ Map.values(shot_towers)}
-    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers, packs: packs, behind: behind}}
+    serum_theirs = Enum.uniq(Map.get(memory, :serum_theirs, []) ++ for(e <- v.enemy_units, Roles.serum?(e), do: e["owner"]))
+    {View.with_known_ore(v, ore), %{memory | ore: ore, shot_towers: shot_towers, packs: packs, behind: behind, serum_theirs: serum_theirs}}
   end
 
   # An enemy tower that shot at us from the fog (`towerShots` names it and where it stands) is
@@ -1684,10 +1697,10 @@ defmodule Swarm.Brain do
       hold: hold,
       look: if(look && look.done == nil, do: look.pos),
       peek: peek && peek.pos,
-      serum: if(memory.serum == nil and serum_moment?(v, memory_wave), do: :take),
+      serum: if(memory.serum == nil and serum_moment?(v, memory_wave, memory), do: :take),
       # While the serum lasts, Soldiers at home go in on a raid whatever its estimate says
       # (`Swarm.UnitBrain`): the estimate doesn't know they hit twice as hard.
-      serum_on: match?({:until, last} when last >= v.tick, memory.serum) or (memory.serum == nil and serum_moment?(v, memory_wave)),
+      serum_on: match?({:until, last} when last >= v.tick, memory.serum) or (memory.serum == nil and serum_moment?(v, memory_wave, memory)),
       raze: raze(v),
       check: if(check && check.found == nil, do: check.checkers, else: %{}),
       fall_back: fall_back,
@@ -2744,7 +2757,7 @@ defmodule Swarm.Brain do
   #     The serum doubles soldiers' speed too, so a far wave gets home twice as fast.
   # `wave` is the wave out before this tick's recall (a recalled wave is still the help coming).
   # Never for the wave's own fights: it should win those anyway.
-  defp serum_moment?(v, wave) do
+  defp serum_moment?(v, wave, memory) do
     raiders = Roles.raiders(v)
     raid = Roles.strength(raiders)
     home = Roles.all_home_strength(v, wave, raiders)
@@ -2793,16 +2806,31 @@ defmodule Swarm.Brain do
             in_contact?(v, g, on_serum)
         end)
 
+    # First, at a base of ours: an army about our size (`@serum_first` of home or more) that has
+    # not used theirs is coming into our Soldiers (`@serum_first_contact` off: an order for the
+    # serum takes two ticks to come on, and they walk a tile a tick), and with ours on the fight
+    # is ours. It will take theirs as it arrives, as the house bots do, and answering that is two
+    # ticks of their 54 hitting twice as hard: ten of our 45 at a base with three towers, and the
+    # fight with them (46 died for 11). Nothing is wasted walking: they are coming to us.
+    used = Map.get(memory, :serum_theirs, [])
+    owner_of = fn g -> Enum.find_value(v.enemy_units ++ v.recent_enemies, fn e -> if MapSet.member?(g.ids, e["id"]), do: e["owner"] end) end
+
+    first? =
+      Enum.any?(Roles.groups(on, wave).groups, fn {_id, g} ->
+        g.base and g.size >= @serum_soldiers and g.worth >= @serum_raid and g.worth >= @serum_first * home and g.all >= 0 and
+          owner_of.(g) not in used and in_contact?(v, g, g.ids, @serum_first_contact)
+      end)
+
     length(View.units_of(v, "Soldier")) >= @serum_soldiers and
-      (met? or (raiders != [] and raid >= @serum_raid and overrun? and turns_it?))
+      (met? or first? or (raiders != [] and raid >= @serum_raid and overrun? and turns_it?))
   end
 
   # `@serum_soldiers` of our Soldiers or more within `@serum_contact` of a fighter of group `g`
   # among `these` (those on the serum, or all of it): the fight is on, not just in sight. Taken on
   # sight, ours ran for 30 ticks before a blow.
-  defp in_contact?(v, g, these) do
+  defp in_contact?(v, g, these, within \\ @serum_contact) do
     theirs = for e <- v.enemy_units, MapSet.member?(these, e["id"]), MapSet.member?(g.ids, e["id"]), do: View.pos(e)
-    Enum.count(View.units_of(v, "Soldier"), fn u -> Enum.any?(theirs, &(View.dist(&1, View.pos(u)) <= @serum_contact)) end) >= @serum_soldiers
+    Enum.count(View.units_of(v, "Soldier"), fn u -> Enum.any?(theirs, &(View.dist(&1, View.pos(u)) <= within)) end) >= @serum_soldiers
   end
 
   # {player, strength} of the strongest single player among these units and towers, or nil.
@@ -2853,8 +2881,10 @@ defmodule Swarm.Brain do
     # (`army_by_score/2`), whatever a scout saw at their base: a house bot's army is often out. A
     # look at an empty base sent 14, then 20, at "0 known"; they met 33 Soldiers' worth, were
     # caught running home, and 8 were left against two opponents at tick 318.
+    # One on one as well (it was only with two or more in): a look at a Formics' base counted the
+    # 10 at home, 31 left on "19 known" for the 50 it had, and 14 came back.
     theirs =
-      if owner != nil and map_size(v.start_owner) >= 2,
+      if owner != nil,
         do: theirs - enemy_army(memory, owner) + max(enemy_army(memory, owner), army_by_score(v, owner)),
         else: theirs
 
@@ -2975,6 +3005,11 @@ defmodule Swarm.Brain do
         coming = army_near_home(v, memory, leaving) ->
           {player, theirs, left} = coming
           "player #{player}'s army is near home (#{round(theirs)} vs #{round(left)} left home)"
+
+        # One on one with their army by a base of ours (`Roles.mustering?/1`): everyone has left
+        # their posts for it, and nobody leaves for theirs.
+        Roles.mustering?(v) ->
+          "#{waiting}, their army is coming at a base of ours: everyone stands at it, and none leaves"
 
         true ->
           nil
@@ -3716,7 +3751,11 @@ defmodule Swarm.Brain do
   # of the building (`mem.base_order`): its builders may walk 50 tiles, and nothing else waits for
   # them. Its 400 is held back while they walk (`plan/3`): the game takes it when they break ground.
   defp found_base({cmds, %{base_order: nil} = mem, ore} = acc, v, terrain) do
-    with {"CommandCenter", site, :base} <- base_cc(v, terrain, mem),
+    # (One on one, none past the first while the workers outnumber the fighters, `lean?/1`.)
+    another? = Enum.any?(View.buildings_of(v, "CommandCenter"), &View.base?(v, &1))
+
+    with false <- another? and lean?(v),
+         {"CommandCenter", site, :base} <- base_cc(v, terrain, mem),
          true <- ore >= @costs["CommandCenter"],
          [_ | _] = free <- free_workers(v, mem) do
       builders = closest_first(free, site) |> Enum.take(@base_builders)
@@ -3950,7 +3989,23 @@ defmodule Swarm.Brain do
 
   defp target_workers(v) do
     usual = if big?(v), do: @big_target_workers, else: @target_workers
-    v |> minable_ore() |> div(@ore_per_worker) |> min(@max_workers) |> max(usual)
+    most = if duel?(v), do: @duel_max_workers, else: @max_workers
+    v |> minable_ore() |> div(@ore_per_worker) |> min(most) |> max(usual)
+  end
+
+  # One opponent from the start.
+  defp duel?(%View{players: players}), do: players == 2
+
+  # One on one, the economy has got ahead of the army: `@duel_workers` workers or more, and as
+  # many as we have fighters. Until the fighters catch up, no worker is trained, no base after the
+  # first is founded, and nothing past the first tier is researched (`train_workers/2`,
+  # `found_base/3`, `next_research/3`): that ore goes to the Barracks.
+  # (Two games: level with a Formics at tick 300, 38 to 42 and 40 to 43. By tick 390 we had 72
+  # workers, four Command Centers and nine towers to its 50, 3 and 2, and 51 fighters when its 54
+  # came with everything; then 80 workers and 33 fighters to its 77.)
+  defp lean?(%View{} = v) do
+    workers = length(View.units_of(v, "Worker"))
+    duel?(v) and workers >= @duel_workers and workers >= length(Roles.fighters(v))
   end
 
   # The ore left that we can get at: by our drop-offs, or free to take (`View.claimable?/2`) and
@@ -4471,7 +4526,8 @@ defmodule Swarm.Brain do
   defp train_workers(acc, v) do
     trainers = for b <- View.buildings_of(v, "CommandCenter"), b["completed"], b["id"] == v.cc["id"] or View.base?(v, b), do: b
     queued = Enum.sum_by(trainers, &length(&1["production"] || []))
-    short = target_workers(v) - length(View.units_of(v, "Worker")) - queued
+    # (One on one, none while they outnumber the fighters, `lean?/1`.)
+    short = if lean?(v), do: 0, else: target_workers(v) - length(View.units_of(v, "Worker")) - queued
 
     {acc, _short} =
       Enum.reduce(trainers, {acc, short}, fn cc, {{cmds, mem, ore} = acc, short} ->
@@ -4535,7 +4591,7 @@ defmodule Swarm.Brain do
         needs = @research_needs[u]
 
         u not in v.upgrades and u not in v.researching and u not in upgrades and (needs == nil or needs in v.upgrades) and
-          (u != "SiegeEngineering" or siege_time?(v)) and (u not in @research_late or v.tick >= @research_late_from)
+          (u != "SiegeEngineering" or siege_time?(v)) and (u not in @research_late or (v.tick >= @research_late_from and not lean?(v)))
       end)
 
     if lab && upgrade, do: {lab, upgrade, @costs[upgrade]}

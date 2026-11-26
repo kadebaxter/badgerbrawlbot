@@ -90,6 +90,8 @@ defmodule Swarm.Roles do
   # Workers leave a base ahead of a raid this big (in Soldiers) once it is this near (`evacuations/2`).
   @evacuate_worth 8
   @evacuate 16
+  # One on one, an army this near a base of ours has everyone leave their posts for it (`mustering?/1`).
+  @muster 24
   # Their units within this of the field we are taking (`View.claim`) are chased by home's attackers.
   @claim_reach 8
   @sideways 4
@@ -157,6 +159,9 @@ defmodule Swarm.Roles do
     # Keeping together (`View.together`: their army is the bigger one), nobody escorts an outpost.
     # Nor with one opponent left (`View.last_one/1`): everyone lives at one base.
     last? = View.last_one(v) != nil
+    # Nor one on one with their army coming (`mustering?/1`): there is no other army to guard
+    # anything from, and everyone is an attacker, at the rally point or in the fight.
+    last? = last? or mustering?(v)
     manned = if v.together or last?, do: [], else: Enum.filter(outposts(v), &(miners(v, &1) > 0))
 
     # 1. Fighters already at an outpost (with miners) stay, up to a full group.
@@ -199,6 +204,21 @@ defmodule Swarm.Roles do
       roles
     end
   end
+
+  @doc """
+  One on one, their army is coming at us: enemy fighters worth `@evacuate_worth` Soldiers or more
+  (in sight, or just out of it) within `@muster` of a base of ours. Then nobody guards the main
+  base or escorts an outpost: with one opponent there is one army, and it is there. (We had 60
+  fighters to their 57 and met them with 45: nine stood guard at the main base, 15 tiles off, and
+  six escorted a base in the far corner.)
+  """
+  def mustering?(%View{players: 2} = v) do
+    bases = bases(v)
+    near = Enum.filter(enemy_fighters(v) ++ v.recent_enemies, fn e -> Enum.any?(bases, &(View.dist(View.pos(e), &1) <= @muster)) end)
+    strength(Enum.uniq_by(near, & &1["id"])) >= @evacuate_worth * @soldier
+  end
+
+  def mustering?(_v), do: false
 
   defp siege_role(_v, wave, id), do: if(id in members(wave), do: :wave, else: :siege_out)
 
