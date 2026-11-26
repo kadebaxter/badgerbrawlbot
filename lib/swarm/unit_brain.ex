@@ -636,7 +636,7 @@ defmodule Swarm.UnitBrain do
       back = unit["type"] == "Archer" && outnumbered?(v, unit, group) && kite(unit, v, s, @melee, @kite_distance) -> {:move, back}
       # In a fight: what its group's estimate says (`Roles.verdict/2`).
       fight = group && in_fight(unit, v, s, role, group) -> fight
-      enemy = Roles.fighter_target(v, s.wave, unit) -> {:attack, enemy["id"]}
+      enemy = Roles.fighter_target(v, s.wave, unit) -> strike(unit, s, enemy)
       tower = safe_tower(v, s.wave, unit) -> hit_tower(v, tower)
       back = group == nil && regroup_or_retreat(unit, v, s, role) -> {:move, back}
       enemy = leftover_target(v, s, unit) -> {:attack, enemy["id"]}
@@ -697,11 +697,11 @@ defmodule Swarm.UnitBrain do
 
     case if(stand?, do: :stand, else: verdict) do
       :stand ->
-        if enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)}
+        if enemy, do: strike(unit, s, enemy), else: {:attack_move, Roles.nearest_in(group, here)}
 
       :go ->
         cond do
-          enemy -> {:attack, enemy["id"]}
+          enemy -> strike(unit, s, enemy)
           home? and group.raid -> {:attack_move, Roles.nearest_in(group, here)}
           true -> nil
         end
@@ -721,13 +721,13 @@ defmodule Swarm.UnitBrain do
           # Inside our base there is nowhere to stay out of its way: everyone fights it, whatever
           # the estimate. Walking to a spot out of its reach, 45 fighters by five towers killed 16
           # of 39 Soldiers and were down to 3 in twenty ticks.
-          Roles.inside?(v, group) -> if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
+          Roles.inside?(v, group) -> if(enemy, do: strike(unit, s, enemy), else: {:attack_move, Roles.nearest_in(group, here)})
           # Caught: they are on us, and they walk as fast as we do. Falling back is dying with our
           # backs turned: 57 told to stay out of 67 at -0.47, twelve tiles from a tower, walked for
           # it and 54 died for 19. Everyone in the fight stands and fights. (With a tower of ours
           # in reach of them it is the fight above already.)
           caught?(group) ->
-            if(enemy, do: {:attack, enemy["id"]}, else: {:attack_move, Roles.nearest_in(group, here)})
+            if(enemy, do: strike(unit, s, enemy), else: {:attack_move, Roles.nearest_in(group, here)})
 
           # Already there: it fights what reaches it.
           enemy && View.dist(here, back) <= 2 && View.dist(View.pos(enemy), here) <= Roles.range(unit) -> {:attack, enemy["id"]}
@@ -743,6 +743,23 @@ defmodule Swarm.UnitBrain do
         end
     end
   end
+
+  # Going in on `enemy` (a fighter of theirs handed to this one, `Roles.fighter_target/3`): an
+  # attack-move at where it stands, not an attack on it by name. The game works an attack-move
+  # out afresh every tick (the closest enemy in sight, the weakest first), so a fighter on one is
+  # never without a target. One sent at an enemy by name stops when it dies: it does nothing that
+  # tick and stands until its next order comes, and with several of ours on each of theirs that
+  # is all of them at once. Tick by tick in a fight of 67 against 62 with the serum on both, 20
+  # of our 58 were idle, then 23 of 47, 18 of 44, 14 of 28, and none of theirs ever was; we lost
+  # 62 for 26 on an estimate of +0.44. (46 for 11, 54 for 19 and 55 for 27 were fought the same way.)
+  # By name still while the last Command Center is spared (`strategy.spare`): an attack-move
+  # there turns on it.
+  # Soldiers, that is: an Archer picks whom it shoots (and steps back from), by name as before.
+  defp strike(%{"type" => "Soldier"}, s, enemy) do
+    if Map.get(s, :spare) == nil, do: {:engage, View.pos(enemy)}, else: {:attack, enemy["id"]}
+  end
+
+  defp strike(_unit, _s, enemy), do: {:attack, enemy["id"]}
 
   # Whether we are caught in the fight with `group`: half or more of ours in it are within its
   # reach (`group.engaged`), there are `@fall_back_worth` of us or more, and all of us
@@ -1294,12 +1311,15 @@ defmodule Swarm.UnitBrain do
   defp arrived?(unit, {:move_to, pos}), do: View.pos(unit) == pos
   defp arrived?(unit, {:attack_move, pos}), do: View.dist(View.pos(unit), pos) <= 1
   defp arrived?(_unit, {:attack, _id}), do: false
+  # Going in on an enemy (`strike/3`): idle is never there, next to it or not. It is told again.
+  defp arrived?(_unit, {:engage, _pos}), do: false
 
-  defp same?({kind, a}, {kind, b}) when kind in [:move, :attack_move], do: View.dist(a, b) <= 3
+  defp same?({kind, a}, {kind, b}) when kind in [:move, :attack_move, :engage], do: View.dist(a, b) <= 3
   defp same?(intent, last), do: intent == last
 
   defp command(unit, {:attack, id}), do: %{"type" => "Attack", "unitIds" => [unit["id"]], "targetId" => id}
   defp command(unit, {:attack_move, {x, y}}), do: %{"type" => "Attack", "unitIds" => [unit["id"]], "x" => x, "y" => y}
+  defp command(unit, {:engage, {x, y}}), do: %{"type" => "Attack", "unitIds" => [unit["id"]], "x" => x, "y" => y}
   defp command(unit, {:move, {x, y}}), do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
   defp command(unit, {:move_to, {x, y}}), do: %{"type" => "Move", "unitIds" => [unit["id"]], "x" => x, "y" => y}
 end

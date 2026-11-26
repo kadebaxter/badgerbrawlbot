@@ -115,7 +115,7 @@ defmodule Swarm.UnitBrainTest do
   test "a unit waiting for the next wave fights an enemy that comes close" do
     enemy = unit(900, "Soldier", 13, 12, owner: 1)
     waiting = unit(3, "Soldier", 10, 10)
-    assert %{"type" => "Attack", "targetId" => 900} = cmd(waiting, @attack, [enemy])
+    assert %{"type" => "Attack", "x" => 13, "y" => 12} = cmd(waiting, @attack, [enemy])
   end
 
   test "everyone at home goes to the threat, together from the rally point" do
@@ -167,7 +167,7 @@ defmodule Swarm.UnitBrainTest do
     friend = unit(3, "Soldier", 40, 38)
     v = View.new(state(units: [hitting, friend, archer], buildings: [barracks]))
     memory = %{intent: {:attack, 800}}
-    assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(2, v, @attack, memory)
+    assert {%{"type" => "Attack", "x" => 43, "y" => 39}, _} = UnitBrain.decide(2, v, @attack, memory)
   end
 
   describe "outposts" do

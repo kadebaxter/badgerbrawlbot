@@ -1017,6 +1017,20 @@ of it is spent walking; with theirs spent there is no race and the older measure
 Soldiers or more within 24 tiles of a base of ours, there are no guards at the main base and no
 escorts at the outposts (one opponent has one army, and it is there), and no wave leaves.
 
+**Soldiers go in on an attack-move.** An attack on an enemy by name ends when it dies: the
+game clears the order, the unit does nothing that tick, and it stands until our next order
+reaches it. We put several of ours on each of theirs, so every death idled all of them at once;
+with the serum on, something dies every tick. In a fight of 67 against 62, the serum on both and
+an estimate of +0.44, 20 of our 58 were idle on one tick, then 23 of 47, 18 of 44, 14 of 28,
+and none of theirs ever was (the house bots attack-move): 62 died for 26. An attack-move is
+worked out by the game afresh every tick (the closest enemy in sight, the weakest first). So a
+Soldier handed an enemy to fight (`UnitBrain.strike/3`) is sent an attack-move at where it
+stands, sent again when the fight has moved more than three tiles or the unit shows up idle,
+and otherwise left alone. Archers are by name as before (they pick whom to shoot and step back
+from), and so is everyone while the last Command Center is spared: an attack-move there turns
+on it. And Weapons2 is no longer one of the upgrades held back to tick 320: ours was landing at
+ticks 428 to 438, a Formics' at 333 to 419, and under the serum that tier is 23 a hit to our 20.
+
 **Who is beside us, and who is around us.** Our neighbors are the two opponents nearest in
 steps; from a corner all three others are as far (a diagonal step costs what a straight one
 does), and of those the nearer in a straight line are the neighbors (`Roles.neighbors/1`): the

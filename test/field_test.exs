@@ -149,7 +149,7 @@ defmodule Swarm.FieldTest do
       assert t.strategy.claim == {34, 34}
       refute Enum.any?(211..240, &to_field?(t.orders[&1]))
       # The guard goes for them.
-      assert Enum.any?(201..210, &match?(%{"type" => "Attack", "targetId" => id} when id in [901, 902], t.orders[&1]))
+      assert Enum.any?(201..210, &match?(%{"type" => "Attack", "x" => 38, "y" => 36}, t.orders[&1]))
     end
 
     test "with no field taken, a raid on our workers out there still pulls home's attackers" do

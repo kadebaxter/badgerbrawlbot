@@ -42,21 +42,25 @@ defmodule Swarm.ResearchFirstTest do
     assert {"Armor1", _} = next_at(150, ["Harvesting1", "Weapons1"])
   end
 
-  test "before tick 320 no second tier is researched, and its ore is not kept back: it is spent on the rest as usual" do
+  test "Weapons2 comes straight after the first tier, at any tick" do
+    assert {"Weapons2", _} = next_at(230, ["Harvesting1", "Weapons1", "Armor1"])
+    assert {"Weapons2", _} = next_at(400, ["Harvesting1", "Weapons1", "Armor1"])
+  end
+
+  test "before tick 320 nothing else past the first tier is researched, and its ore is not kept back: it is spent on the rest as usual" do
     for tick <- [200, 319] do
       # (Not SiegeEngineering or a Fortify in their place either: fifteen Soldiers and 1,000 ore here.)
-      assert {nil, _} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1"], 1000)
-      assert {nil, commands} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1"], 300)
+      assert {nil, _} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1", "Weapons2"], 1000)
+      assert {nil, commands} = next_at(tick, ["Harvesting1", "Weapons1", "Armor1", "Weapons2"], 300)
       assert Enum.any?(commands, &(&1["type"] in ["Build", "Produce"]))
     end
   end
 
-  test "from tick 320: Harvesting2, then Armor2, Weapons2 and Armor3, in that order" do
-    done = ["Harvesting1", "Weapons1", "Armor1"]
+  test "from tick 320: Harvesting2, then Armor2 and Armor3, in that order" do
+    done = ["Harvesting1", "Weapons1", "Armor1", "Weapons2"]
     assert {"Harvesting2", _} = next_at(320, done)
     assert {"Armor2", _} = next_at(360, done ++ ["Harvesting2"])
-    assert {"Weapons2", _} = next_at(400, done ++ ["Harvesting2", "Armor2"])
-    assert {"Armor3", _} = next_at(440, done ++ ["Harvesting2", "Armor2", "Weapons2"])
+    assert {"Armor3", _} = next_at(440, done ++ ["Harvesting2", "Armor2"])
   end
 
   test "the first tier is not held up by the wait: Armor1 at tick 100 with Weapons1 still being researched elsewhere" do

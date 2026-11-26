@@ -12,7 +12,7 @@ defmodule Swarm.DuelTest do
   # Plenty of ore by home: 20 piles of 900.
   @ore for i <- 1..20, do: %{"id" => 400 + i, "x" => 2 + rem(i, 5), "y" => 2 + div(i, 5), "remaining" => 900}
   @built [building(2, "Barracks", 11, 7), building(3, "ResourceDepot", 4, 9), building(6, "TechLab", 7, 12)]
-  @first ["Harvesting1", "Weapons1", "Armor1"]
+  @first ["Harvesting1", "Weapons1", "Armor1", "Weapons2"]
 
   defp miners(n), do: for(i <- 1..n, do: unit(1000 + i, "Worker", 8, 8, activity: "Gathering", target_id: 401))
   defp army(n), do: for(i <- 1..n, do: unit(200 + i, "Soldier", 10, 10))
@@ -50,7 +50,7 @@ defmodule Swarm.DuelTest do
       assert worker?(plan(40, 30, third: true))
     end
 
-    test "and no second-tier research until the army has caught up" do
+    test "and nothing past Weapons2 is researched until the army has caught up" do
       assert research(plan(40, 30, tick: 400)) == nil
       assert research(plan(40, 41, tick: 400)) == "Harvesting2"
       # The first tier is never held back.

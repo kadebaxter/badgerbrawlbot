@@ -587,11 +587,15 @@ defmodule Swarm.Brain do
   # fighters to their 40 to 54 when the first push came, at ticks 300 to 330; their Weapons1 was
   # in 40 to 70 ticks before ours. And Harvesting2 bought nothing by then: everyone has mined the
   # home field's 9,000 by tick 300 with it or without.
-  @research ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
-  @research_first ["Harvesting1", "Weapons1", "Armor1", "Harvesting2", "Armor2", "Weapons2", "Armor3"]
+  #
+  # Weapons2 is not one of the late ones, and comes straight after the first tier: held back with
+  # the rest, ours was in at ticks 428 to 438 and a Formics' at 333 to 419, and the fights that
+  # decide a game are at 390 to 480. Under the serum that tier is 23 a hit to our 20.
+  @research ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Harvesting2", "Armor2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
+  @research_first ["Harvesting1", "Weapons1", "Armor1", "Weapons2", "Harvesting2", "Armor2", "Armor3"]
   # (Everything but the first tier: with only the second tiers held back, the lab's next was
   # SiegeEngineering and Fortify1, at ticks 248 and 253, and that was the 350 ore again.)
-  @research_late ["Harvesting2", "Armor2", "Weapons2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
+  @research_late ["Harvesting2", "Armor2", "Armor3", "SiegeEngineering", "Fortify1", "Fortify2"]
   @research_late_from 320
   @research_needs %{"Harvesting2" => "Harvesting1", "Weapons2" => "Weapons1", "Armor2" => "Armor1", "Armor3" => "Armor2", "Fortify2" => "Fortify1"}
 

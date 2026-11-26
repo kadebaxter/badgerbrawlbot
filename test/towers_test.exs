@@ -42,7 +42,9 @@ defmodule Swarm.TowersTest do
     # Five of us (enough for the tower too) next to an enemy soldier under it.
     enemy = unit(900, "Soldier", 26, 11, owner: 1)
     v = view([enemy | soldiers_at(5, 26, 10)], buildings: [@tower])
-    assert {%{"type" => "Attack", "targetId" => 900}, _} = UnitBrain.decide(201, v, attacking(5))
+    # (An attack-move at it, not an attack by name: the game keeps a Soldier on one swinging.)
+    assert {%{"type" => "Attack", "x" => 26, "y" => 11} = cmd, _} = UnitBrain.decide(201, v, attacking(5))
+    refute Map.has_key?(cmd, "targetId")
   end
 
   test "too few for the enemy and its tower: out of both, not into them" do
